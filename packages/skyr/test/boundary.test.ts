@@ -19,3 +19,16 @@ test("skyr imports nothing from its host", () => {
   }
   expect(offenders).toEqual([]);
 });
+
+test("nothing under src/ imports a pi-coding-agent value statically", () => {
+  const offenders: string[] = [];
+  for (const f of readdirSync(KIT, { recursive: true }) as string[]) {
+    if (!f.endsWith(".ts")) continue;
+    const src = readFileSync(join(KIT, f), "utf8");
+    for (const [statement] of src.matchAll(
+      /^import\s+(?!type\b)[^;]*?from\s*"@earendil-works\/pi-coding-agent";/gm,
+    ))
+      offenders.push(`${f} → ${statement.split("\n")[0]}`);
+  }
+  expect(offenders).toEqual([]);
+});

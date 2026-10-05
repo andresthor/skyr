@@ -1,0 +1,10 @@
+# Local, generated, never-committed working material
+.context/
+CLAUDE.local.md
+.env
+
+# A config dir holds live credentials, sessions and local experiments
+configs/*/agent/
+
+# Dependencies
+node_modules/

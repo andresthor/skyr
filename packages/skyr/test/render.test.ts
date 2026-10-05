@@ -1,7 +1,12 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
-import { errorRow, sanitize, toolRow } from "../src/tools/render.js";
+import {
+  errorRow,
+  sanitize,
+  stripInvisible,
+  toolRow,
+} from "../src/tools/render.js";
 
 const plain = {
   fg: (_color: string, text: string) => text,
@@ -27,10 +32,53 @@ describe("sanitize", () => {
     expect(text).toBe("see docs");
   });
 
+  test("an emoji sequence keeps its joiners", () => {
+    const family = "\u{1F468}\u200d\u{1F469}\u200d\u{1F466}";
+    expect(sanitize(`fetched ${family}`)).toBe(`fetched ${family}`);
+  });
+
   test("bidi overrides, zero-width and tag characters are dropped", () => {
     expect(sanitize("good\u202e.com\u200b \u{E0041}\u{E0042}done")).toBe(
       "good.com done",
     );
+  });
+});
+
+describe("stripInvisible", () => {
+  test("keeps newlines and tabs, so a page's markdown survives", () => {
+    expect(stripInvisible("# Title\n\n\tindented\n")).toBe(
+      "# Title\n\n\tindented\n",
+    );
+  });
+
+  test("drops a carriage return", () => {
+    expect(stripInvisible("a\r\nb")).toBe("a\nb");
+  });
+
+  test("drops tag characters, which are invisible to a reader", () => {
+    expect(stripInvisible("ok\u{E0041}\u{E0042}done")).toBe("okdone");
+  });
+
+  test("drops bidi overrides and isolates, which reorder text invisibly", () => {
+    expect(stripInvisible("good\u202e.com\u2066x\u2069")).toBe("good.comx");
+  });
+
+  test("drops zero-width space, byte-order mark and word joiner", () => {
+    expect(stripInvisible("a\u200bb\ufeffc\u2060d")).toBe("abcd");
+  });
+
+  test("drops the Arabic, left-to-right and right-to-left marks", () => {
+    expect(stripInvisible("a\u061cb\u200ec\u200fd")).toBe("abcd");
+  });
+
+  test("keeps ZWJ and ZWNJ, which carry meaning", () => {
+    const family = "\u{1F468}\u200d\u{1F469}\u200d\u{1F466}";
+    const persian = "\u0628\u200c\u0631";
+    expect(stripInvisible(`${family} ${persian}`)).toBe(`${family} ${persian}`);
+  });
+
+  test("drops C0 and C1 controls", () => {
+    expect(stripInvisible("a\u0001b\u009bc")).toBe("abc");
   });
 });
 

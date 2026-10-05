@@ -1,6 +1,6 @@
 /**
- * One-line tool rows. Their text comes from models, web pages and servers, so it is
- * sanitised before pi-tui lays it out.
+ * Text that reaches a terminal or a model. Tool rows, and the one set of invisible characters
+ * stripped from anything a model, a web page or a server produced.
  */
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, TruncatedText } from "@earendil-works/pi-tui";
@@ -8,14 +8,26 @@ import { stripTerminalSequences, TruncatedText } from "@earendil-works/pi-tui";
 export type Segment = [color: ThemeColor, text: string, bold?: boolean];
 
 /**
- * One-line row text: drops terminal sequences whole, then invisible characters, and collapses
- * whitespace. Strips newlines too, so it is not for body text a model reads.
+ * Characters that take no width but change what text means: C0 and C1 controls other than
+ * newline and tab, bidi marks, overrides and isolates, zero-widths, the byte-order mark, and
+ * tag characters. ZWJ and ZWNJ are left out on purpose, since they carry meaning in emoji
+ * sequences and in Persian and Indic text.
+ */
+const INVISIBLE =
+  /(?![\n\t])[\p{Cc}\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
+
+/** Strips invisible characters, keeping newlines and tabs so a page's markdown survives. */
+export function stripInvisible(text: string): string {
+  return text.replace(INVISIBLE, "");
+}
+
+/**
+ * One-line row text: drops whole terminal sequences, collapses whitespace, then strips
+ * invisible characters. Newlines become spaces, so this is not for body text a model reads.
  */
 export function sanitize(raw: string): string {
   // Whole sequences first: dropping the escape byte alone leaves the payload as visible text.
-  return stripTerminalSequences(raw)
-    .replace(/\s+/g, " ")
-    .replace(/[\p{Cc}\p{Cf}]/gu, "");
+  return stripInvisible(stripTerminalSequences(raw).replace(/\s+/g, " "));
 }
 
 export function toolRow(theme: Theme, segments: Segment[]): TruncatedText {

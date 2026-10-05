@@ -71,6 +71,14 @@ describe("stripInvisible", () => {
     expect(stripInvisible("a\u061cb\u200ec\u200fd")).toBe("abcd");
   });
 
+  test("drops the soft hyphen and the Mongolian vowel separator", () => {
+    expect(stripInvisible("co\u00ADop\u180Eerate")).toBe("cooperate");
+  });
+
+  test("drops the deprecated bidi formatting characters", () => {
+    expect(stripInvisible("a\u206Ab\u206Fc")).toBe("abc");
+  });
+
   test("keeps ZWJ and ZWNJ, which carry meaning", () => {
     const family = "\u{1F468}\u200d\u{1F469}\u200d\u{1F466}";
     const persian = "\u0628\u200c\u0631";

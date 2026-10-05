@@ -82,6 +82,17 @@ describe("assertPublicUrl", () => {
     ).rejects.toThrow(/private or local address/);
   });
 
+  test("a resolver failure names the host and the code, without repeating the host", async () => {
+    const failing: Lookup = async () => {
+      throw Object.assign(new Error("getaddrinfo ENOTFOUND x.dev"), {
+        code: "ENOTFOUND",
+      });
+    };
+    await expect(
+      assertPublicUrl(new URL("https://x.dev/a"), failing),
+    ).rejects.toThrow("web_fetch: could not resolve x.dev (ENOTFOUND)");
+  });
+
   test("a non-http scheme is refused", async () => {
     await expect(
       assertPublicUrl(new URL("file:///etc/passwd"), publicLookup),
@@ -258,15 +269,80 @@ describe("webFetch", () => {
     );
     expect(details.truncated).toBe(true);
     expect(details.spillPath).toBeDefined();
-    expect(text).toContain(
-      "Showing 2000 of 4002 lines of converted, capped text",
-    );
+    expect(text).toContain("Showing 2000 of 4002 lines. All of it:");
     expect(text).toContain(details.spillPath ?? "<none>");
     // the slash in the id must not have been read as a directory
     expect(details.spillPath).toMatch(/call_2\.md$/);
     await expect(readFile(details.spillPath ?? "", "utf8")).resolves.toContain(
       "line 3999",
     );
+  });
+
+  test("a query a redirect introduced never reaches the model or the details", async () => {
+    const { deps } = stubFetch((url) =>
+      url.includes("code=")
+        ? html("<p>landed</p>")
+        : new Response(null, {
+            status: 302,
+            headers: { location: "https://x.dev/cb?code=oauth42" },
+          }),
+    );
+    const { text, details } = await webFetch(
+      "https://x.dev/a",
+      "1",
+      undefined,
+      deps,
+    );
+    expect(text).not.toContain("oauth42");
+    expect(details.url).not.toContain("oauth42");
+    expect(details.url).toBe("https://x.dev/cb");
+  });
+
+  test("an HTML page past the converter's cap says so even when nothing is cut", async () => {
+    // turndown drops the script, so the markdown is tiny and truncateHead leaves it alone.
+    const { deps } = stubFetch(() =>
+      html(`<script>${"x".repeat(1_100_000)}</script><p>tiny</p>`),
+    );
+    const { text, details } = await webFetch(
+      "https://x.dev/huge",
+      "1",
+      undefined,
+      deps,
+    );
+    expect(text).toContain(
+      "Converted from the first 1 M characters of a larger page",
+    );
+    expect(details.truncated).toBe(true);
+    expect(details.spillPath).toBeUndefined();
+  });
+
+  test("a page both capped and cut reports both, and does not claim completeness", async () => {
+    const para = "<p>sentence of filler text for the converter</p>";
+    const { deps } = stubFetch(() =>
+      html(para.repeat(Math.ceil(1_200_000 / para.length))),
+    );
+    const { text, details } = await webFetch(
+      "https://x.dev/huge",
+      "1",
+      undefined,
+      deps,
+    );
+    expect(text).toMatch(
+      /Showing \d+ of \d+ lines, converted from the first 1 M/,
+    );
+    expect(text).not.toContain("All of it");
+    expect(details.spillPath).toBeDefined();
+  });
+
+  test("an unknown charset label falls back to UTF-8 instead of throwing", async () => {
+    const { deps } = stubFetch(
+      () =>
+        new Response(new TextEncoder().encode("café"), {
+          headers: { "content-type": "text/plain; charset=not-a-charset" },
+        }),
+    );
+    const { text } = await webFetch("https://x.dev/a", "1", undefined, deps);
+    expect(text).toContain("café");
   });
 
   test("the details report the text the model received", async () => {

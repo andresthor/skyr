@@ -1,5 +1,5 @@
 /**
- * Address and URL helpers for the web tools. Free of Pi imports, so the module stays safe to
+ * Address, URL and signal helpers for the web tools. Free of Pi imports, so the module stays safe to
  * load from a launcher's static graph.
  */
 import { BlockList, isIP } from "node:net";

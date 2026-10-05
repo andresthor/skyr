@@ -2,6 +2,10 @@
  * `web_fetch`: one HTTP GET, converted to markdown and cut with Pi's own truncation. A fetched
  * page can steer the model into fetching again, so the address of every hop is checked, not
  * only the first.
+ *
+ * The check runs before the request and the socket resolves the host again, so a name that
+ * answers public and then private inside that window is not caught. Closing that needs skyr's
+ * own undici copy, which would collide with the single copy Pi installs for its global fetch.
  */
 import { lookup as dnsLookup } from "node:dns/promises";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -54,6 +58,22 @@ function refused(host: string): Error {
   );
 }
 
+async function resolveHost(
+  host: string,
+  lookup: Lookup,
+): Promise<{ address: string; family: number }[]> {
+  try {
+    return await lookup(host, { all: true });
+  } catch (error: unknown) {
+    // ENOTFOUND reads as a typo and EAI_AGAIN as a transient fault, so keep the code. Not the
+    // message: it repeats the host, which doubles the width of the row.
+    const code =
+      error instanceof Error && "code" in error ? error.code : undefined;
+    const detail = typeof code === "string" ? ` (${code})` : "";
+    throw new Error(`web_fetch: could not resolve ${host}${detail}`);
+  }
+}
+
 /**
  * Throws unless the URL is http(s) and every address its host resolves to is public. A refusal
  * is usually a mistake the model cannot fix alone, so the message sends it to the user.
@@ -73,7 +93,7 @@ export async function assertPublicUrl(
     .toLowerCase();
   if (host === "localhost" || /\.(localhost|local|internal)$/.test(host))
     throw refused(u.hostname);
-  const addresses = await lookup(host, { all: true });
+  const addresses = await resolveHost(host, lookup);
   if (
     addresses.length === 0 ||
     addresses.some((a) => isPrivateAddress(a.address))
@@ -98,7 +118,7 @@ function unreachable(error: unknown, url: URL, signal: AbortSignal): Error {
   );
 }
 
-async function get(
+async function fetchOnce(
   url: URL,
   ua: string,
   signal: AbortSignal,
@@ -130,7 +150,7 @@ async function fetchFollowing(
   let ua = BROWSER_UA;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     await assertPublicUrl(url, deps.lookup);
-    let res = await get(url, ua, signal, fetchImpl);
+    let res = await fetchOnce(url, ua, signal, fetchImpl);
     // Cloudflare challenges a browser UA whose TLS fingerprint is not a browser's
     if (
       res.status === 403 &&
@@ -139,7 +159,7 @@ async function fetchFollowing(
     ) {
       await res.body?.cancel();
       ua = PLAIN_UA;
-      res = await get(url, ua, signal, fetchImpl);
+      res = await fetchOnce(url, ua, signal, fetchImpl);
     }
     const location = res.headers.get("location");
     if (res.status >= 300 && res.status < 400 && location) {
@@ -279,41 +299,55 @@ export async function webFetch(
   }
 
   const decoded = decode(await readCapped(res, MAX_BODY_BYTES), contentType);
+  // Measured before the slice: a page of exactly MAX_HTML_CHARS loses nothing.
+  const capped = isHtml(mime) && decoded.length > MAX_HTML_CHARS;
   // Converting 5 M chars takes about 10 s and blocks the loop, freezing the TUI and Esc.
   const body = stripInvisible(
     isHtml(mime) ? htmlToMarkdown(decoded.slice(0, MAX_HTML_CHARS)) : decoded,
   );
 
-  // Imported here, not at the top: a static Pi value import would hoist above a launcher's
-  // environment setup.
+  // Imported here, not at the top: a static value import would make loading skyr evaluate
+  // pi-coding-agent, which reads environment variables at module scope.
   const { truncateHead, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } = await import(
     "@earendil-works/pi-coding-agent"
   );
-  const cut = truncateHead(`URL: ${url.href}\n\n${body}`, {
+  // Redacted like every error path: a redirect can add a query the model never supplied.
+  const safeUrl = redactUrl(url.href);
+  const cut = truncateHead(`URL: ${safeUrl}\n\n${body}`, {
     maxBytes: DEFAULT_MAX_BYTES,
     maxLines: DEFAULT_MAX_LINES,
   });
-  if (!cut.truncated)
+  if (!cut.truncated && !capped)
     return {
       text: cut.content,
       details: {
-        url: url.href,
+        url: safeUrl,
         bytes: Buffer.byteLength(cut.content),
         truncated: false,
       },
     };
 
+  // Spill only when the model got less than the converted text; the cap alone needs no file.
   // A nested call's id contains a slash, which would read as a directory.
-  const spillPath = join(
-    await spillDir(),
-    `${toolCallId.replace(/[^\w.-]/g, "_")}.md`,
-  );
-  await writeFile(spillPath, body, "utf8");
-  const text = `${cut.content}\n\n[Showing ${cut.outputLines} of ${cut.totalLines} lines of converted, capped text. All of it: ${spillPath}]`;
+  const spillPath = cut.truncated
+    ? join(await spillDir(), `${toolCallId.replace(/[^\w.-]/g, "_")}.md`)
+    : undefined;
+  if (spillPath) await writeFile(spillPath, body, "utf8");
+
+  const firstChars = `the first ${MAX_HTML_CHARS / 1_000_000} M characters of a larger page`;
+  let note: string;
+  if (!cut.truncated)
+    note = `Converted from ${firstChars}; the rest was not read.`;
+  else if (capped)
+    note = `Showing ${cut.outputLines} of ${cut.totalLines} lines, converted from ${firstChars}. That much: ${spillPath}`;
+  else
+    note = `Showing ${cut.outputLines} of ${cut.totalLines} lines. All of it: ${spillPath}`;
+
+  const text = `${cut.content}\n\n[${note}]`;
   return {
     text,
     details: {
-      url: url.href,
+      url: safeUrl,
       bytes: Buffer.byteLength(text),
       truncated: true,
       spillPath,

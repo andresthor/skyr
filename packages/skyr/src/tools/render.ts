@@ -9,12 +9,12 @@ export type Segment = [color: ThemeColor, text: string, bold?: boolean];
 
 /**
  * Characters that take no width but change what text means: C0 and C1 controls other than
- * newline and tab, bidi marks, overrides and isolates, zero-widths, the byte-order mark, and
- * tag characters. ZWJ and ZWNJ are left out on purpose, since they carry meaning in emoji
- * sequences and in Persian and Indic text.
+ * newline and tab, the soft hyphen, bidi marks, overrides and isolates, zero-widths, the
+ * byte-order mark, and tag characters. ZWJ and ZWNJ are left out on purpose, since they
+ * carry meaning in emoji sequences and in Persian and Indic text.
  */
 const INVISIBLE =
-  /(?![\n\t])[\p{Cc}\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
+  /(?![\n\t])[\p{Cc}\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF\u{E0000}-\u{E007F}]/gu;
 
 /** Strips invisible characters, keeping newlines and tabs so a page's markdown survives. */
 export function stripInvisible(text: string): string {

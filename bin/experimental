@@ -1,0 +1,31 @@
+#!/usr/bin/env sh
+# experimental — pi against configs/experimental/agent, a scratch config.
+# Relocates the config dir; ~/.pi stays untouched. Extensions listed in
+# PI_EXTRA_EXTENSIONS (colon-separated, e.g. in the gitignored .env) attach per launch.
+set -eu
+
+self="$0"
+while [ -L "$self" ]; do self="$(readlink "$self")"; done
+ROOT="$(CDPATH='' cd -- "$(dirname -- "$self")/.." && pwd)"
+
+export PI_CODING_AGENT_DIR="$ROOT/configs/experimental/agent"
+mkdir -p "$PI_CODING_AGENT_DIR"
+
+# A value set for this run wins over .env
+# shellcheck source=/dev/null
+if [ -z "${PI_EXTRA_EXTENSIONS+set}" ] && [ -f "$ROOT/.env" ]; then . "$ROOT/.env"; fi
+
+set -f
+IFS=:
+for ext in ${PI_EXTRA_EXTENSIONS:-}; do
+  if [ -f "$ext" ]; then
+    set -- -e "$ext" "$@"
+  elif [ -n "$ext" ]; then
+    echo "experimental: no extension at $ext" >&2
+  fi
+done
+unset IFS
+set +f
+
+exec pi "$@"
+

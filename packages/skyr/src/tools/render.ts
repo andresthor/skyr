@@ -40,11 +40,61 @@ export function toolRow(theme: Theme, segments: Segment[]): TruncatedText {
   return new TruncatedText(line);
 }
 
-/** The first line of a thrown tool's message, for its red row. */
+/** The first line of a thrown tool's message, for its red row, followed by `after`. */
 export function errorRow(
   theme: Theme,
   content: { type: string; text?: string }[],
+  after: Segment[] = [],
 ): TruncatedText {
   const text = content.find((c) => c.type === "text")?.text ?? "";
-  return toolRow(theme, [["error", text.split("\n")[0] ?? ""]]);
+  return toolRow(theme, [["error", text.split("\n")[0] ?? ""], ...after]);
+}
+
+/** A timed row's clock, kept in the row's `context.state`, which Pi shares across its renders. */
+export interface Timing {
+  startedAt?: number;
+  endedAt?: number;
+  ticker?: ReturnType<typeof setInterval>;
+}
+
+function seconds(ms: number): Segment[] {
+  return [["muted", ` · ${(ms / 1000).toFixed(1)}s`]];
+}
+
+// Pi can drop a running row before its result renders (a chat rebuild, an HTML export), and
+// only `took` stops the ticker; this bound, well past any web tool's deadline, stops it otherwise.
+const TICK_LIMIT_MS = 5 * 60_000;
+
+/**
+ * For `renderCall`: starts the clock when Pi starts executing the call and redraws the row each
+ * second until `took` stops it. Returns the running time as a row suffix; nothing before the start
+ * or after the result. A row the TUI rebuilds from a saved session never starts; an HTML export
+ * starts and ends each row at once, so it shows ` · 0.0s`, as Pi's bash row shows `Took 0.0s`.
+ */
+export function elapsed(context: {
+  state: Timing;
+  executionStarted: boolean;
+  invalidate: () => void;
+}): Segment[] {
+  const { state } = context;
+  if (context.executionStarted && state.startedAt === undefined) {
+    const startedAt = Date.now();
+    state.startedAt = startedAt;
+    state.ticker = setInterval(() => {
+      if (Date.now() - startedAt < TICK_LIMIT_MS) context.invalidate();
+      else clearInterval(state.ticker);
+    }, 1000);
+  }
+  if (state.startedAt === undefined || state.endedAt !== undefined) return [];
+  return seconds(Date.now() - state.startedAt);
+}
+
+/** For `renderResult`: stops the clock and returns the time taken as a row suffix. */
+export function took(context: { state: Timing }): Segment[] {
+  const { state } = context;
+  if (state.startedAt === undefined) return [];
+  state.endedAt ??= Date.now();
+  clearInterval(state.ticker);
+  state.ticker = undefined;
+  return seconds(state.endedAt - state.startedAt);
 }

@@ -1,10 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
+  elapsed,
   errorRow,
   sanitize,
   stripInvisible,
+  type Timing,
+  took,
   toolRow,
 } from "../src/tools/render.js";
 
@@ -118,5 +121,76 @@ describe("errorRow", () => {
       { type: "text", text: `boom \u001b]8;;https://evil\u001b\\link\nmore` },
     ]).render(200);
     expect(line.trimEnd()).toBe("boom link");
+  });
+});
+
+describe("row timing", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const call = (
+    state: Timing,
+    executionStarted: boolean,
+    invalidate = () => {},
+  ) => ({
+    state,
+    executionStarted,
+    invalidate,
+  });
+
+  test("a row rebuilt from a saved session is never timed", () => {
+    const state: Timing = {};
+    expect(elapsed(call(state, false))).toEqual([]);
+    expect(took({ state })).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("a running call ticks each second, and its result stops the clock", () => {
+    const state: Timing = {};
+    const invalidate = vi.fn();
+    expect(elapsed(call(state, true, invalidate))).toEqual([
+      ["muted", " · 0.0s"],
+    ]);
+    vi.advanceTimersByTime(2_300);
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(elapsed(call(state, true, invalidate))).toEqual([
+      ["muted", " · 2.3s"],
+    ]);
+
+    expect(took({ state })).toEqual([["muted", " · 2.3s"]]);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(5_000);
+    expect(took({ state })).toEqual([["muted", " · 2.3s"]]);
+    expect(elapsed(call(state, true, invalidate))).toEqual([]);
+  });
+
+  test("a call rendered again while running keeps one clock", () => {
+    const state: Timing = {};
+    elapsed(call(state, true));
+    vi.advanceTimersByTime(1_000);
+    elapsed(call(state, true));
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  test("a row Pi drops before its result stops ticking on its own", () => {
+    const invalidate = vi.fn();
+    elapsed(call({}, true, invalidate));
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(invalidate.mock.calls.length).toBeLessThan(301);
+  });
+
+  test("a failure row carries the time after the message", () => {
+    const row = errorRow(
+      plain,
+      [{ type: "text", text: "tool: failed\nmore" }],
+      [["muted", " · 1.5s"]],
+    );
+    expect(row.render(200)[0]?.trimEnd()).toBe("tool: failed · 1.5s");
   });
 });

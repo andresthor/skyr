@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { redactUrl, withTimeout } from "./net.js";
-import { errorRow, sanitize, toolRow } from "./render.js";
+import { elapsed, errorRow, sanitize, took, toolRow } from "./render.js";
 
 const TIMEOUT_MS = 15_000;
 const DEFAULT_RESULTS = 8;
@@ -475,14 +475,16 @@ export function registerWebSearch(pi: ExtensionAPI): void {
         structuredContent: { provider, results },
       };
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       return toolRow(theme, [
         ["toolTitle", "web_search ", true],
         ["muted", `"${args.query}"`],
+        ...elapsed(context),
       ]);
     },
     renderResult(result, _options, theme, context) {
-      if (context.isError) return errorRow(theme, result.content);
+      const time = took(context);
+      if (context.isError) return errorRow(theme, result.content, time);
       const { provider, count } = result.details;
       const found =
         count === 0
@@ -490,7 +492,7 @@ export function registerWebSearch(pi: ExtensionAPI): void {
           : count === 1
             ? "1 result"
             : `${count} results`;
-      return toolRow(theme, [["muted", `${found} · ${provider}`]]);
+      return toolRow(theme, [["muted", `${found} · ${provider}`], ...time]);
     },
   });
 }

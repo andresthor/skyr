@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { registerSkyr } from "../src/index.js";
+import type { Timing } from "../src/tools/render.js";
 import {
   assertPublicUrl,
   type FetchDeps,
@@ -410,7 +411,7 @@ interface Captured {
   renderCall?: (
     args: { url: string },
     theme: Theme,
-    context: unknown,
+    context: CallContext,
   ) => { render(width: number): string[] };
   renderResult?: (
     result: {
@@ -419,7 +420,7 @@ interface Captured {
     },
     options: unknown,
     theme: Theme,
-    context: { isError: boolean },
+    context: { state: Timing; isError: boolean },
   ) => { render(width: number): string[] };
 }
 
@@ -427,6 +428,19 @@ const plainTheme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 } as unknown as Theme;
+
+type CallContext = {
+  state: Timing;
+  executionStarted: boolean;
+  invalidate: () => void;
+};
+
+/** A row as Pi rebuilds it from a saved session: never started, so never timed. */
+const untimed = (): CallContext => ({
+  state: {},
+  executionStarted: false,
+  invalidate: () => {},
+});
 
 /** registerSkyr is the entry a host calls, so register through it rather than the tool. */
 function registered(): Captured {
@@ -469,7 +483,7 @@ describe("registerWebFetch", () => {
     const component = registered().renderCall?.(
       { url: "https://x.dev/a" },
       plainTheme,
-      {},
+      untimed(),
     );
     expect(component && row(component)).toBe("web_fetch https://x.dev/a");
   });
@@ -480,6 +494,7 @@ describe("registerWebFetch", () => {
     const render = (details: FetchDetails) =>
       row(
         renderResult({ content: [], details }, {}, plainTheme, {
+          state: {},
           isError: false,
         }),
       );
@@ -489,6 +504,34 @@ describe("registerWebFetch", () => {
     expect(
       render({ url: "https://x.dev/a", bytes: 512, truncated: true }),
     ).toBe("512 B · truncated");
+  });
+
+  test("a live call shows its running time, and its result the time it took", () => {
+    vi.useFakeTimers();
+    try {
+      const tool = registered();
+      const context = { ...untimed(), executionStarted: true };
+      tool.renderCall?.({ url: "https://x.dev/a" }, plainTheme, context);
+      vi.advanceTimersByTime(2_300);
+      const running = tool.renderCall?.(
+        { url: "https://x.dev/a" },
+        plainTheme,
+        context,
+      );
+      expect(running && row(running)).toBe("web_fetch https://x.dev/a · 2.3s");
+      const done = tool.renderResult?.(
+        {
+          content: [],
+          details: { url: "https://x.dev/a", bytes: 2048, truncated: false },
+        },
+        {},
+        plainTheme,
+        { state: context.state, isError: false },
+      );
+      expect(done && row(done)).toBe("2 KB · 2.3s");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("the result row shows the first line of a failure", () => {
@@ -504,7 +547,7 @@ describe("registerWebFetch", () => {
       },
       {},
       plainTheme,
-      { isError: true },
+      { state: {}, isError: true },
     );
     expect(component && row(component)).toBe(
       "web_fetch: HTTP 404 from https://x.dev/a",

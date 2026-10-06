@@ -5,6 +5,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { registerSkyr } from "../src/index.js";
+import type { Timing } from "../src/tools/render.js";
 import {
   formatResults,
   type Provider,
@@ -569,7 +570,7 @@ interface Captured {
   renderCall?: (
     args: { query: string },
     theme: Theme,
-    context: unknown,
+    context: CallContext,
   ) => { render(width: number): string[] };
   renderResult?: (
     result: {
@@ -578,7 +579,7 @@ interface Captured {
     },
     options: unknown,
     theme: Theme,
-    context: { isError: boolean },
+    context: { state: Timing; isError: boolean },
   ) => { render(width: number): string[] };
 }
 
@@ -586,6 +587,19 @@ const plainTheme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 } as unknown as Theme;
+
+type CallContext = {
+  state: Timing;
+  executionStarted: boolean;
+  invalidate: () => void;
+};
+
+/** A row as Pi rebuilds it from a saved session: never started, so never timed. */
+const untimed = (): CallContext => ({
+  state: {},
+  executionStarted: false,
+  invalidate: () => {},
+});
 
 function registered(): Captured {
   const tools: Captured[] = [];
@@ -643,7 +657,9 @@ describe("registerWebSearch", () => {
 
   test("the call row quotes the query", () => {
     expect(
-      row(registered().renderCall?.({ query: "pi docs" }, plainTheme, {})),
+      row(
+        registered().renderCall?.({ query: "pi docs" }, plainTheme, untimed()),
+      ),
     ).toBe('web_search "pi docs"');
   });
 
@@ -655,14 +671,34 @@ describe("registerWebSearch", () => {
           { content: [], details: { provider: "exa", count } },
           {},
           plainTheme,
-          {
-            isError: false,
-          },
+          { state: {}, isError: false },
         ),
       );
     expect(render(0)).toBe("no results · exa");
     expect(render(1)).toBe("1 result · exa");
     expect(render(8)).toBe("8 results · exa");
+  });
+
+  test("a live call shows its running time, and its result the time it took", () => {
+    vi.useFakeTimers();
+    try {
+      const tool = registered();
+      const context = { ...untimed(), executionStarted: true };
+      tool.renderCall?.({ query: "pi docs" }, plainTheme, context);
+      vi.advanceTimersByTime(2_300);
+      expect(
+        row(tool.renderCall?.({ query: "pi docs" }, plainTheme, context)),
+      ).toBe('web_search "pi docs" · 2.3s');
+      const done = tool.renderResult?.(
+        { content: [], details: { provider: "tavily", count: 3 } },
+        {},
+        plainTheme,
+        { state: context.state, isError: false },
+      );
+      expect(done && row(done)).toBe("3 results · tavily · 2.3s");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("the result row shows the first line of a failure", () => {
@@ -675,7 +711,7 @@ describe("registerWebSearch", () => {
       },
       {},
       plainTheme,
-      { isError: true },
+      { state: {}, isError: true },
     );
     expect(row(component)).toBe("web_search: no provider answered (x).");
   });

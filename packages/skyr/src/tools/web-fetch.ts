@@ -15,7 +15,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import TurndownService from "turndown";
 import { Type } from "typebox";
 import { isPrivateAddress, redactUrl, withTimeout } from "./net.js";
-import { errorRow, stripInvisible, toolRow } from "./render.js";
+import { elapsed, errorRow, stripInvisible, took, toolRow } from "./render.js";
 
 const TIMEOUT_MS = 30_000;
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
@@ -379,17 +379,20 @@ export function registerWebFetch(pi: ExtensionAPI): void {
       const { text, details } = await webFetch(params.url, toolCallId, signal);
       return { content: [{ type: "text", text }], details };
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       return toolRow(theme, [
         ["toolTitle", "web_fetch ", true],
         ["muted", args.url],
+        ...elapsed(context),
       ]);
     },
     renderResult(result, _options, theme, context) {
-      if (context.isError) return errorRow(theme, result.content);
+      const time = took(context);
+      if (context.isError) return errorRow(theme, result.content, time);
       const { bytes, truncated } = result.details;
       return toolRow(theme, [
         ["muted", `${kb(bytes)}${truncated ? " · truncated" : ""}`],
+        ...time,
       ]);
     },
   });

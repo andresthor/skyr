@@ -1,0 +1,429 @@
+/**
+ * `web_search`: Tavily, then Exa, then Parallel, all keyless. `TAVILY_API_KEY`, `EXA_API_KEY` and
+ * `PARALLEL_API_KEY` raise the same vendors' limits. A failing provider hands over to the next; a
+ * key the user set being refused stops the chain, because that misconfiguration must be seen.
+ */
+import { randomUUID } from "node:crypto";
+import { type Static, Type } from "typebox";
+import { redactUrl, withTimeout } from "./net.js";
+import { sanitize } from "./render.js";
+
+const TIMEOUT_MS = 15_000;
+const SNIPPET_CHARS = 500;
+
+const CHAIN = ["tavily", "exa", "parallel"] as const;
+
+const URLS = {
+  tavily: "https://api.tavily.com/search",
+  exa: "https://mcp.exa.ai/mcp",
+  parallel: "https://search.parallel.ai/mcp",
+};
+
+const KEYS = {
+  tavily: "TAVILY_API_KEY",
+  exa: "EXA_API_KEY",
+  parallel: "PARALLEL_API_KEY",
+};
+
+// Parallel's free tier counts per session id. No model name is sent, though its tool asks for one.
+const SESSION_ID = randomUUID();
+
+export type Provider = (typeof CHAIN)[number];
+
+const Result = Type.Object({
+  title: Type.String(),
+  url: Type.String(),
+  snippet: Type.String({
+    description: `At most ${SNIPPET_CHARS} characters of the page`,
+  }),
+  published: Type.Optional(Type.String({ description: "YYYY-MM-DD" })),
+});
+export type SearchResult = Static<typeof Result>;
+
+/** Seam for tests; defaults to global fetch, which carries Pi's proxy settings. */
+export interface SearchDeps {
+  fetch?: typeof globalThis.fetch;
+}
+
+/** A provider failure the next provider may not share. */
+class ProviderError extends Error {
+  constructor(
+    readonly provider: Provider,
+    detail: string,
+    readonly rateLimited = false,
+  ) {
+    super(`${provider}: ${detail}`);
+  }
+}
+
+class KeyRejectedError extends Error {
+  constructor(provider: Provider) {
+    super(
+      `web_search: ${provider} rejected ${KEYS[provider]}. Ask the user to check or unset it.`,
+    );
+  }
+}
+
+// Tavily also answers 432 and 433 for a spent plan or pay-as-you-go limit.
+const RATE_LIMITED = new Set([429, 432, 433]);
+const RATE_LIMIT = /rate.?limit/i;
+
+/** Vendor-written text bound for a thrown message: one clean line, kept short. */
+function vendorText(text: string): string {
+  const line = sanitize(text).trim();
+  return line.length <= 200 ? line : `${line.slice(0, 200)}…`;
+}
+
+function vendorError(provider: Provider, text: string): ProviderError {
+  return RATE_LIMIT.test(text)
+    ? new ProviderError(provider, "rate-limited", true)
+    : new ProviderError(provider, vendorText(text));
+}
+
+/** The message in a JSON error body, as Tavily (`detail.error`) and Parallel (`message`) send it. */
+function errorMessage(body: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    const text = parsed?.detail?.error ?? parsed?.message;
+    return typeof text === "string" ? text : "";
+  } catch {
+    return "";
+  }
+}
+
+function failure(
+  provider: Provider,
+  error: unknown,
+  caller: AbortSignal | undefined,
+): Error {
+  // The caller's cancellation is Pi's to report, not a reason to try the next provider.
+  if (caller?.aborted)
+    return error instanceof Error ? error : new Error("web_search: cancelled");
+  if (error instanceof Error && error.name === "TimeoutError")
+    return new ProviderError(
+      provider,
+      `no answer within ${TIMEOUT_MS / 1000} s`,
+    );
+  const cause = error instanceof Error && error.cause;
+  const detail = cause instanceof Error ? ` (${cause.message})` : "";
+  return new ProviderError(
+    provider,
+    `could not reach ${redactUrl(URLS[provider])}${detail}`,
+  );
+}
+
+/** POSTs JSON to a provider within its deadline; returns a 2xx body or throws. */
+async function request(
+  provider: Provider,
+  headers: Record<string, string>,
+  payload: unknown,
+  caller: AbortSignal | undefined,
+  deps: SearchDeps,
+): Promise<string> {
+  let status: number;
+  let body: string;
+  try {
+    const res = await (deps.fetch ?? globalThis.fetch)(URLS[provider], {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(payload),
+      signal: withTimeout(caller, TIMEOUT_MS),
+    });
+    status = res.status;
+    body = (await res.text()).trim();
+  } catch (error: unknown) {
+    throw failure(provider, error, caller);
+  }
+  if (status >= 200 && status < 300) return body;
+
+  if (status === 401 && process.env[KEYS[provider]])
+    throw new KeyRejectedError(provider);
+  const message = errorMessage(body);
+  if (RATE_LIMITED.has(status) || RATE_LIMIT.test(message))
+    throw new ProviderError(provider, "rate-limited", true);
+  const detail = message ? `: ${vendorText(message)}` : "";
+  throw new ProviderError(
+    provider,
+    `HTTP ${status} from ${redactUrl(URLS[provider])}${detail}`,
+  );
+}
+
+type RpcPayload = {
+  result?: { isError?: boolean; content?: { text?: unknown }[] };
+  error?: { message?: unknown };
+};
+
+// Streamable HTTP answers as plain JSON or as SSE, at the server's choice.
+function parseRpcBody(body: string): RpcPayload | undefined {
+  const candidates = body.startsWith("{")
+    ? [body]
+    : body
+        .split("\n")
+        .filter((l) => l.startsWith("data: "))
+        .map((l) => l.slice(6));
+  for (const c of candidates) {
+    try {
+      const parsed: RpcPayload = JSON.parse(c);
+      if (parsed?.result || parsed?.error) return parsed;
+    } catch {
+      // an unparseable event is skipped, not fatal
+    }
+  }
+  return undefined;
+}
+
+/** One `tools/call` against a hosted MCP endpoint; returns the first text content. */
+async function mcpCall(
+  provider: Provider,
+  headers: Record<string, string>,
+  toolName: string,
+  args: Record<string, unknown>,
+  caller: AbortSignal | undefined,
+  deps: SearchDeps,
+): Promise<string> {
+  const body = await request(
+    provider,
+    { accept: "application/json, text/event-stream", ...headers },
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: toolName, arguments: args },
+    },
+    caller,
+    deps,
+  );
+  const payload = parseRpcBody(body);
+  if (!payload) throw new ProviderError(provider, "unreadable response");
+  const content = payload.result?.content?.find(
+    (c) => typeof c.text === "string",
+  );
+  const text = typeof content?.text === "string" ? content.text : "";
+  const error = payload.error
+    ? String(payload.error.message ?? "error")
+    : undefined;
+  if (error !== undefined || payload.result?.isError) {
+    const message = error ?? text;
+    // Exa refuses a bad key with HTTP 200 and an error result, not a 401.
+    if (process.env[KEYS[provider]] && /\(401\)|invalid api key/i.test(message))
+      throw new KeyRejectedError(provider);
+    throw vendorError(provider, message);
+  }
+  return text;
+}
+
+/** Sanitised and cut here, so the model's text and a script's structured result agree. */
+function toResult(
+  title: string,
+  url: string,
+  snippet: string,
+  published: string | undefined,
+): SearchResult {
+  const cleanUrl = sanitize(url).trim();
+  const chars = Array.from(sanitize(snippet).trim());
+  const date = /^\d{4}-\d{2}-\d{2}/.exec(published ?? "")?.[0];
+  return {
+    title: sanitize(title).trim() || cleanUrl,
+    url: cleanUrl,
+    snippet:
+      chars.length > SNIPPET_CHARS
+        ? `${chars.slice(0, SNIPPET_CHARS).join("")}…`
+        : chars.join(""),
+    ...(date ? { published: date } : {}),
+  };
+}
+
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+/**
+ * The objects in a JSON answer's `results` array. Undefined when the answer has another shape,
+ * so a changed format falls through to the next provider instead of passing as zero results.
+ */
+function jsonResults(text: string): Record<string, unknown>[] | undefined {
+  let results: unknown;
+  try {
+    results = JSON.parse(text)?.results;
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(results)) return undefined;
+  return results.filter(
+    (r): r is Record<string, unknown> => typeof r === "object" && r !== null,
+  );
+}
+
+// Tavily leaves some of a page's HTML in `content`. Named tags only, so `Promise<void>` survives.
+const HTML_TAG =
+  /<\/?(?:a|b|i|p|em|br|hr|li|ol|ul|tr|td|th|h[1-6]|div|pre|code|span|table|strong|blockquote)\b[^>]*>/gi;
+
+/** Tavily dates read "Thu, 23 Jul 2026 13:00:00 GMT"; any other form is dropped, not guessed. */
+function isoFromHttpDate(text: string): string | undefined {
+  if (
+    !/^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(
+      text,
+    )
+  )
+    return undefined;
+  const ms = Date.parse(text);
+  return Number.isNaN(ms) ? undefined : new Date(ms).toISOString().slice(0, 10);
+}
+
+async function searchTavily(
+  query: string,
+  n: number,
+  signal: AbortSignal | undefined,
+  deps: SearchDeps,
+): Promise<SearchResult[]> {
+  const key = process.env.TAVILY_API_KEY;
+  const body = await request(
+    "tavily",
+    key
+      ? { authorization: `Bearer ${key}` }
+      : { "x-tavily-access-mode": "keyless" },
+    {
+      query,
+      max_results: n,
+      search_depth: "basic",
+      include_published_date: true,
+    },
+    signal,
+    deps,
+  );
+  const results = jsonResults(body);
+  if (!results)
+    throw vendorError("tavily", errorMessage(body) || "unreadable response");
+  return results
+    .filter((r) => str(r.url))
+    .slice(0, n)
+    .map((r) =>
+      toResult(
+        str(r.title),
+        str(r.url),
+        // chunks arrive joined by "[...]"
+        str(r.content).replace(HTML_TAG, " ").replaceAll("[...]", "…"),
+        isoFromHttpDate(str(r.published_date)),
+      ),
+    );
+}
+
+async function searchExa(
+  query: string,
+  n: number,
+  signal: AbortSignal | undefined,
+  deps: SearchDeps,
+): Promise<SearchResult[]> {
+  const key = process.env.EXA_API_KEY;
+  const text = await mcpCall(
+    "exa",
+    key ? { "x-api-key": key } : {},
+    "web_search_exa",
+    { query, objective: query, numResults: n },
+    signal,
+    deps,
+  );
+  return parseExaText(text).slice(0, n);
+}
+
+/** Exa answers in text blocks of `Title:`, `URL:`, `Published:`, `Author:`, `Highlights:`. */
+function parseExaText(text: string): SearchResult[] {
+  const results: SearchResult[] = [];
+  for (const block of text.split(/\n---+\n/)) {
+    const field = (name: string) =>
+      new RegExp(`^${name}:[ \\t]*(.*)$`, "m").exec(block)?.[1]?.trim() ?? "";
+    const url = field("URL");
+    if (!url) continue;
+    const highlights = block.split(/^Highlights:\s*$/m)[1];
+    const body =
+      highlights ?? block.replace(/^(Title|URL|Published|Author):.*$/gm, "");
+    // Exa joins highlight fragments with bare "..." lines
+    const snippet = body.replace(/^\s*\.\.\.\s*$/gm, " ");
+    results.push(toResult(field("Title"), url, snippet, field("Published")));
+  }
+  return results;
+}
+
+async function searchParallel(
+  query: string,
+  n: number,
+  signal: AbortSignal | undefined,
+  deps: SearchDeps,
+): Promise<SearchResult[]> {
+  const key = process.env.PARALLEL_API_KEY;
+  const text = await mcpCall(
+    "parallel",
+    key ? { authorization: `Bearer ${key}` } : {},
+    "web_search",
+    { objective: query, search_queries: [query], session_id: SESSION_ID },
+    signal,
+    deps,
+  );
+  const results = jsonResults(text);
+  if (!results) throw new ProviderError("parallel", "unreadable response");
+  return results
+    .filter((r) => str(r.url))
+    .slice(0, n)
+    .map((r) =>
+      toResult(
+        str(r.title),
+        str(r.url),
+        Array.isArray(r.excerpts) ? r.excerpts.map(str).join(" ") : "",
+        str(r.publish_date),
+      ),
+    );
+}
+
+const SEARCH = {
+  tavily: searchTavily,
+  exa: searchExa,
+  parallel: searchParallel,
+};
+
+/** Names the keys still unset, since telling a user to set a key they have set misleads. */
+function keyHint(): string {
+  const unset = CHAIN.map((p) => KEYS[p]).filter((k) => !process.env[k]);
+  if (unset.length === 0) return " Try again later.";
+  const keys = new Intl.ListFormat("en", { type: "disjunction" }).format(unset);
+  return ` Set ${keys} for higher limits, or try again later.`;
+}
+
+/**
+ * Asks Tavily, then Exa, then Parallel, each with its own 15 s deadline, and returns the first
+ * answer. Zero results is an answer. Throws when a key the user set is refused, or when every
+ * provider fails.
+ */
+export async function webSearch(
+  query: string,
+  n: number,
+  signal: AbortSignal | undefined,
+  deps: SearchDeps = {},
+): Promise<{ provider: Provider; results: SearchResult[] }> {
+  const failures: ProviderError[] = [];
+  for (const provider of CHAIN) {
+    try {
+      return {
+        provider,
+        results: await SEARCH[provider](query, n, signal, deps),
+      };
+    } catch (error: unknown) {
+      if (!(error instanceof ProviderError)) throw error;
+      failures.push(error);
+    }
+  }
+  const hint = failures.some((f) => f.rateLimited) ? keyHint() : "";
+  throw new Error(
+    `web_search: no provider answered (${failures.map((f) => f.message).join("; ")}).${hint}`,
+  );
+}
+
+export function formatResults(query: string, results: SearchResult[]): string {
+  const quoted = `"${sanitize(query).trim()}"`;
+  if (results.length === 0)
+    return `No results for ${quoted}. Try a different query.`;
+  const lines = [`Web search results for ${quoted}:`];
+  results.forEach((r, i) => {
+    const date = r.published ? `, published ${r.published}` : "";
+    lines.push("", `[${i + 1}] ${r.title} (${r.url})${date}`);
+    if (r.snippet) lines.push(r.snippet);
+  });
+  return lines.join("\n");
+}

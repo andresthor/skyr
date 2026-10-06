@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"You've hit the free-tier rate limit for Parallel Search MCP. To continue with higher limits, add your own API key — set header `x-api-key: YOUR_KEY` or `Authorization: Bearer YOUR_KEY`. Get a key at https://platform.parallel.ai."}}

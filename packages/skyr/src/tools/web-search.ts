@@ -38,7 +38,7 @@ const Result = Type.Object({
   title: Type.String(),
   url: Type.String(),
   snippet: Type.String({
-    description: `At most ${SNIPPET_CHARS} characters of the page`,
+    description: `Up to ${SNIPPET_CHARS} characters of the page, then "…" when cut`,
   }),
   published: Type.Optional(Type.String({ description: "YYYY-MM-DD" })),
 });
@@ -155,7 +155,11 @@ async function request(
 }
 
 type RpcPayload = {
-  result?: { isError?: boolean; content?: { text?: unknown }[] };
+  result?: {
+    isError?: boolean;
+    content?: { text?: unknown }[];
+    _meta?: Record<string, unknown>;
+  };
   error?: { message?: unknown };
 };
 
@@ -201,6 +205,9 @@ async function mcpCall(
   );
   const payload = parseRpcBody(body);
   if (!payload) throw new ProviderError(provider, "unreadable response");
+  // Exa answers its free-tier limit as a successful result, flagged only in `_meta`.
+  if (payload.result?._meta?.["ai.exa/rateLimited"] === true)
+    throw new ProviderError(provider, "rate-limited", true);
   const content = payload.result?.content?.find(
     (c) => typeof c.text === "string",
   );
@@ -327,7 +334,11 @@ async function searchExa(
     signal,
     deps,
   );
-  return parseExaText(text).slice(0, n);
+  const results = parseExaText(text);
+  // Exa finds pages even for gibberish, so an answer without one means its format changed.
+  if (results.length === 0)
+    throw new ProviderError("exa", "unreadable response");
+  return results.slice(0, n);
 }
 
 /** Exa answers in text blocks of `Title:`, `URL:`, `Published:`, `Author:`, `Highlights:`. */

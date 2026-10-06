@@ -21,6 +21,7 @@ const fixture = (name: string) => readFileSync(join(FIXTURES, name), "utf8");
 const TAVILY_JSON = fixture("tavily-search.json");
 const EXA_SSE = fixture("exa-search.sse");
 const EXA_BAD_KEY = fixture("exa-bad-key.sse");
+const EXA_RATE_LIMIT = fixture("exa-rate-limit.sse");
 const PARALLEL_JSON = fixture("parallel-search.json");
 const PARALLEL_RATE_LIMIT = fixture("parallel-rate-limit.json");
 
@@ -293,6 +294,33 @@ describe("exa", () => {
     expect(error.message).not.toContain("secret-key");
     expect(asked(calls)).toEqual(["tavily", "exa"]);
   });
+
+  test("its free-tier limit, a successful answer flagged in _meta, hands over and names the keys", async () => {
+    const { deps } = stubFetch({
+      tavily: down,
+      exa: ok(EXA_RATE_LIMIT),
+      parallel: down,
+    });
+    const error = await failed(webSearch("q", 3, undefined, deps));
+    expect(error.message).toContain("; exa: rate-limited;");
+    expect(error.message).toContain(
+      "Set TAVILY_API_KEY, EXA_API_KEY, or PARALLEL_API_KEY",
+    );
+  });
+
+  test.each([
+    ["a changed format", rpcText("Name: Pi\nLink: https://pi.dev\n")],
+    ["an empty answer", rpcText("")],
+    ["no text at all", rpcResult({ content: [] })],
+  ])(
+    "%s hands over to Parallel instead of passing as no results",
+    async (_name, exa) => {
+      const { deps } = stubFetch({ tavily: down, exa, parallel: parallelOk });
+      expect((await webSearch("q", 3, undefined, deps)).provider).toBe(
+        "parallel",
+      );
+    },
+  );
 
   test("an error result hands over to Parallel", async () => {
     const { deps } = stubFetch({

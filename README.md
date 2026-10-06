@@ -17,6 +17,14 @@ pi -e /path/to/skyr/packages/skyr         # or try it for one run
 
 Pi loads the TypeScript source directly, so edits apply on the next start.
 
+## Tools
+
+- `web_fetch` — fetches one URL as markdown; refuses private and local addresses.
+- `web_search` — searches through Tavily, then Exa, then Parallel, each taking over when the one
+  before fails; no key needed. `TAVILY_API_KEY`, `EXA_API_KEY` or `PARALLEL_API_KEY` moves that
+  service off its rate-limited free tier. Queries go to those services and may carry
+  conversation content.
+
 ## Embedding it
 
 A host that builds its own Pi distribution can call `registerSkyr(pi, options)` instead of

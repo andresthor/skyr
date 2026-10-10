@@ -13,6 +13,10 @@ const TIMEOUT_MS = 15_000;
 const DEFAULT_RESULTS = 8;
 const MAX_RESULTS = 10;
 const SNIPPET_CHARS = 500;
+// The 15 s deadline bounds a slow body; this bounds a fast one.
+const MAX_BODY_BYTES = 1024 * 1024;
+const TITLE_CHARS = 300;
+const URL_CHARS = 500;
 
 const CHAIN = ["tavily", "exa", "parallel"] as const;
 
@@ -118,6 +122,39 @@ function failure(
   );
 }
 
+/** Reads a response up to `MAX_BODY_BYTES`; a body past it is a provider failure, so the chain moves on. */
+async function readBody(
+  provider: Provider,
+  res: Response,
+  caller: AbortSignal | undefined,
+): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return "";
+  try {
+    const decoder = new TextDecoder();
+    let text = "";
+    let bytes = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_BODY_BYTES) {
+        // awaited: a rejected cancel is a provider failure here, not an unhandled rejection
+        await reader.cancel();
+        throw new ProviderError(
+          provider,
+          `response larger than ${MAX_BODY_BYTES / 1024 / 1024} MB`,
+        );
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return `${text}${decoder.decode()}`.trim();
+  } catch (error: unknown) {
+    if (error instanceof ProviderError) throw error;
+    throw failure(provider, error, caller);
+  }
+}
+
 /** POSTs JSON to a provider within its deadline; returns a 2xx body or throws. */
 async function request(
   provider: Provider,
@@ -126,31 +163,29 @@ async function request(
   caller: AbortSignal | undefined,
   deps: SearchDeps,
 ): Promise<string> {
-  let status: number;
-  let body: string;
+  let res: Response;
   try {
-    const res = await (deps.fetch ?? globalThis.fetch)(URLS[provider], {
+    res = await (deps.fetch ?? globalThis.fetch)(URLS[provider], {
       method: "POST",
       headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(payload),
       signal: withTimeout(caller, TIMEOUT_MS),
     });
-    status = res.status;
-    body = (await res.text()).trim();
   } catch (error: unknown) {
     throw failure(provider, error, caller);
   }
-  if (status >= 200 && status < 300) return body;
+  const body = await readBody(provider, res, caller);
+  if (res.status >= 200 && res.status < 300) return body;
 
-  if (status === 401 && process.env[KEYS[provider]])
+  if (res.status === 401 && process.env[KEYS[provider]])
     throw new KeyRejectedError(provider);
   const message = errorMessage(body);
-  if (RATE_LIMITED.has(status) || RATE_LIMIT.test(message))
+  if (RATE_LIMITED.has(res.status) || RATE_LIMIT.test(message))
     throw new ProviderError(provider, "rate-limited", true);
   const detail = message ? `: ${vendorText(message)}` : "";
   throw new ProviderError(
     provider,
-    `HTTP ${status} from ${redactUrl(URLS[provider])}${detail}`,
+    `HTTP ${res.status} from ${redactUrl(URLS[provider])}${detail}`,
   );
 }
 
@@ -225,23 +260,29 @@ async function mcpCall(
   return text;
 }
 
-/** Sanitised and cut here, so the model's text and a script's structured result agree. */
+/** Cut on characters, not code units, so wide glyphs survive whole. */
+function cut(text: string, chars: number): string {
+  const cut = Array.from(text);
+  return cut.length > chars ? `${cut.slice(0, chars).join("")}…` : cut.join("");
+}
+
+/**
+ * Sanitised here, so the model's text and a script's structured result agree. Undefined when the
+ * URL is missing or over `URL_CHARS`: a cut link would read as usable, then fail to fetch.
+ */
 function toResult(
   title: string,
   url: string,
   snippet: string,
   published: string | undefined,
-): SearchResult {
+): SearchResult | undefined {
   const cleanUrl = sanitize(url).trim();
-  const chars = Array.from(sanitize(snippet).trim());
+  if (!cleanUrl || Array.from(cleanUrl).length > URL_CHARS) return undefined;
   const date = /^\d{4}-\d{2}-\d{2}/.exec(published ?? "")?.[0];
   return {
-    title: sanitize(title).trim() || cleanUrl,
+    title: cut(sanitize(title).trim(), TITLE_CHARS) || cleanUrl,
     url: cleanUrl,
-    snippet:
-      chars.length > SNIPPET_CHARS
-        ? `${chars.slice(0, SNIPPET_CHARS).join("")}…`
-        : chars.join(""),
+    snippet: cut(sanitize(snippet).trim(), SNIPPET_CHARS),
     ...(date ? { published: date } : {}),
   };
 }
@@ -306,8 +347,6 @@ async function searchTavily(
   if (!results)
     throw vendorError("tavily", errorMessage(body) || "unreadable response");
   return results
-    .filter((r) => str(r.url))
-    .slice(0, n)
     .map((r) =>
       toResult(
         str(r.title),
@@ -316,7 +355,9 @@ async function searchTavily(
         str(r.content).replace(HTML_TAG, " ").replaceAll("[...]", "…"),
         isoFromHttpDate(str(r.published_date)),
       ),
-    );
+    )
+    .filter((r): r is SearchResult => r !== undefined)
+    .slice(0, n);
 }
 
 async function searchExa(
@@ -347,14 +388,17 @@ function parseExaText(text: string): SearchResult[] {
   for (const block of text.split(/\n---+\n/)) {
     const field = (name: string) =>
       new RegExp(`^${name}:[ \\t]*(.*)$`, "m").exec(block)?.[1]?.trim() ?? "";
-    const url = field("URL");
-    if (!url) continue;
     const highlights = block.split(/^Highlights:\s*$/m)[1];
     const body =
       highlights ?? block.replace(/^(Title|URL|Published|Author):.*$/gm, "");
-    // Exa joins highlight fragments with bare "..." lines
-    const snippet = body.replace(/^\s*\.\.\.\s*$/gm, " ");
-    results.push(toResult(field("Title"), url, snippet, field("Published")));
+    const result = toResult(
+      field("Title"),
+      field("URL"),
+      // Exa joins highlight fragments with bare "..." lines
+      body.replace(/^\s*\.\.\.\s*$/gm, " "),
+      field("Published"),
+    );
+    if (result) results.push(result);
   }
   return results;
 }
@@ -377,8 +421,6 @@ async function searchParallel(
   const results = jsonResults(text);
   if (!results) throw new ProviderError("parallel", "unreadable response");
   return results
-    .filter((r) => str(r.url))
-    .slice(0, n)
     .map((r) =>
       toResult(
         str(r.title),
@@ -386,7 +428,9 @@ async function searchParallel(
         Array.isArray(r.excerpts) ? r.excerpts.map(str).join(" ") : "",
         str(r.publish_date),
       ),
-    );
+    )
+    .filter((r): r is SearchResult => r !== undefined)
+    .slice(0, n);
 }
 
 const SEARCH = {
@@ -489,7 +533,7 @@ export function registerWebSearch(pi: ExtensionAPI): void {
     renderCall(args, theme, context) {
       return toolRow(theme, [
         ["toolTitle", "web_search ", true],
-        ["muted", `"${args.query}"`],
+        ["muted", args.query ? `"${args.query}"` : ""],
         ...elapsed(context),
       ]);
     },

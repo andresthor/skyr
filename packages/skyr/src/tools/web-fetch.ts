@@ -382,7 +382,7 @@ export function registerWebFetch(pi: ExtensionAPI): void {
     renderCall(args, theme, context) {
       return toolRow(theme, [
         ["toolTitle", "web_fetch ", true],
-        ["muted", args.url],
+        ["muted", args.url ?? ""],
         ...elapsed(context),
       ]);
     },

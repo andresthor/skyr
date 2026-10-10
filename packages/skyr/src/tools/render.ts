@@ -89,10 +89,19 @@ export function elapsed(context: {
   return seconds(Date.now() - state.startedAt);
 }
 
-/** For `renderResult`: stops the clock and returns the time taken as a row suffix. */
-export function took(context: { state: Timing }): Segment[] {
+/**
+ * For `renderResult`: on a final result, or an error, stops the clock and returns the time taken;
+ * a partial result is mid-stream, so it keeps the clock running.
+ */
+export function took(context: {
+  state: Timing;
+  isError?: boolean;
+  isPartial?: boolean;
+}): Segment[] {
   const { state } = context;
   if (state.startedAt === undefined) return [];
+  if (context.isPartial && !context.isError)
+    return seconds(Date.now() - state.startedAt);
   state.endedAt ??= Date.now();
   clearInterval(state.ticker);
   state.ticker = undefined;

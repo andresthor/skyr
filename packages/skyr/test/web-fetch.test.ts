@@ -409,7 +409,7 @@ interface Captured {
   annotations?: { readOnlyHint?: boolean; openWorldHint?: boolean };
   promptGuidelines?: string[];
   renderCall?: (
-    args: { url: string },
+    args: { url?: string },
     theme: Theme,
     context: CallContext,
   ) => { render(width: number): string[] };
@@ -486,6 +486,11 @@ describe("registerWebFetch", () => {
       untimed(),
     );
     expect(component && row(component)).toBe("web_fetch https://x.dev/a");
+  });
+
+  test("arguments still streaming show no placeholder text, not undefined", () => {
+    const component = registered().renderCall?.({}, plainTheme, untimed());
+    expect(component && row(component)).toBe("web_fetch");
   });
 
   test("the result row reports the size, and says when the page was cut", () => {

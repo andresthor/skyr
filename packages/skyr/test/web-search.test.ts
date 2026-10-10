@@ -404,6 +404,17 @@ describe("the provider chain", () => {
         }),
       );
 
+  /** One byte past the cap: a size problem, not a slow read. */
+  const oversized: Answer = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(1024 * 1024 + 1));
+          controller.close();
+        },
+      }),
+    );
+
   test.each([
     ["HTTP 429", status(429)],
     ["HTTP 503", down],
@@ -423,6 +434,22 @@ describe("the provider chain", () => {
   ])("Tavily failing with %s hands over to Exa", async (_name, tavily) => {
     const { deps } = stubFetch({ tavily, exa: exaOk });
     expect((await webSearch("q", 3, undefined, deps)).provider).toBe("exa");
+  });
+
+  test("a body over the 1 MiB cap is one provider's failure, so the chain moves on", async () => {
+    const { calls, deps } = stubFetch({ tavily: oversized, exa: exaOk });
+    expect((await webSearch("q", 3, undefined, deps)).provider).toBe("exa");
+    expect(asked(calls)).toEqual(["tavily", "exa"]);
+  });
+
+  test("the cap names its size, so the model can judge a smaller retry", async () => {
+    const { deps } = stubFetch({
+      tavily: oversized,
+      exa: down,
+      parallel: down,
+    });
+    const error = await failed(webSearch("q", 3, undefined, deps));
+    expect(error.message).toContain("tavily: response larger than 1 MB;");
   });
 
   test("zero results is an answer, so no one else is asked", async () => {
@@ -579,6 +606,28 @@ describe("text that reaches the model", () => {
       'No results for "q". Try a different query.',
     );
   });
+
+  test("a huge vendor title is cut, and a too-long URL drops its item", async () => {
+    const { deps } = stubFetch({
+      tavily: tavilyResults([
+        {
+          url: "https://x.dev/ok",
+          title: "A".repeat(1000),
+          content: "c",
+        },
+        {
+          url: `https://x.dev/${"b".repeat(600)}`,
+          title: "long link",
+          content: "c",
+        },
+      ]),
+    });
+    const { provider, results } = await webSearch("q", 3, undefined, deps);
+    expect(provider).toBe("tavily");
+    expect(results).toEqual([
+      { title: `${"A".repeat(300)}…`, url: "https://x.dev/ok", snippet: "c" },
+    ]);
+  });
 });
 
 /** Only what these tests call: a narrow shape keeps them free of Pi's generics. */
@@ -596,7 +645,7 @@ interface Captured {
     structuredContent?: unknown;
   }>;
   renderCall?: (
-    args: { query: string },
+    args: { query?: string },
     theme: Theme,
     context: CallContext,
   ) => { render(width: number): string[] };
@@ -689,6 +738,12 @@ describe("registerWebSearch", () => {
         registered().renderCall?.({ query: "pi docs" }, plainTheme, untimed()),
       ),
     ).toBe('web_search "pi docs"');
+  });
+
+  test("arguments still streaming show no placeholder text, not undefined", () => {
+    expect(row(registered().renderCall?.({}, plainTheme, untimed()))).toBe(
+      "web_search",
+    );
   });
 
   test("the result row counts results and names the provider", () => {

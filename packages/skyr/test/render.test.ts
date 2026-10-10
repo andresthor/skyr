@@ -185,6 +185,16 @@ describe("row timing", () => {
     expect(invalidate.mock.calls.length).toBeLessThan(301);
   });
 
+  test("a partial result keeps the clock running until the final one", () => {
+    const state: Timing = {};
+    elapsed(call(state, true));
+    vi.advanceTimersByTime(1_000);
+    expect(took({ state, isPartial: true })).toEqual([["muted", " · 1.0s"]]);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(took({ state })).toEqual([["muted", " · 1.0s"]]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   test("a failure row carries the time after the message", () => {
     const row = errorRow(
       plain,

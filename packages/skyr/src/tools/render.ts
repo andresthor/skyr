@@ -57,7 +57,7 @@ export interface Timing {
   ticker?: ReturnType<typeof setInterval>;
 }
 
-function seconds(ms: number): Segment[] {
+export function seconds(ms: number): Segment[] {
   return [["muted", ` · ${(ms / 1000).toFixed(1)}s`]];
 }
 

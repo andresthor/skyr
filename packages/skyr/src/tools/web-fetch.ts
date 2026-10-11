@@ -8,14 +8,12 @@
  * own undici copy, which would collide with the single copy Pi installs for its global fetch.
  */
 import { lookup as dnsLookup } from "node:dns/promises";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import TurndownService from "turndown";
 import { Type } from "typebox";
 import { isPrivateAddress, redactUrl, withTimeout } from "./net.js";
 import { elapsed, errorRow, stripInvisible, took, toolRow } from "./render.js";
+import { spill } from "./spill.js";
 
 const TIMEOUT_MS = 30_000;
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
@@ -249,14 +247,6 @@ function isText(mime: string): boolean {
   );
 }
 
-let spillRoot: Promise<string> | undefined;
-
-/** One directory per process. Holds the promise, so parallel calls cannot both create one. */
-function spillDir(): Promise<string> {
-  spillRoot ??= mkdtemp(join(tmpdir(), "skyr-fetch-"));
-  return spillRoot;
-}
-
 /**
  * Fetches one URL and returns text for a model, plus what a row needs to describe it. Gives up
  * after 30 s or when `signal` aborts. Throws on a refused address, a non-2xx status, an
@@ -328,11 +318,7 @@ export async function webFetch(
     };
 
   // Spill only when the model got less than the converted text; the cap alone needs no file.
-  // A nested call's id contains a slash, which would read as a directory.
-  const spillPath = cut.truncated
-    ? join(await spillDir(), `${toolCallId.replace(/[^\w.-]/g, "_")}.md`)
-    : undefined;
-  if (spillPath) await writeFile(spillPath, body, "utf8");
+  const spillPath = cut.truncated ? await spill(toolCallId, body) : undefined;
 
   const firstChars = `the first ${MAX_HTML_CHARS / 1_000_000} M characters of a larger page`;
   let note: string;

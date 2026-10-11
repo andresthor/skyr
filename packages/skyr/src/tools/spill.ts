@@ -7,7 +7,7 @@ let spillRoot: Promise<string> | undefined;
 
 /** One directory per process. Holds the promise, so parallel calls cannot both create one. */
 function spillDir(): Promise<string> {
-  spillRoot ??= mkdtemp(join(tmpdir(), "skyr-fetch-"));
+  spillRoot ??= mkdtemp(join(tmpdir(), "skyr-"));
   return spillRoot;
 }
 

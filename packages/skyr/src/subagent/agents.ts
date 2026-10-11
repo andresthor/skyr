@@ -1,0 +1,166 @@
+/** Agent files: markdown whose frontmatter defines a subagent and whose body is its prompt. */
+import { readdir, readFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+
+export interface AgentDef {
+  name: string;
+  description: string;
+  /** `undefined` means the default tool set; `[]` means none. */
+  tools: string[] | undefined;
+  /** `undefined` means the parent's model. */
+  model: string | undefined;
+  body: string;
+  /** Absolute path of the file the agent came from. */
+  source: string;
+}
+
+const KNOWN_TOOLS = [
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "bash",
+  "edit",
+  "write",
+  "web_search",
+  "web_fetch",
+];
+
+// Exact names, so Claude Code agent files load unchanged; PowerShell has no Pi equivalent.
+const CLAUDE_CODE_TOOLS: Record<string, string> = {
+  Read: "read",
+  Edit: "edit",
+  Write: "write",
+  Bash: "bash",
+  Grep: "grep",
+  Glob: "find",
+  WebFetch: "web_fetch",
+  WebSearch: "web_search",
+};
+
+type ParseFrontmatter = (content: string) => {
+  frontmatter: unknown;
+  body: string;
+};
+
+function parseTools(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  const raw =
+    typeof value === "string"
+      ? value.split(",")
+      : Array.isArray(value) && value.every((t) => typeof t === "string")
+        ? value
+        : undefined;
+  if (raw === undefined)
+    throw new Error(
+      "tools must be a comma-separated string or a list of names",
+    );
+  const names = raw
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map((t) => CLAUDE_CODE_TOOLS[t] ?? t);
+  const unknown = names.filter((t) => !KNOWN_TOOLS.includes(t));
+  if (unknown.length > 0)
+    throw new Error(
+      `unknown tools ${unknown.join(", ")}; valid tools are ${KNOWN_TOOLS.join(", ")}`,
+    );
+  return [...new Set(names)];
+}
+
+function parseAgent(
+  file: string,
+  content: string,
+  parseFrontmatter: ParseFrontmatter,
+): AgentDef {
+  const { frontmatter, body } = parseFrontmatter(content);
+  if (
+    typeof frontmatter !== "object" ||
+    frontmatter === null ||
+    Array.isArray(frontmatter)
+  )
+    throw new Error("frontmatter must be a YAML mapping of fields");
+  const fields = frontmatter as Record<string, unknown>;
+
+  const { name = basename(file, ".md"), description, model } = fields;
+  if (typeof name !== "string" || !/^[^\s\p{Cc}]+$/u.test(name))
+    throw new Error(
+      "name must be a single word without spaces; set name: in the frontmatter",
+    );
+  if (typeof description !== "string" || description.trim() === "")
+    throw new Error(
+      "needs a frontmatter block (between --- lines) with a description: field",
+    );
+  if (model !== undefined && typeof model !== "string")
+    throw new Error("model must be a provider/model string or inherit");
+
+  return {
+    name,
+    description: description.trim(),
+    tools: parseTools(fields.tools),
+    model: model === undefined || model === "inherit" ? undefined : model,
+    body,
+    source: file,
+  };
+}
+
+async function loadDir(
+  dir: string,
+  parseFrontmatter: ParseFrontmatter,
+  errors: string[],
+): Promise<Map<string, AgentDef>> {
+  const agents = new Map<string, AgentDef>();
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (error: unknown) {
+    const code = error instanceof Error && "code" in error ? error.code : "";
+    if (code !== "ENOENT")
+      errors.push(`subagent: cannot read agent dir ${dir} (${String(code)})`);
+    return agents;
+  }
+  for (const entry of entries.filter((e) => e.endsWith(".md")).sort()) {
+    const file = join(dir, entry);
+    try {
+      const agent = parseAgent(
+        file,
+        await readFile(file, "utf8"),
+        parseFrontmatter,
+      );
+      const first = agents.get(agent.name);
+      if (first)
+        throw new Error(
+          `defines "${agent.name}", already defined by ${first.source}; skipped`,
+        );
+      agents.set(agent.name, agent);
+    } catch (error: unknown) {
+      // yaml ends its first line with ":" and appends a multi-line code frame
+      const reason =
+        error instanceof Error
+          ? (error.message.split("\n")[0] ?? "").replace(/:$/, "")
+          : String(error);
+      errors.push(`subagent: ${file}: ${reason}`);
+    }
+  }
+  return agents;
+}
+
+/**
+ * Reads the `*.md` agent files in each dir. A missing dir contributes nothing. A project agent
+ * replaces a user agent of the same name; within one dir the first file by name wins. A file
+ * or dir that cannot be read, parsed or validated is skipped and described in `errors`; nothing
+ * throws for one bad file.
+ */
+export async function loadAgents(dirs: {
+  user: string;
+  project?: string;
+}): Promise<{ agents: Map<string, AgentDef>; errors: string[] }> {
+  // Imported here, not at the top: a static value import would make loading skyr evaluate
+  // pi-coding-agent, which reads environment variables at module scope.
+  const { parseFrontmatter } = await import("@earendil-works/pi-coding-agent");
+  const errors: string[] = [];
+  const user = await loadDir(dirs.user, parseFrontmatter, errors);
+  const project = dirs.project
+    ? await loadDir(dirs.project, parseFrontmatter, errors)
+    : new Map<string, AgentDef>();
+  return { agents: new Map([...user, ...project]), errors };
+}

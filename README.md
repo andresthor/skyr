@@ -24,6 +24,32 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
   before fails; no key needed. `TAVILY_API_KEY`, `EXA_API_KEY` or `PARALLEL_API_KEY` moves that
   service off its rate-limited free tier. Queries go to those services and may carry
   conversation content.
+- `subagent` — hands a task to an agent defined in a markdown file. The agent runs as a fresh
+  session with its own context and returns only its final answer. Several calls in one turn run
+  in parallel, and Esc stops them.
+
+## Subagents
+
+An agent is a markdown file. The frontmatter describes it; the body is added to its system
+prompt.
+
+```markdown
+---
+name: scout                  # optional; defaults to the file name
+description: Finds code and explains how something works in this repository.
+tools: read, grep, find, ls  # optional; Claude Code names such as Read or Glob also work
+model: provider/model-id     # optional; anything `pi --model` accepts; defaults to the parent's
+---
+You are a scout. …
+```
+
+Pi looks for agents in `agents/` under its config dir (`~/.pi/agent/agents/` by default) and, in
+a project Pi trusts, in `.pi/agents/`. A project agent replaces a user agent of the same name.
+Edits apply after `/reload`. Without `tools`, an agent gets `read`, `grep`, `find`, `ls`,
+`bash`, `web_search` and `web_fetch`. Pi lists the agents to the model; with none, the tool
+stays hidden.
+
+`packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.
 
 ## Embedding it
 

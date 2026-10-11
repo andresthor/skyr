@@ -682,6 +682,7 @@ function registered(): Captured {
   const tools: Captured[] = [];
   const pi = {
     registerTool: (tool: Captured) => tools.push(tool),
+    on: () => {},
   } as unknown as ExtensionAPI;
   registerSkyr(pi);
   const tool = tools.find((t) => t.name === "web_search");

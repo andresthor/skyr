@@ -62,7 +62,7 @@ const Params = Type.Object({
   prompt: Type.Optional(
     Type.String({
       description:
-        "Added to the subagent's system prompt, after the agent's own prompt when agent is given: its role, rules and how to answer.",
+        "Added to the subagent's system prompt, after the agent's own when agent is given. Give it the role in a sentence, how to work, and the shape of the answer you want back.",
     }),
   ),
   tools: Type.Optional(

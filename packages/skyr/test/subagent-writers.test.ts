@@ -1,5 +1,5 @@
 // One writer per directory: a child whose tools include edit or write.
-import { symlinkSync } from "node:fs";
+import { mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   fauxAssistantMessage,
@@ -144,6 +144,41 @@ test("writers in different cwds run concurrently, and a second spelling of the s
   expect(seen.get("wa")?.cwd).toBe(`<cwd>\n${parent.cwd}\n</cwd>`);
   expect(seen.get("wb")?.cwd).toBe(`<cwd>\n${B}\n</cwd>`);
   expect(seen.get("wb2")?.cwd).toBe(`<cwd>\n${link}\n</cwd>`);
+  for (const task of holds.keys())
+    expect(results(parent.session).get(task)?.isError).toBe(false);
+});
+
+test("a writer in a subdirectory queues behind a writer in the directory above it", async () => {
+  const holds = new Map(["root", "sub"].map((task) => [task, hold()]));
+  let releasedRoot = false;
+  const parent = await parentSession({
+    respond: router(
+      [
+        call({ task: "root", tools: ["edit"] }),
+        call({ task: "sub", tools: ["edit"], cwd: "sub" }),
+      ],
+      (context, ...rest) => {
+        if (taskOf(context) === "sub" && !releasedRoot)
+          throw new Error("sub started before root released");
+        return holds.get(taskOf(context))!.step(context, ...rest);
+      },
+    ),
+  });
+  mkdirSync(join(parent.cwd, "sub"));
+
+  const run = parent.session.prompt("go");
+  await holds.get("root")!.entered;
+  await vi.waitFor(() =>
+    expect(parent.widgets.at(-1)?.some((l) => l.startsWith("○ queued"))).toBe(
+      true,
+    ),
+  );
+  releasedRoot = true;
+  holds.get("root")!.release();
+  await holds.get("sub")!.entered;
+  holds.get("sub")!.release();
+  await run;
+
   for (const task of holds.keys())
     expect(results(parent.session).get(task)?.isError).toBe(false);
 });

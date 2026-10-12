@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -35,6 +35,7 @@ import { createRunStore, type RunSnapshot, type RunStatus } from "./store.js";
 
 const MAX_ANSWER_BYTES = 10_000;
 const PULSE_MS = 250;
+// An unchanged snapshot is resent at this rate so the row's clock moves between store changes.
 const PULSE_FLOOR_MS = 1000;
 const WIDGET_KEY = "skyr.subagents";
 const WIDGET_WIDTH = 100;
@@ -44,7 +45,7 @@ const PREVIEW_LINES = 12;
 const ABOUT =
   "Run a task in a subagent: a fresh agent with its own context and tools that returns only its final answer. Use it for work that would fill your context, such as searching a codebase, reading many files or researching the web. The agent sees nothing of this conversation, so the task must stand alone: give paths, context and the answer you want back. Independent tasks go out as several subagent calls in one turn, and run in parallel.";
 const ADHOC =
-  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory: a second one for the same directory waits until the first ends, so issue writes that depend on each other in separate turns. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it.";
+  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory tree: a second one for the same directory, or one above or below it, waits until the first ends, so issue writes that depend on each other in separate turns. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
 
 const Params = Type.Object({
   agent: Type.Optional(
@@ -67,7 +68,7 @@ const Params = Type.Object({
   tools: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "Tool names the subagent may use; replaces the agent's or the default set. Add edit or write only to change files: such a subagent runs alone in its directory.",
+        "Tool names the subagent may use; replaces the agent's or the default set. Add edit or write only to change files: such a subagent runs alone in its directory tree.",
     }),
   ),
   model: Type.Optional(
@@ -127,7 +128,7 @@ const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
 const labelOf = (run: { agent?: string; description: string }) =>
-  run.agent ?? `"${run.description}"`;
+  run.agent ?? `"${clip(run.description)}"`;
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
@@ -226,7 +227,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       loadErrors.length > 0
         ? ` Agent files that failed to load: ${loadErrors.join("; ")}`
         : "";
-    return fail(`no agent "${name}"; available: ${names}.${broken}`);
+    return fail(`no agent "${clip(name)}"; available: ${names}.${broken}`);
   }
 
   /**
@@ -290,8 +291,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
   }
 
   /**
-   * The next writer slot for `key`. `behind` names the writer ahead, if any; `wait` resolves once
-   * it has released or `signal` aborts; `release` frees the slot exactly once, whatever happened.
+   * The next writer slot for `key`, behind every live writer in the same directory, above it or
+   * below it. `behind` names the latest of those, if any; `wait` resolves once they have all
+   * released or `signal` aborts; `release` frees the slot exactly once, whatever happened.
    */
   function takeSlot(
     key: string,
@@ -301,24 +303,34 @@ export function registerSubagent(pi: ExtensionAPI): void {
     wait(signal: AbortSignal): Promise<void>;
     release(): void;
   } {
-    const ahead = writers.get(key);
+    // With a trailing separator, so `/a/b` is related to `/a` and `/a/b/c` but not to `/a/bc`.
+    const related = [...writers].filter(
+      ([other]) =>
+        other === key ||
+        key.startsWith(other + sep) ||
+        other.startsWith(key + sep),
+    );
+    const behind = related.at(-1)?.[1].label;
+    const aheadDone = Promise.all(related.map(([, slot]) => slot.chain)).then(
+      () => undefined,
+    );
     let grant!: () => void;
     const mine = new Promise<void>((r) => {
       grant = r;
     });
-    const chain = (ahead?.chain ?? Promise.resolve()).then(() => mine);
+    const chain = aheadDone.then(() => mine);
     writers.set(key, { chain, label });
     return {
-      behind: ahead?.label,
+      behind,
       wait: (signal) =>
-        ahead
-          ? Promise.race([
-              ahead.chain,
+        behind === undefined
+          ? Promise.resolve()
+          : Promise.race([
+              aheadDone,
               new Promise<void>((r) =>
                 signal.addEventListener("abort", () => r(), { once: true }),
               ),
-            ])
-          : Promise.resolve(),
+            ]),
       release: () => {
         grant();
         if (writers.get(key)?.chain === chain) writers.delete(key);

@@ -27,8 +27,7 @@ const KNOWN_TOOLS = [
   "web_fetch",
 ];
 
-// No edit or write by default: an agent file or the `tools` param names them, and such a child is
-// a writer, one per directory.
+// No edit or write by default: an agent file or the `tools` param names them.
 export const DEFAULT_TOOLS = [
   "read",
   "grep",

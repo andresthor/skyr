@@ -57,7 +57,7 @@ const Params = Type.Object({
   description: Type.String({ description: "3-5 words for the user" }),
   task: Type.String({
     description:
-      "The whole task. The agent sees nothing of this conversation: give paths, context and the answer you want back.",
+      "The whole task — the job for this one call, standalone. Role shaping goes in `prompt` (it is appended to the child's system prompt), never the job itself. The agent sees nothing of this conversation: give paths, context and the answer you want back.",
   }),
   prompt: Type.Optional(
     Type.String({

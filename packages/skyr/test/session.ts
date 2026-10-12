@@ -5,6 +5,7 @@ import {
   type FauxResponseFactory,
   fauxAssistantMessage,
   fauxProvider,
+  fauxToolCall,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
@@ -119,6 +120,77 @@ export async function parentSession(o: {
       rmSync(dir, { recursive: true, force: true });
   });
   return { session, cwd, agentDir, requests, status, notices };
+}
+
+/** A temp directory, removed when the test ends. */
+export function scratchDir(name: string): string {
+  const dir = tmp(name);
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+export const agentFile = (description: string, fields = "") =>
+  `---\ndescription: ${description}\n${fields}---\nYou are a test agent.\n`;
+
+export function textOf(message: TranscriptContext["messages"][number]): string {
+  const { content } = message;
+  if (typeof content === "string") return content;
+  return content.map((c) => (c.type === "text" ? c.text : "")).join("");
+}
+
+/** The first user message: "go" for the parent, the task for a child. */
+export const taskOf = (context: TranscriptContext) => {
+  const first = context.messages.find((m) => m.role === "user");
+  return first ? textOf(first) : "";
+};
+
+/** The system prompt sections a child was given, by name; `{}` when there are none. */
+export function sections(
+  context: TranscriptContext,
+): Record<string, string | null> {
+  const first = context.messages[0];
+  return first?.role === "system" ? (first.sections ?? {}) : {};
+}
+
+/** A `subagent` call whose id is its task, so results can be looked up by task. */
+export function call(params: {
+  task: string;
+  agent?: string;
+  description?: string;
+  prompt?: string;
+  tools?: string[];
+  model?: string;
+  cwd?: string;
+}) {
+  const args = Object.fromEntries(
+    Object.entries({
+      description: `run ${params.agent ?? params.task}`,
+      ...params,
+    }).filter(([, value]) => value !== undefined),
+  );
+  return fauxToolCall("subagent", args, { id: params.task });
+}
+
+/** The parent makes `calls` on its first turn and then answers "done"; children get `child`. */
+export function router(
+  calls: ReturnType<typeof call>[],
+  child: FauxResponseFactory,
+): FauxResponseFactory {
+  return (context, ...rest) => {
+    if (taskOf(context) !== "go") return child(context, ...rest);
+    return context.messages.at(-1)?.role === "toolResult"
+      ? fauxAssistantMessage("done")
+      : fauxAssistantMessage(calls);
+  };
+}
+
+/** The parent's tool results by tool-call id, which `call` sets to the task. */
+export function results(session: AgentSession) {
+  return new Map(
+    session.messages.flatMap((m) =>
+      m.role === "toolResult" ? [[m.toolCallId, m] as const] : [],
+    ),
+  );
 }
 
 function writeAll(dir: string, files: Record<string, string> = {}): void {

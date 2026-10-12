@@ -111,14 +111,16 @@ test("tool calls from one assistant message run in parallel by default", async (
       context.messages.at(-1)?.role === "toolResult"
         ? answer()
         : fauxAssistantMessage([
-            fauxToolCall("wait", {}),
-            fauxToolCall("wait", {}),
+            fauxToolCall("wait", {}, { id: "a" }),
+            fauxToolCall("wait", {}, { id: "b" }),
           ]),
     customTools: [wait],
   });
 
   const run = session.prompt("go");
   await vi.waitFor(() => expect(entered).toHaveLength(2), { timeout: 1000 });
+  // Started in array order: the writer queue's "call order" rests on this.
+  expect(entered).toEqual(["a", "b"]);
   release();
   await run;
 });

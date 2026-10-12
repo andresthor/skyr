@@ -43,7 +43,13 @@ type ParseFrontmatter = (content: string) => {
   body: string;
 };
 
-function parseTools(value: unknown): string[] | undefined {
+/**
+ * Tool names as an agent file or a call gives them: a comma string or a list. Claude Code names
+ * are mapped to Pi's; duplicates dropped; order kept. `undefined` or `null` returns `undefined`,
+ * meaning the default set. Throws, naming the unknown names and the valid ones, on anything else,
+ * including `subagent`.
+ */
+export function parseTools(value: unknown): string[] | undefined {
   if (value === undefined || value === null) return undefined;
   const raw =
     typeof value === "string"

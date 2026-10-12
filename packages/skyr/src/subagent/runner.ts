@@ -22,7 +22,7 @@ export interface ChildSpec {
   thinkingLevel: ThinkingLevel | undefined;
   /** Already validated: Pi silently drops a name it does not know. */
   tools: string[];
-  /** Appended to Pi's system prompt, which keeps its tool list and guidelines. */
+  /** Appended to Pi's system prompt when non-empty; Pi keeps its tool list and guidelines. */
   systemPrompt: string;
   task: string;
   /** Whether the child may read the project's `.pi/` settings and prompts. */
@@ -95,7 +95,7 @@ export function inProcessRunner(
       if (!picked.model)
         throw new Error(
           `subagent: model "${spec.model}" is not available to a subagent: ${picked.error ?? "no match"}. ` +
-            "Set `model:` in the agent file to a model with stored credentials.",
+            "Pick a model with stored credentials, or set `model:` on the call or in the agent file.",
         );
 
       // One instance for loader and session, so both see the same project trust.
@@ -112,7 +112,8 @@ export function inProcessRunner(
         noThemes: true,
         extensionFactories: [{ name: "skyr", factory: registerTools }],
         // The plain `appendSystemPrompt` reads its input as a file when it names one.
-        appendSystemPromptOverride: (base) => [...base, spec.systemPrompt],
+        appendSystemPromptOverride: (base) =>
+          spec.systemPrompt ? [...base, spec.systemPrompt] : base,
       });
       await resourceLoader.reload();
       const sessionManager = spec.session

@@ -1,7 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
-  type FauxResponseFactory,
   fauxAssistantMessage,
   fauxToolCall,
   type TranscriptContext,
@@ -9,6 +8,7 @@ import {
 import {
   CONFIG_DIR_NAME,
   type ExtensionAPI,
+  ProjectTrustStore,
   SessionManager,
   type Theme,
   type ToolDefinition,
@@ -16,61 +16,49 @@ import {
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { registerSkyr } from "../src/index.js";
-import { hold, parentSession, toolsSeen } from "./session.js";
+import {
+  agentFile,
+  call,
+  hold,
+  parentSession,
+  results,
+  router,
+  scratchDir,
+  sections,
+  taskOf,
+  textOf,
+  toolsSeen,
+} from "./session.js";
 
 const plain = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 } as unknown as Theme;
 
-const agentFile = (description: string, fields = "") =>
-  `---\ndescription: ${description}\n${fields}---\nYou are a test agent.\n`;
-
 type RenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
 
 const SCOUT = { "scout.md": agentFile("Finds things") };
 
-function textOf(message: TranscriptContext["messages"][number]): string {
-  const { content } = message;
-  if (typeof content === "string") return content;
-  return content.map((c) => (c.type === "text" ? c.text : "")).join("");
-}
-
-/** The first user message: "go" for the parent, the task for a child. */
-const taskOf = (context: TranscriptContext) => {
-  const first = context.messages.find((m) => m.role === "user");
-  return first ? textOf(first) : "";
-};
-
-/** Each call's id is its task, so results can be looked up by task. */
-const call = (agent: string, task: string) =>
-  fauxToolCall(
-    "subagent",
-    { agent, description: `run ${agent}`, task },
-    { id: task },
-  );
-
-/** The parent makes `calls` on its first turn and then answers "done"; children get `child`. */
-function router(
-  calls: ReturnType<typeof call>[],
-  child: FauxResponseFactory,
-): FauxResponseFactory {
-  return (context, ...rest) => {
-    if (taskOf(context) !== "go") return child(context, ...rest);
-    return context.messages.at(-1)?.role === "toolResult"
-      ? fauxAssistantMessage("done")
-      : fauxAssistantMessage(calls);
+/** A child that records what it was given and answers "ok". */
+function recorder() {
+  const seen = new Map<
+    string,
+    { tools: string[]; model: string; sections: Record<string, string | null> }
+  >();
+  const child = (
+    context: TranscriptContext,
+    _options: unknown,
+    _state: unknown,
+    model: { id: string },
+  ) => {
+    seen.set(taskOf(context), {
+      tools: toolsSeen(context),
+      model: model.id,
+      sections: sections(context),
+    });
+    return fauxAssistantMessage("ok");
   };
-}
-
-function results(
-  session: Awaited<ReturnType<typeof parentSession>>["session"],
-) {
-  return new Map(
-    session.messages.flatMap((m) =>
-      m.role === "toolResult" ? [[m.toolCallId, m] as const] : [],
-    ),
-  );
+  return { seen, child };
 }
 
 function registered(): ToolDefinition {
@@ -106,7 +94,7 @@ function resultRow(
 
 test("a child never receives the subagent tool, nor any extension installed for the user or the repo", async () => {
   const parent = await parentSession({
-    respond: router([call("scout", "look")], () =>
+    respond: router([call({ agent: "scout", task: "look" })], () =>
       fauxAssistantMessage("found"),
     ),
     userAgents: SCOUT,
@@ -133,7 +121,7 @@ test("a child never receives the subagent tool, nor any extension installed for 
   );
 });
 
-test("a child's text and description cannot reach the terminal as escapes, and the row fits 20 columns", () => {
+test("a child's text and description cannot reach the terminal as escapes, the row fits 20 columns, and an ad-hoc row never says undefined", () => {
   const OSC52 = "\u001b]52;c;cHduZWQ=\u0007";
   const hostile = `${OSC52}evil‮漢字漢字🙂🙂 and more words`;
   const tool = registered();
@@ -149,15 +137,27 @@ test("a child's text and description cannot reach the terminal as escapes, and t
     tokens: 0,
     activity: hostile,
   };
+  const callRow = (args: Record<string, string>, width: number) =>
+    tool.renderCall?.(args, plain, {} as RenderContext).render(width) ?? [];
   const lines = [
-    ...(tool
-      .renderCall?.(
-        { agent: "scout", description: hostile, task: "x" },
-        plain,
-        {} as RenderContext,
-      )
-      .render(20) ?? []),
+    ...callRow({ agent: "scout", description: hostile, task: "x" }, 20),
+    ...callRow({ description: hostile, task: "x", cwd: hostile }, 20),
     ...resultRow(tool, "t", { content: [], details: run }, false, 20),
+    ...resultRow(
+      tool,
+      "t",
+      {
+        content: [],
+        details: {
+          ...run,
+          agent: undefined,
+          status: "queued",
+          behind: hostile,
+        },
+      },
+      false,
+      20,
+    ),
     ...resultRow(
       tool,
       "t",
@@ -169,18 +169,31 @@ test("a child's text and description cannot reach the terminal as escapes, and t
       20,
     ),
   ];
-  expect(lines).toHaveLength(3);
+  expect(lines).toHaveLength(5);
   for (const line of lines) {
     expect(visibleWidth(line)).toBeLessThanOrEqual(20);
     expect(line).not.toContain("\u001b]");
     expect(line).not.toContain("cHduZWQ");
     expect(line).not.toContain("‮");
+    expect(line).not.toContain("undefined");
   }
+  expect(
+    callRow(
+      { description: "fix it", task: "x", cwd: "../wt" },
+      200,
+    )[0]?.trimEnd(),
+  ).toBe('subagent "fix it" in ../wt');
+  expect(
+    resultRow(tool, "t", {
+      content: [],
+      details: { ...run, status: "queued", behind: '"fix it"' },
+    })[0],
+  ).toMatch(/^● queued · behind "fix it" · \d+\.\ds +$/);
 });
 
 test("a child's final text reaches the parent model, and its usage counts toward the parent's session totals", async () => {
   const { session, requests } = await parentSession({
-    respond: router([call("scout", "look")], () =>
+    respond: router([call({ agent: "scout", task: "look" })], () =>
       fauxAssistantMessage("FINDING-42"),
     ),
     userAgents: SCOUT,
@@ -203,7 +216,7 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
   const holds = new Map(["a", "b", "c"].map((task) => [task, hold()]));
   const parent = await parentSession({
     respond: router(
-      [...holds.keys()].map((task) => call("scout", task)),
+      [...holds.keys()].map((task) => call({ agent: "scout", task })),
       (context, ...rest) => {
         const held = holds.get(taskOf(context));
         if (!held) throw new Error(`unexpected task ${taskOf(context)}`);
@@ -233,17 +246,14 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
 });
 
 test("a child gets exactly its agent file's tools or the default set, and the parent's model unless its agent file names one", async () => {
-  const seen = new Map<string, { tools: string[]; model: string }>();
+  const { seen, child } = recorder();
   const { session } = await parentSession({
     respond: router(
-      [call("reader", "r"), call("scout", "s")],
-      (context, _options, _state, model) => {
-        seen.set(taskOf(context), {
-          tools: toolsSeen(context),
-          model: model.id,
-        });
-        return fauxAssistantMessage("ok");
-      },
+      [
+        call({ agent: "reader", task: "r" }),
+        call({ agent: "scout", task: "s" }),
+      ],
+      child,
     ),
     userAgents: {
       ...SCOUT,
@@ -256,19 +266,227 @@ test("a child gets exactly its agent file's tools or the default set, and the pa
 
   await session.prompt("go");
 
-  expect(seen.get("r")).toEqual({
+  expect(seen.get("r")).toMatchObject({
     tools: ["read", "web_search"],
     model: "faux-2",
   });
-  expect(seen.get("s")).toEqual({
+  expect(seen.get("s")).toMatchObject({
     tools: ["bash", "find", "grep", "ls", "read", "web_fetch", "web_search"],
     model: "faux-1",
   });
 });
 
+test("with only description and task, the child gets the default read set, the parent's model and cwd, and Pi's own prompt with nothing appended", async () => {
+  const { seen, child } = recorder();
+  const parent = await parentSession({
+    respond: router([call({ task: "plain" })], child),
+  });
+
+  await parent.session.prompt("go");
+
+  const got = seen.get("plain");
+  expect(got).toMatchObject({
+    tools: ["bash", "find", "grep", "ls", "read", "web_fetch", "web_search"],
+    model: "faux-1",
+  });
+  expect(got?.sections.preamble).toBeDefined();
+  expect(got?.sections.addendum).toBeUndefined();
+  expect(got?.sections.cwd).toBe(`<cwd>\n${parent.cwd}\n</cwd>`);
+  expect(results(parent.session).get("plain")?.isError).toBe(false);
+});
+
+test("prompt is appended to the child's system prompt, and with agent as well the agent body comes first", async () => {
+  const { seen, child } = recorder();
+  const { session } = await parentSession({
+    respond: router(
+      [
+        call({ task: "p", prompt: "PROMPT-ONLY" }),
+        call({ task: "ap", agent: "scout", prompt: "PROMPT-AFTER" }),
+      ],
+      child,
+    ),
+    userAgents: SCOUT,
+  });
+
+  await session.prompt("go");
+
+  expect(seen.get("p")?.sections.addendum).toBe(
+    "<addendum>\nPROMPT-ONLY\n</addendum>",
+  );
+  expect(seen.get("ap")?.sections.addendum).toMatch(
+    /^<addendum>\nYou are a test agent\.\n\nPROMPT-AFTER\n<\/addendum>$/,
+  );
+});
+
+test("tools on a call is validated like an agent file's, maps Claude Code names, overrides the agent file's list, and an unknown name fails before any child starts", async () => {
+  const { seen, child } = recorder();
+  const parent = await parentSession({
+    respond: router(
+      [
+        call({ task: "t1", tools: ["Read", "Edit"] }),
+        call({ task: "t2", agent: "reader", tools: ["grep"] }),
+        call({ task: "t3", tools: ["read", "TodoWrite"] }),
+      ],
+      (context, ...rest) => {
+        if (taskOf(context) === "t3") throw new Error("t3 started");
+        return child(context, ...rest);
+      },
+    ),
+    userAgents: { "reader.md": agentFile("Reads", "tools: Read, WebSearch\n") },
+  });
+
+  await parent.session.prompt("go");
+
+  expect(seen.get("t1")?.tools).toEqual(["edit", "read"]);
+  expect(seen.get("t2")?.tools).toEqual(["grep"]);
+  const t3 = results(parent.session).get("t3");
+  expect(t3?.isError).toBe(true);
+  expect(t3 && textOf(t3)).toMatch(
+    /^subagent: tools: unknown tools TodoWrite; valid tools are read, grep, find, ls, bash, edit, write, web_search, web_fetch/,
+  );
+  expect(parent.requests.some((r) => taskOf(r) === "t3")).toBe(false);
+  expect(parent.status).not.toContain("3 subagents");
+});
+
+test("model on a call overrides the agent file's and the parent's, and an unknown model fails before any child starts", async () => {
+  const { seen, child } = recorder();
+  const parent = await parentSession({
+    respond: router(
+      [
+        call({ task: "m1", model: "faux/faux-2" }),
+        call({ task: "m2", agent: "reader", model: "faux/faux-1" }),
+        call({ task: "m3", model: "nowhere/none" }),
+      ],
+      (context, ...rest) => {
+        if (taskOf(context) === "m3") throw new Error("m3 started");
+        return child(context, ...rest);
+      },
+    ),
+    userAgents: { "reader.md": agentFile("Reads", "model: faux/faux-2\n") },
+  });
+
+  await parent.session.prompt("go");
+
+  expect(seen.get("m1")?.model).toBe("faux-2");
+  expect(seen.get("m2")?.model).toBe("faux-1");
+  const m3 = results(parent.session).get("m3");
+  expect(m3?.isError).toBe(true);
+  expect(m3 && textOf(m3)).toMatch(
+    /^subagent: "run m3": model "nowhere\/none" is not available/,
+  );
+  expect(parent.requests.some((r) => taskOf(r) === "m3")).toBe(false);
+});
+
+test("cwd runs the child there, absolute or relative to the parent's cwd, and its session still saves beside the parent's", async () => {
+  const B = scratchDir("cwd-b");
+  writeFileSync(join(B, "IN-B.txt"), "");
+  const { seen, child } = recorder();
+  let listing = "";
+  const parent = await parentSession({
+    respond: router(
+      [
+        call({ task: "abs", cwd: B, tools: ["ls"] }),
+        call({ task: "rel", cwd: "sub" }),
+      ],
+      (context, ...rest) => {
+        if (taskOf(context) !== "abs") return child(context, ...rest);
+        const last = context.messages.at(-1);
+        if (last?.role === "toolResult") {
+          listing = textOf(last);
+          return child(context, ...rest);
+        }
+        return fauxAssistantMessage([fauxToolCall("ls", { path: "." })]);
+      },
+    ),
+  });
+  writeFileSync(join(parent.cwd, "IN-A.txt"), "");
+  mkdirSync(join(parent.cwd, "sub"));
+
+  await parent.session.prompt("go");
+
+  expect(listing).toContain("IN-B.txt");
+  expect(listing).not.toContain("IN-A.txt");
+  expect(seen.get("abs")?.sections.cwd).toBe(`<cwd>\n${B}\n</cwd>`);
+  expect(seen.get("rel")?.sections.cwd).toBe(
+    `<cwd>\n${join(parent.cwd, "sub")}\n</cwd>`,
+  );
+  const parentFile = parent.session.sessionFile!;
+  const details = results(parent.session).get("abs")?.details as {
+    sessionFile?: string;
+  };
+  expect(
+    details.sessionFile?.startsWith(
+      join(dirname(parentFile), basename(parentFile, ".jsonl")),
+    ),
+  ).toBe(true);
+  expect(results(parent.session).get("rel")?.isError).toBe(false);
+});
+
+test("a missing cwd, or a file as cwd, fails before any child starts and names the path", async () => {
+  const parent = await parentSession({
+    respond: router(
+      [call({ task: "m", cwd: "nope" }), call({ task: "f", cwd: "a-file" })],
+      () => {
+        throw new Error("a child started");
+      },
+    ),
+  });
+  writeFileSync(join(parent.cwd, "a-file"), "");
+
+  await parent.session.prompt("go");
+
+  const byTask = results(parent.session);
+  for (const task of ["m", "f"]) {
+    const result = byTask.get(task);
+    expect(result?.isError).toBe(true);
+    expect(result && textOf(result)).toContain(
+      join(parent.cwd, task === "m" ? "nope" : "a-file"),
+    );
+  }
+  expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);
+  expect(parent.status).toEqual([]);
+});
+
+test("a foreign cwd takes its trust from Pi's trust store, then the parent's verdict, and agent files still come from the parent's cwd", async () => {
+  const B = scratchDir("cwd-b");
+  const C = scratchDir("cwd-c");
+  for (const [dir, tag] of [
+    [B, "FROM-B"],
+    [C, "FROM-C"],
+  ] as const) {
+    mkdirSync(join(dir, CONFIG_DIR_NAME, "agents"), { recursive: true });
+    writeFileSync(join(dir, CONFIG_DIR_NAME, "APPEND_SYSTEM.md"), tag);
+    writeFileSync(
+      join(dir, CONFIG_DIR_NAME, "agents", "local.md"),
+      agentFile("Only here"),
+    );
+  }
+  const { seen, child } = recorder();
+  const parent = await parentSession({
+    respond: router(
+      [
+        call({ task: "tb", cwd: B }),
+        call({ task: "tc", cwd: C }),
+        call({ task: "ta", cwd: B, agent: "local" }),
+      ],
+      child,
+    ),
+  });
+  new ProjectTrustStore(parent.agentDir).set(B, false);
+
+  await parent.session.prompt("go");
+
+  expect(seen.get("tb")?.sections.addendum).toBeUndefined();
+  expect(seen.get("tc")?.sections.addendum).toContain("FROM-C");
+  const ta = results(parent.session).get("ta");
+  expect(ta && textOf(ta)).toMatch(/^subagent: no agent "local"/);
+});
+
 test("agents from the repo and user dirs are listed in the tool description, the repo wins a name clash, and the description stays the same across turns", async () => {
   const { session, requests } = await parentSession({
-    respond: router([call("scout", "s")], () => fauxAssistantMessage("ok")),
+    respond: router([call({ agent: "scout", task: "s" })], () =>
+      fauxAssistantMessage("ok"),
+    ),
     userAgents: {
       "scout.md": agentFile("User scout"),
       "helper.md": agentFile("Helps out"),
@@ -292,18 +510,34 @@ test("agents from the repo and user dirs are listed in the tool description, the
   );
 });
 
-test("with no agent files, the model is not offered the subagent tool", async () => {
+test("with no agent files the tool is still offered, says what an ad-hoc call is, and a call with only description and task runs", async () => {
   const { session, requests } = await parentSession({
-    respond: () => fauxAssistantMessage("ok"),
+    respond: router([call({ task: "x" })], () => fauxAssistantMessage("ok")),
   });
+
   await session.prompt("go");
-  expect(toolsSeen(requests[0]!)).not.toContain("subagent");
+
+  const declared = requests[0]!.messages.flatMap((m) =>
+    m.role === "system"
+      ? (m.toolsAdded ?? []).filter((t) => t.name === "subagent")
+      : [],
+  );
+  expect(declared).toHaveLength(1);
+  expect(declared[0]?.description).toMatch(
+    /Without `agent`.*\n\nAgents: none defined\.$/s,
+  );
+  expect(declared[0]?.description).not.toContain("undefined");
+  expect(results(session).get("x")?.isError).toBe(false);
 });
 
 test("a broken or unknown agent, an unresolvable model, or a child that errors fails the call and tells the model what to try", async () => {
   const parent = await parentSession({
     respond: router(
-      [call("broken", "b"), call("faraway", "f"), call("scout", "s")],
+      [
+        call({ agent: "broken", task: "b" }),
+        call({ agent: "faraway", task: "f" }),
+        call({ agent: "scout", task: "s" }),
+      ],
       () =>
         fauxAssistantMessage("", {
           stopReason: "error",
@@ -329,7 +563,7 @@ test("a broken or unknown agent, an unresolvable model, or a child that errors f
     /^subagent: no agent "broken"; available: faraway, scout\. Agent files that failed to load: .*broken\.md: .*description/,
   );
   expect(text("f")).toMatch(
-    /^subagent: faraway: model "nowhere\/none" is not available .* Set `model:` in the agent file/,
+    /^subagent: faraway: model "nowhere\/none" is not available .* set `model:` on the call or in the agent file/,
   );
   expect(text("s")).toBe("subagent: scout failed: provider exploded");
   expect(parent.notices).toHaveLength(1);
@@ -339,7 +573,9 @@ test("a broken or unknown agent, an unresolvable model, or a child that errors f
 test("output past the cap ends with a pointer to a file holding the full answer, and the parent session file doesn't contain the text past the cap", async () => {
   const long = `${Array.from({ length: 400 }, (_, i) => `line ${i} ${"x".repeat(40)}`).join("\n")}\nTAIL-MARKER`;
   const { session } = await parentSession({
-    respond: router([call("scout", "s")], () => fauxAssistantMessage(long)),
+    respond: router([call({ agent: "scout", task: "s" })], () =>
+      fauxAssistantMessage(long),
+    ),
     userAgents: SCOUT,
   });
 
@@ -359,7 +595,7 @@ test("output past the cap ends with a pointer to a file holding the full answer,
 test("the row and status count follow the store while a child runs, and a resumed session renders the row from saved details alone", async () => {
   const held = hold();
   const parent = await parentSession({
-    respond: router([call("scout", "s")], held.step),
+    respond: router([call({ agent: "scout", task: "s" })], held.step),
     userAgents: SCOUT,
   });
   const updates: unknown[] = [];

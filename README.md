@@ -46,14 +46,23 @@ You are a scout. …
 Pi looks for agents in `agents/` under its config dir (`~/.pi/agent/agents/` by default) and, in
 a project Pi trusts, in `.pi/agents/`. A project agent replaces a user agent of the same name.
 Edits apply after `/reload`. Without `tools`, an agent gets `read`, `grep`, `find`, `ls`,
-`bash`, `web_search` and `web_fetch`. Pi lists the agents to the model; with none, the tool
-stays hidden.
+`bash`, `web_search` and `web_fetch`. Pi lists the agents to the model.
+
+A call needs no agent file: without `agent` the model gets a general-purpose subagent with Pi's
+own prompt, the default tools, the parent's model and working directory. On any call, `prompt`
+(added to the system prompt), `tools`, `model` and `cwd` (an existing directory) override what the
+agent file or the default gives.
+
+A subagent whose tools include `edit` or `write` is a writer, and one writer runs per directory at
+a time: a second one for the same directory waits until the first ends. Writers in different
+directories, such as worktrees you made, run in parallel. A directory other than the parent's
+takes its project trust from Pi's own record for it, then from the parent's verdict.
 
 `packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.
 
 ## Embedding it
 
-A host that builds its own Pi distribution can call `registerSkyr(pi, options)` instead of
+A host that builds its own Pi distribution can call `registerSkyr(pi)` instead of
 loading the default export — see `packages/skyr/src/index.ts`.
 
 ## Developing

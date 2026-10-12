@@ -1,15 +1,16 @@
 /** The running subagents, as plain snapshots every live UI surface reads from. */
 import type { ChildEvent } from "./runner.js";
 
-export type RunStatus = "running" | "done" | "failed" | "aborted";
+export type RunStatus = "queued" | "running" | "done" | "failed" | "aborted";
 
 export interface RunSnapshot {
   id: string;
   toolCallId: string;
-  agent: string;
+  /** Absent for an ad-hoc child. */
+  agent?: string;
   description: string;
   status: RunStatus;
-  /** Epoch milliseconds. */
+  /** Epoch milliseconds when the call began, including any time queued. */
   startedAt: number;
   endedAt?: number;
   turns: number;
@@ -18,6 +19,8 @@ export interface RunSnapshot {
   tokens: number;
   /** Name of the child's latest tool call. */
   activity?: string;
+  /** Label of the writer directly ahead; present only while queued. */
+  behind?: string;
   sessionFile?: string;
   spillFile?: string;
 }
@@ -29,8 +32,8 @@ export type RunEvent =
 
 export interface RunStore {
   /**
-   * Only `start` creates an entry and `end` removes it; events for an unknown id, such as a
-   * child's late progress after `clear`, are ignored. Snapshots already handed out never change.
+   * `start` creates or replaces an entry and `end` removes it; events for an unknown id, such as
+   * a child's late progress after `clear`, are ignored. Snapshots already handed out never change.
    */
   apply(id: string, event: RunEvent): void;
   /** Undefined once the child has ended. */

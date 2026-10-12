@@ -217,3 +217,38 @@ test("a background writer takes the per-cwd slot like a blocking one", async () 
   expect(order).toEqual(["bg", "fg"]);
   await delivered(parent);
 });
+
+test("a queued background writer returns at once as queued and runs when the slot frees", async () => {
+  const holds = new Map(["fg", "bg"].map((task) => [task, hold()]));
+  const parent = await parentSession({
+    respond: bgRouter(
+      [
+        call({ task: "fg", tools: ["edit"] }),
+        call({ task: "bg", background: true, tools: ["edit"] }),
+      ],
+      (context, ...rest) => holds.get(taskOf(context))!.step(context, ...rest),
+    ),
+  });
+  let ended = false;
+  parent.session.subscribe((event) => {
+    if (event.type === "tool_execution_end" && event.toolCallId === "bg")
+      ended = true;
+  });
+
+  const run = parent.session.prompt("go");
+  await holds.get("fg")!.entered;
+  await vi.waitFor(() => expect(ended).toBe(true));
+  expect(parent.widgets.at(-1)?.some((l) => l.startsWith("○ queued"))).toBe(
+    true,
+  );
+  holds.get("fg")!.release();
+  await holds.get("bg")!.entered;
+  holds.get("bg")!.release();
+  await run;
+  await delivered(parent);
+
+  expect(textOf(results(parent.session).get("bg")!)).toMatch(
+    /^subagent: started "run bg" in the background/,
+  );
+  expect(parent.widgets.at(-1)).toBeUndefined();
+});

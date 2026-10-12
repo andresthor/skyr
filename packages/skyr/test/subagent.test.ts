@@ -8,6 +8,7 @@ import {
 import {
   CONFIG_DIR_NAME,
   type ExtensionAPI,
+  type MessageRenderer,
   ProjectTrustStore,
   SessionManager,
   type Theme,
@@ -32,6 +33,7 @@ import {
 
 const plain = {
   fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 } as unknown as Theme;
 
@@ -61,17 +63,22 @@ function recorder() {
   return { seen, child };
 }
 
-function registered(): ToolDefinition {
+/** A fresh registration with an empty store: the tool and the delivered-answer renderer. */
+function registered(): ToolDefinition & { message: MessageRenderer } {
   const tools: ToolDefinition[] = [];
+  const renderers = new Map<string, MessageRenderer>();
   registerSkyr({
     registerTool: (tool: ToolDefinition) => tools.push(tool),
     registerCommand: () => {},
-    registerMessageRenderer: () => {},
+    registerMessageRenderer: (type: string, renderer: MessageRenderer) =>
+      renderers.set(type, renderer),
     on: () => {},
   } as unknown as ExtensionAPI);
   const tool = tools.find((t) => t.name === "subagent");
-  if (!tool) throw new Error("registerSkyr registered no subagent tool");
-  return tool;
+  const message = renderers.get("skyr.subagent");
+  if (!tool || !message)
+    throw new Error("registerSkyr registered no subagent tool or renderer");
+  return { ...tool, message };
 }
 
 function resultRow(
@@ -191,6 +198,56 @@ test("a child's text and description cannot reach the terminal as escapes, the r
       details: { ...run, status: "queued", behind: '"fix it"' },
     })[0],
   ).toMatch(/^● queued · behind "fix it" · \d+\.\ds +$/);
+});
+
+test("a background row renders from saved details alone, and a delivered answer's text cannot reach the terminal as escapes and is previewed in full only when expanded", () => {
+  const OSC52 = "\u001b]52;c;cHduZWQ=\u0007";
+  const hostile = `${OSC52}evil‮漢字漢字🙂🙂 and more words`;
+  const tool = registered();
+  const row = resultRow(tool, "t", {
+    content: [],
+    details: {
+      id: "abcdef0123",
+      toolCallId: "t",
+      agent: "scout",
+      description: "x",
+      status: "running",
+      startedAt: 0,
+      turns: 0,
+      toolCalls: 0,
+      tokens: 0,
+      background: true,
+    },
+  })[0];
+  expect(row?.trimEnd()).toBe("↗ background · scout · abcdef01");
+
+  const text = Array.from({ length: 20 }, (_, i) => `${hostile} ${i}`).join(
+    "\n",
+  );
+  const render = (expanded: boolean) =>
+    tool
+      .message(
+        {
+          role: "custom",
+          customType: "skyr.subagent",
+          content: [{ type: "text", text }],
+          display: true,
+          timestamp: 0,
+        },
+        { expanded, outputPad: 0 },
+        plain,
+      )
+      ?.render(40) ?? [];
+  const collapsed = render(false);
+  expect(collapsed.length).toBeGreaterThan(0);
+  for (const line of collapsed) {
+    expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+    expect(line).not.toContain("\u001b]");
+    expect(line).not.toContain("cHduZWQ");
+    expect(line).not.toContain("‮");
+  }
+  expect(collapsed.join("\n")).toContain("… 8 more lines");
+  expect(render(true).join("\n")).not.toContain("more lines");
 });
 
 test("a child's final text reaches the parent model, and its usage counts toward the parent's session totals", async () => {

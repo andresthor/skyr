@@ -19,21 +19,15 @@ import {
 import { spill } from "../tools/spill.js";
 import { registerWebFetch } from "../tools/web-fetch.js";
 import { registerWebSearch } from "../tools/web-search.js";
-import { type AgentDef, loadAgents, parseTools } from "./agents.js";
+import {
+  type AgentDef,
+  DEFAULT_TOOLS,
+  loadAgents,
+  parseTools,
+} from "./agents.js";
 import { type ChildResult, inProcessRunner } from "./runner.js";
 import { createRunStore, type RunSnapshot } from "./store.js";
 
-// No edit or write by default: an agent file or the `tools` param names them, and such a child is
-// a writer, one per directory.
-const DEFAULT_TOOLS = [
-  "read",
-  "grep",
-  "find",
-  "ls",
-  "bash",
-  "web_search",
-  "web_fetch",
-];
 const MAX_ANSWER_BYTES = 10_000;
 const PULSE_MS = 250;
 const PULSE_FLOOR_MS = 1000;
@@ -310,8 +304,16 @@ export function registerSubagent(pi: ExtensionAPI): void {
       const systemPrompt = [agent?.body, params.prompt]
         .filter(Boolean)
         .join("\n\n");
-      const cwd = resolve(ctx.cwd, params.cwd ?? ".");
       // Realpath, as Pi keys its file queue and trust store: two spellings of one dir share a slot.
+      let parentKey: string;
+      try {
+        parentKey = realpathSync(ctx.cwd);
+      } catch {
+        throw new Error(
+          `subagent: the working directory ${ctx.cwd} no longer exists; tell the user to restart Pi in an existing directory`,
+        );
+      }
+      const cwd = resolve(ctx.cwd, params.cwd ?? ".");
       let key: string;
       try {
         key = realpathSync(cwd);
@@ -321,7 +323,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
           `subagent: cwd ${JSON.stringify(params.cwd ?? ".")} is not a directory (looked at ${cwd}); pass an existing directory, absolute or relative to ${ctx.cwd}`,
         );
       }
-      const parentKey = realpathSync(ctx.cwd);
       const parentFile = ctx.sessionManager.getSessionFile();
       const background = params.background === true;
       const own = new AbortController();
@@ -406,7 +407,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
             const { behind: _, ...rest } = sent;
             sent = { ...rest, status: "running" };
             store.apply(id, { type: "start", snapshot: sent });
-            send(sent);
+            // A background call has returned; Pi discards updates after a result, so skip the call.
+            if (!background) send(sent);
           }
           const trusted = await trustFor(
             key,
@@ -594,10 +596,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
         const hits = [...children].filter(
           ([id]) => target === "all" || (target && id.startsWith(target)),
         );
-        if (hits.length === 0) {
+        if (hits.length === 0 || (hits.length > 1 && target !== "all")) {
           const ids = store.running().map((r) => r.id.slice(0, 8));
           ctx.ui.notify(
-            `subagent: nothing matches "${target ?? ""}"; running: ${ids.join(", ") || "none"}`,
+            `subagent: ${hits.length === 0 ? "nothing matches" : "more than one id matches"} "${target ?? ""}"; running: ${ids.join(", ") || "none"}`,
             "warning",
           );
           return;

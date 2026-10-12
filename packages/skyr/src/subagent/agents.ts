@@ -26,6 +26,18 @@ const KNOWN_TOOLS = [
   "web_fetch",
 ];
 
+// No edit or write by default: an agent file or the `tools` param names them, and such a child is
+// a writer, one per directory.
+export const DEFAULT_TOOLS = [
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "bash",
+  "web_search",
+  "web_fetch",
+];
+
 // Exact names, so Claude Code agent files load unchanged; PowerShell has no Pi equivalent.
 const CLAUDE_CODE_TOOLS: Record<string, string> = {
   Read: "read",

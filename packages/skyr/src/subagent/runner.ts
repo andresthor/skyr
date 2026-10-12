@@ -5,6 +5,7 @@ import type {
   ExtensionFactory,
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
+import { loadPi } from "../pi.js";
 
 type AssistantMessage = Extract<
   AgentSession["messages"][number],
@@ -76,9 +77,7 @@ export function inProcessRunner(
 ): Runner {
   return {
     async run(spec, signal, onEvent) {
-      // Imported here, not at the top: a static value import would make loading skyr evaluate
-      // pi-coding-agent, which reads environment variables at module scope.
-      const pi = await import("@earendil-works/pi-coding-agent");
+      const pi = await loadPi();
       const agentDir = pi.getAgentDir();
 
       const modelRuntime = await pi.ModelRuntime.create({
@@ -94,7 +93,7 @@ export function inProcessRunner(
       const picked = pi.resolveCliModel({ cliModel: spec.model, modelRuntime });
       if (!picked.model)
         throw new Error(
-          `subagent: model "${spec.model}" is not available to a subagent: ${picked.error ?? "no match"}. ` +
+          `model "${spec.model}" is not available to a subagent: ${picked.error ?? "no match"}. ` +
             "Pick a model with stored credentials, or set `model:` on the call or in the agent file.",
         );
 
@@ -166,7 +165,7 @@ export function inProcessRunner(
           await session.prompt(spec.task);
         } catch (error: unknown) {
           throw new Error(
-            `subagent: the child could not start: ${error instanceof Error ? error.message : String(error)}`,
+            `the child could not start: ${error instanceof Error ? error.message : String(error)}`,
             { cause: error },
           );
         }
@@ -185,7 +184,7 @@ export function inProcessRunner(
           return {
             ...result,
             status: "failed",
-            error: `subagent: progress reporting failed: ${reportError instanceof Error ? reportError.message : String(reportError)}`,
+            error: `progress reporting failed: ${reportError instanceof Error ? reportError.message : String(reportError)}`,
           };
         // Provider failures resolve `prompt()`; only the final assistant message says so. An
         // abort between tool calls can end the run without one, so the signal is checked first.

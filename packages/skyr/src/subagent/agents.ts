@@ -1,6 +1,7 @@
 /** Agent files: markdown whose frontmatter defines a subagent and whose body is its prompt. */
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { loadPi } from "../pi.js";
 
 export interface AgentDef {
   name: string;
@@ -133,7 +134,7 @@ async function loadDir(
   } catch (error: unknown) {
     const code = error instanceof Error && "code" in error ? error.code : "";
     if (code !== "ENOENT")
-      errors.push(`subagent: cannot read agent dir ${dir} (${String(code)})`);
+      errors.push(`cannot read agent dir ${dir} (${String(code)})`);
     return agents;
   }
   for (const entry of entries.filter((e) => e.endsWith(".md")).sort()) {
@@ -156,7 +157,7 @@ async function loadDir(
         error instanceof Error
           ? (error.message.split("\n")[0] ?? "").replace(/:$/, "")
           : String(error);
-      errors.push(`subagent: ${file}: ${reason}`);
+      errors.push(`${file}: ${reason}`);
     }
   }
   return agents;
@@ -172,9 +173,7 @@ export async function loadAgents(dirs: {
   user: string;
   project?: string;
 }): Promise<{ agents: Map<string, AgentDef>; errors: string[] }> {
-  // Imported here, not at the top: a static value import would make loading skyr evaluate
-  // pi-coding-agent, which reads environment variables at module scope.
-  const { parseFrontmatter } = await import("@earendil-works/pi-coding-agent");
+  const { parseFrontmatter } = await loadPi();
   const errors: string[] = [];
   const user = await loadDir(dirs.user, parseFrontmatter, errors);
   const project = dirs.project

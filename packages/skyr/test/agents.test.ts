@@ -79,7 +79,7 @@ test("an unknown tool fails only that agent and names it", async () => {
   expect(errors).toHaveLength(1);
   expect(errors[0]).toContain(join(user, "bad.md"));
   expect(errors[0]).toContain("TodoWrite, subagent");
-  expect(errors[0]).toMatch(/^subagent: /);
+  expect(errors[0]).toMatch(/bad\.md: unknown tools /);
 });
 
 test("a malformed file is skipped and the others load", async () => {

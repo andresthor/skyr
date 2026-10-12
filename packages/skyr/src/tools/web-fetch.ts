@@ -11,8 +11,16 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import TurndownService from "turndown";
 import { Type } from "typebox";
+import { loadPi } from "../pi.js";
 import { isPrivateAddress, redactUrl, withTimeout } from "./net.js";
-import { elapsed, errorRow, stripInvisible, took, toolRow } from "./render.js";
+import {
+  clip,
+  elapsed,
+  errorRow,
+  stripInvisible,
+  took,
+  toolRow,
+} from "./render.js";
 import { spill } from "./spill.js";
 
 const TIMEOUT_MS = 30_000;
@@ -43,11 +51,6 @@ export interface FetchDetails {
   bytes: number;
   truncated: boolean;
   spillPath?: string;
-}
-
-/** A model supplies the URL, so its length is unbounded; keep error text readable. */
-function clip(text: string, max = 120): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
 function refused(host: string): Error {
@@ -296,11 +299,7 @@ export async function webFetch(
     isHtml(mime) ? htmlToMarkdown(decoded.slice(0, MAX_HTML_CHARS)) : decoded,
   );
 
-  // Imported here, not at the top: a static value import would make loading skyr evaluate
-  // pi-coding-agent, which reads environment variables at module scope.
-  const { truncateHead, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } = await import(
-    "@earendil-works/pi-coding-agent"
-  );
+  const { truncateHead, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } = await loadPi();
   // Redacted like every error path: a redirect can add a query the model never supplied.
   const safeUrl = redactUrl(url.href);
   const cut = truncateHead(`URL: ${safeUrl}\n\n${body}`, {

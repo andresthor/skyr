@@ -6,10 +6,15 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
+import { loadPi } from "../pi.js";
 import {
+  clip,
   errorRow,
   type Segment,
   sanitize,
@@ -26,7 +31,7 @@ import {
   parseTools,
 } from "./agents.js";
 import { type ChildResult, inProcessRunner } from "./runner.js";
-import { createRunStore, type RunSnapshot } from "./store.js";
+import { createRunStore, type RunSnapshot, type RunStatus } from "./store.js";
 
 const MAX_ANSWER_BYTES = 10_000;
 const PULSE_MS = 250;
@@ -85,6 +90,27 @@ const Params = Type.Object({
   ),
 });
 
+/** A call resolved against its agent file and the defaults; nothing has been spent yet. */
+interface Call {
+  agent?: string;
+  label: string;
+  model: string;
+  tools: string[];
+  writer: boolean;
+  systemPrompt: string;
+  cwd: string;
+  /** Realpath of `cwd`: the writer-slot and trust key. */
+  key: string;
+  parentKey: string;
+  background: boolean;
+}
+
+/** A writer's place in its directory's queue. */
+interface Slot {
+  chain: Promise<void>;
+  label: string;
+}
+
 /** What a finished child hands back, for a tool result or a delivered message. */
 interface Outcome {
   text: string;
@@ -93,6 +119,21 @@ interface Outcome {
   isError: boolean;
 }
 
+/** Every error the model reads starts the same way and says what to try next. */
+const fail = (detail: string, cause?: unknown) =>
+  new Error(`subagent: ${detail}`, cause === undefined ? undefined : { cause });
+
+const errorText = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+const labelOf = (run: { agent?: string; description: string }) =>
+  run.agent ?? `"${run.description}"`;
+
+const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
+const tokens = (n: number) =>
+  n < 1000 ? `${n} tok` : `${Math.round(n / 1000)}k tok`;
+
 function registerChildTools(pi: ExtensionAPI): void {
   registerWebSearch(pi);
   registerWebFetch(pi);
@@ -100,11 +141,10 @@ function registerChildTools(pi: ExtensionAPI): void {
 
 /** Sorted, so the description stays byte-identical and the prompt cache holds. */
 function describe(agents: Map<string, AgentDef>): string {
-  const lines = [...agents.keys()]
-    .sort()
+  const lines = [...agents.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(
-      (name) =>
-        `- ${name}: ${agents.get(name)?.description.replace(/\s+/g, " ")}`,
+      ([name, agent]) => `- ${name}: ${agent.description.replace(/\s+/g, " ")}`,
     );
   const list =
     lines.length > 0 ? `Agents:\n${lines.join("\n")}` : "Agents: none defined.";
@@ -124,11 +164,7 @@ async function answer(
     };
   if (!result.text)
     return { text: `subagent: ${label} ended without an answer` };
-  // Imported here, not at the top: a static value import would make loading skyr evaluate
-  // pi-coding-agent, which reads environment variables at module scope.
-  const { truncateHead, DEFAULT_MAX_LINES } = await import(
-    "@earendil-works/pi-coding-agent"
-  );
+  const { truncateHead, DEFAULT_MAX_LINES } = await loadPi();
   const cut = truncateHead(result.text, {
     maxBytes: MAX_ANSWER_BYTES,
     maxLines: DEFAULT_MAX_LINES,
@@ -159,13 +195,6 @@ function isRun(details: unknown): details is RunSnapshot {
   );
 }
 
-const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
-
-const tokens = (n: number) =>
-  n < 1000 ? `${n} tok` : `${Math.round(n / 1000)}k tok`;
-
-const labelOf = (run: RunSnapshot) => run.agent ?? `"${run.description}"`;
-
 /** The model's one-line header for a delivered answer, then the answer. */
 function delivery(outcome: Outcome): string {
   const run = outcome.details;
@@ -175,7 +204,7 @@ function delivery(outcome: Outcome): string {
 export function registerSubagent(pi: ExtensionAPI): void {
   const store = createRunStore();
   // One writer per directory: a key's chain resolves once every earlier writer has released.
-  const writers = new Map<string, { chain: Promise<void>; label: string }>();
+  const writers = new Map<string, Slot>();
   // Per-child abort, for `/subagents stop`; everything a UI reads stays in the store.
   const children = new Map<string, AbortController>();
   // Finished background answers waiting for the parent to be idle. Never Pi's steer or followUp
@@ -195,11 +224,106 @@ export function registerSubagent(pi: ExtensionAPI): void {
     const names = [...agents.keys()].sort().join(", ") || "none";
     const broken =
       loadErrors.length > 0
-        ? ` Agent files that failed to load: ${loadErrors.map((e) => e.replace(/^subagent: /, "")).join("; ")}`
+        ? ` Agent files that failed to load: ${loadErrors.join("; ")}`
         : "";
-    return new Error(
-      `subagent: no agent "${name}"; available: ${names}.${broken}`,
-    );
+    return fail(`no agent "${name}"; available: ${names}.${broken}`);
+  }
+
+  /**
+   * Resolves a call against its agent file and the defaults, throwing for anything the model
+   * must fix. Synchronous, so nothing is spent and no await precedes the writer slot.
+   */
+  function resolveCall(
+    params: Static<typeof Params>,
+    ctx: Pick<ExtensionContext, "cwd" | "model">,
+  ): Call {
+    const agent =
+      params.agent === undefined ? undefined : agents.get(params.agent);
+    if (params.agent !== undefined && !agent) throw unknownAgent(params.agent);
+    const label = labelOf({
+      agent: agent?.name,
+      description: params.description,
+    });
+    const model =
+      params.model ??
+      agent?.model ??
+      (ctx.model && `${ctx.model.provider}/${ctx.model.id}`);
+    if (!model)
+      throw fail(`${label}: no model is selected; select one, or pass model`);
+    let tools: string[];
+    try {
+      tools = parseTools(params.tools) ?? agent?.tools ?? DEFAULT_TOOLS;
+    } catch (error: unknown) {
+      throw fail(`tools: ${errorText(error)}`, error);
+    }
+    // Realpath, as Pi keys its file queue and trust store: two spellings of one dir share a slot.
+    let parentKey: string;
+    try {
+      parentKey = realpathSync(ctx.cwd);
+    } catch {
+      throw fail(
+        `the working directory ${ctx.cwd} no longer exists; tell the user to restart Pi in an existing directory`,
+      );
+    }
+    const cwd = resolve(ctx.cwd, params.cwd ?? ".");
+    let key: string;
+    try {
+      key = realpathSync(cwd);
+      if (!statSync(key).isDirectory()) throw new Error("not a directory");
+    } catch {
+      throw fail(
+        `cwd ${JSON.stringify(clip(params.cwd ?? "."))} is not a directory (looked at ${clip(cwd)}); pass an existing directory, absolute or relative to ${ctx.cwd}`,
+      );
+    }
+    return {
+      agent: agent?.name,
+      label,
+      model,
+      tools,
+      writer: tools.includes("edit") || tools.includes("write"),
+      systemPrompt: [agent?.body, params.prompt].filter(Boolean).join("\n\n"),
+      cwd,
+      key,
+      parentKey,
+      background: params.background === true,
+    };
+  }
+
+  /**
+   * The next writer slot for `key`. `behind` names the writer ahead, if any; `wait` resolves once
+   * it has released or `signal` aborts; `release` frees the slot exactly once, whatever happened.
+   */
+  function takeSlot(
+    key: string,
+    label: string,
+  ): {
+    behind?: string;
+    wait(signal: AbortSignal): Promise<void>;
+    release(): void;
+  } {
+    const ahead = writers.get(key);
+    let grant!: () => void;
+    const mine = new Promise<void>((r) => {
+      grant = r;
+    });
+    const chain = (ahead?.chain ?? Promise.resolve()).then(() => mine);
+    writers.set(key, { chain, label });
+    return {
+      behind: ahead?.label,
+      wait: (signal) =>
+        ahead
+          ? Promise.race([
+              ahead.chain,
+              new Promise<void>((r) =>
+                signal.addEventListener("abort", () => r(), { once: true }),
+              ),
+            ])
+          : Promise.resolve(),
+      release: () => {
+        grant();
+        if (writers.get(key)?.chain === chain) writers.delete(key);
+      },
+    };
   }
 
   /** Pi's own trust order for a directory, with the parent's verdict where Pi would ask. */
@@ -209,13 +333,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
     parentTrusted: boolean,
   ): Promise<boolean> {
     if (key === parentKey) return parentTrusted;
-    // Imported here, not at the top: a static value import would make loading skyr evaluate
-    // pi-coding-agent, which reads environment variables at module scope.
     const {
       getAgentDir,
       hasTrustRequiringProjectResources,
       ProjectTrustStore,
-    } = await import("@earendil-works/pi-coding-agent");
+    } = await loadPi();
     if (!hasTrustRequiringProjectResources(key)) return true;
     const recorded = new ProjectTrustStore(getAgentDir()).get(key);
     if (recorded !== null) return recorded;
@@ -278,53 +400,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
     parameters: Params,
     prepareLoadout: () => ({ descriptions: { subagent: description } }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const agent =
-        params.agent === undefined ? undefined : agents.get(params.agent);
-      if (params.agent !== undefined && !agent)
-        throw unknownAgent(params.agent);
-      const label = agent ? agent.name : `"${params.description}"`;
-      const model =
-        params.model ??
-        agent?.model ??
-        (ctx.model && `${ctx.model.provider}/${ctx.model.id}`);
-      if (!model)
-        throw new Error(
-          `subagent: ${label}: no model is selected; select one, or pass model`,
-        );
-      let tools: string[];
-      try {
-        tools = parseTools(params.tools) ?? agent?.tools ?? DEFAULT_TOOLS;
-      } catch (error: unknown) {
-        throw new Error(
-          `subagent: tools: ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        );
-      }
-      const writer = tools.includes("edit") || tools.includes("write");
-      const systemPrompt = [agent?.body, params.prompt]
-        .filter(Boolean)
-        .join("\n\n");
-      // Realpath, as Pi keys its file queue and trust store: two spellings of one dir share a slot.
-      let parentKey: string;
-      try {
-        parentKey = realpathSync(ctx.cwd);
-      } catch {
-        throw new Error(
-          `subagent: the working directory ${ctx.cwd} no longer exists; tell the user to restart Pi in an existing directory`,
-        );
-      }
-      const cwd = resolve(ctx.cwd, params.cwd ?? ".");
-      let key: string;
-      try {
-        key = realpathSync(cwd);
-        if (!statSync(key).isDirectory()) throw new Error("not a directory");
-      } catch {
-        throw new Error(
-          `subagent: cwd ${JSON.stringify(params.cwd ?? ".")} is not a directory (looked at ${cwd}); pass an existing directory, absolute or relative to ${ctx.cwd}`,
-        );
-      }
+      const call = resolveCall(params, ctx);
+      const { label, key, background } = call;
       const parentFile = ctx.sessionManager.getSessionFile();
-      const background = params.background === true;
       const own = new AbortController();
       // A background child outlives the call, so the call's signal (Esc) is not part of its own.
       const childSignal = AbortSignal.any([
@@ -333,18 +411,20 @@ export function registerSubagent(pi: ExtensionAPI): void {
         own.signal,
       ]);
       const born = generation;
-
       const id = randomUUID();
+      // Before the first await: Pi starts a batch's calls in order only up to that point.
+      const slot = call.writer ? takeSlot(key, label) : undefined;
       let sent: RunSnapshot = {
         id,
         toolCallId,
-        agent: agent?.name,
+        agent: call.agent,
         description: params.description,
-        status: "running",
+        status: slot?.behind ? "queued" : "running",
         startedAt: Date.now(),
         turns: 0,
         toolCalls: 0,
         tokens: 0,
+        ...(slot?.behind ? { behind: slot.behind } : {}),
         ...(background ? { background: true as const } : {}),
       };
       let sentAt = 0;
@@ -353,23 +433,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
         sentAt = Date.now();
         onUpdate?.({ content: [], details: run });
       };
-      // Before the first await: Pi starts a batch's calls in order only up to that point.
-      let release = () => {};
-      let ahead: { chain: Promise<void>; label: string } | undefined;
-      if (writer) {
-        ahead = writers.get(key);
-        let grant!: () => void;
-        const mine = new Promise<void>((r) => {
-          grant = r;
-        });
-        const chain = (ahead?.chain ?? Promise.resolve()).then(() => mine);
-        writers.set(key, { chain, label });
-        release = () => {
-          grant();
-          if (writers.get(key)?.chain === chain) writers.delete(key);
-        };
-        if (ahead) sent = { ...sent, status: "queued", behind: ahead.label };
-      }
       children.set(id, own);
       store.apply(id, { type: "start", snapshot: sent });
       // Pi renders a row's result only once one exists, so the first update cannot wait.
@@ -383,36 +446,41 @@ export function registerSubagent(pi: ExtensionAPI): void {
               send(run);
           }, PULSE_MS);
 
+      const stoppedBeforeStart = `subagent: ${label} was stopped before it started`;
+      const failed = (error: unknown) =>
+        fail(`${label}: ${errorText(error)}`, error);
+      // From the store while the child is live, else the last snapshot this call sent: the
+      // store is empty once the child has ended, or when a reload cleared it mid-run.
+      const ended = (
+        status: RunStatus,
+        text: string,
+        isError = true,
+        extra: Partial<RunSnapshot> = {},
+      ): Outcome => ({
+        text,
+        isError,
+        details: {
+          ...(store.byToolCall(toolCallId) ?? sent),
+          status,
+          endedAt: Date.now(),
+          ...extra,
+        },
+      });
+
       const finish = async (): Promise<Outcome> => {
         try {
-          if (ahead) {
-            await Promise.race([
-              ahead.chain,
-              new Promise<void>((r) =>
-                childSignal.addEventListener("abort", () => r(), {
-                  once: true,
-                }),
-              ),
-            ]);
+          if (slot?.behind) {
+            await slot.wait(childSignal);
             if (childSignal.aborted)
-              return {
-                text: `subagent: ${label} was stopped before it started`,
-                details: {
-                  ...(store.byToolCall(toolCallId) ?? sent),
-                  status: "aborted",
-                  endedAt: Date.now(),
-                },
-                isError: true,
-              };
+              return ended("aborted", stoppedBeforeStart);
             const { behind: _, ...rest } = sent;
             sent = { ...rest, status: "running" };
             store.apply(id, { type: "start", snapshot: sent });
-            // A background call has returned; Pi discards updates after a result, so skip the call.
-            if (!background) send(sent);
+            send(sent);
           }
           const trusted = await trustFor(
             key,
-            parentKey,
+            call.parentKey,
             ctx.isProjectTrusted(),
           );
           const result = await inProcessRunner(
@@ -421,11 +489,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
           ).run(
             {
               id,
-              cwd,
-              model,
+              cwd: call.cwd,
+              model: call.model,
               thinkingLevel: ctx.thinkingLevel,
-              tools,
-              systemPrompt,
+              tools: call.tools,
+              systemPrompt: call.systemPrompt,
               task: params.task,
               trusted,
               session: parentFile
@@ -443,30 +511,21 @@ export function registerSubagent(pi: ExtensionAPI): void {
           );
           const { text, spillFile } = await answer(label, id, result);
           return {
-            text,
-            // The store is empty here when a reload or shutdown cleared it mid-run.
-            details: {
-              ...(store.byToolCall(toolCallId) ?? sent),
-              status: result.status,
-              endedAt: Date.now(),
-              sessionFile: result.sessionFile,
-              spillFile,
-            },
+            ...ended(
+              result.status,
+              text,
+              result.status !== "done" || !result.text,
+              { sessionFile: result.sessionFile, spillFile },
+            ),
             usage: result.usage,
-            isError: result.status !== "done" || !result.text,
           };
         } finally {
           if (pulse) clearInterval(pulse);
-          release();
+          slot?.release();
           children.delete(id);
           store.apply(id, { type: "end" });
         }
       };
-      const wrap = (error: unknown) =>
-        new Error(
-          `subagent: ${label}: ${(error instanceof Error ? error.message : String(error)).replace(/^subagent: /, "")}`,
-          { cause: error },
-        );
 
       if (!background) {
         let outcome: Outcome;
@@ -475,7 +534,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         } catch (error: unknown) {
           // Cancelled before the child started: let Pi see its own cancellation.
           if (childSignal.aborted) throw error;
-          throw wrap(error);
+          throw failed(error);
         }
         return {
           content: [{ type: "text", text: outcome.text }],
@@ -485,18 +544,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
         };
       }
       void finish()
-        .catch(
-          (error: unknown): Outcome => ({
-            text: childSignal.aborted
-              ? `subagent: ${label} was stopped before it started`
-              : wrap(error).message,
-            details: {
-              ...sent,
-              status: childSignal.aborted ? "aborted" : "failed",
-              endedAt: Date.now(),
-            },
-            isError: true,
-          }),
+        .catch((error: unknown) =>
+          childSignal.aborted
+            ? ended("aborted", stoppedBeforeStart)
+            : ended("failed", failed(error).message),
         )
         .then((outcome) => {
           if (born !== generation) return;
@@ -625,11 +676,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
     sessionAbort = new AbortController();
     generation += 1;
     pending = [];
-    // Imported here, not at the top: a static value import would make loading skyr evaluate
-    // pi-coding-agent, which reads environment variables at module scope.
-    const { getAgentDir, CONFIG_DIR_NAME } = await import(
-      "@earendil-works/pi-coding-agent"
-    );
+    const { getAgentDir, CONFIG_DIR_NAME } = await loadPi();
     const loaded = await loadAgents({
       user: join(getAgentDir(), "agents"),
       // Pi reads a project's .pi/ resources only once the user trusts the project.
@@ -640,7 +687,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
     agents = loaded.agents;
     loadErrors = loaded.errors;
     description = describe(agents);
-    if (loadErrors.length > 0) ctx.ui.notify(loadErrors.join("\n"), "warning");
+    if (loadErrors.length > 0)
+      ctx.ui.notify(
+        `subagent: agent files that failed to load:\n${loadErrors.join("\n")}`,
+        "warning",
+      );
 
     unsubscribe?.();
     unsubscribe = undefined;

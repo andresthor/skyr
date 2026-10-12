@@ -30,6 +30,11 @@ export function sanitize(raw: string): string {
   return stripInvisible(stripTerminalSequences(raw).replace(/\s+/g, " "));
 }
 
+/** Model-supplied text bound for an error message: its length is unbounded, so keep it readable. */
+export function clip(text: string, max = 120): string {
+  return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
+
 export function toolRow(theme: Theme, segments: Segment[]): TruncatedText {
   const line = segments
     .map(([color, raw, bold]) => {

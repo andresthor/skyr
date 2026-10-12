@@ -62,7 +62,12 @@ test("writers in one cwd run one at a time in call order, from an agent file's t
   await holds.get("w1")!.entered;
   await vi.waitFor(queued(latest, "w3"));
   expect(latest.get("w3")?.behind).toBe('"run w2"');
-  expect(parent.status).toContain("3 subagents, 2 queued");
+  expect(
+    parent.widgets.some(
+      (w) =>
+        w?.length === 3 && w.filter((l) => l.includes("queued")).length === 2,
+    ),
+  ).toBe(true);
 
   released.add("w1");
   holds.get("w1")!.release();
@@ -77,7 +82,7 @@ test("writers in one cwd run one at a time in call order, from an agent file's t
   expect(order).toEqual(["w1", "w2", "w3"]);
   for (const task of holds.keys())
     expect(results(parent.session).get(task)?.isError).toBe(false);
-  expect(parent.status.at(-1)).toBeUndefined();
+  expect(parent.widgets.at(-1)).toBeUndefined();
 });
 
 test("a writer and a reader in the same cwd run concurrently, and bash does not make a writer", async () => {
@@ -95,7 +100,8 @@ test("a writer and a reader in the same cwd run concurrently, and bash does not 
 
   const run = parent.session.prompt("go");
   await Promise.all([...holds.values()].map((h) => h.entered));
-  expect(parent.status.at(-1)).toBe("3 subagents");
+  expect(parent.widgets.at(-1)).toHaveLength(3);
+  expect(parent.widgets.at(-1)?.some((l) => l.includes("queued"))).toBe(false);
   for (const h of holds.values()) h.release();
   await run;
   for (const task of holds.keys())
@@ -192,7 +198,10 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
   const run = parent.session.prompt("go");
   await h1.entered;
   await vi.waitFor(queued(latest, "w2"));
-  expect(parent.status.at(-1)).toBe("2 subagents, 1 queued");
+  expect(parent.widgets.at(-1)).toHaveLength(2);
+  expect(
+    parent.widgets.at(-1)?.filter((l) => l.includes("queued")),
+  ).toHaveLength(1);
 
   const started = Date.now();
   await parent.session.abort();
@@ -205,7 +214,7 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
   expect(w2?.details).toMatchObject({ status: "aborted", turns: 0, tokens: 0 });
   expect(w2?.details).not.toHaveProperty("sessionFile");
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
-  expect(parent.status.at(-1)).toBeUndefined();
+  expect(parent.widgets.at(-1)).toBeUndefined();
 });
 
 test("session_shutdown aborts queued children", async () => {
@@ -237,5 +246,5 @@ test("session_shutdown aborts queued children", async () => {
     'subagent: "run w2" was stopped before it started',
   );
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
-  expect(parent.status.at(-1)).toBeUndefined();
+  expect(parent.widgets.at(-1)).toBeUndefined();
 });

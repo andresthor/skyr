@@ -30,8 +30,8 @@ export interface Parent {
   agentDir: string;
   /** Every request faux received, from the parent and from any child on its provider. */
   requests: TranscriptContext[];
-  /** Every footer status skyr set, in order; `undefined` clears it. */
-  status: (string | undefined)[];
+  /** Every widget skyr set, in order; `undefined` clears it. */
+  widgets: (string[] | undefined)[];
   notices: string[];
 }
 
@@ -104,11 +104,12 @@ export async function parentSession(o: {
     resourceLoader,
     customTools: o.customTools,
   });
-  const status: (string | undefined)[] = [];
+  const widgets: (string[] | undefined)[] = [];
   const notices: string[] = [];
   // Own keys only: Pi spreads the UI object. Pi itself calls none of the other methods.
   const uiContext = {
-    setStatus: (_key: string, text: string | undefined) => status.push(text),
+    setWidget: (_key: string, content: string[] | undefined) =>
+      widgets.push(content),
     notify: (message: string) => notices.push(message),
   } as unknown as ExtensionUIContext;
   await session.bindExtensions({ uiContext });
@@ -119,7 +120,7 @@ export async function parentSession(o: {
     for (const dir of [cwd, sessionDir, agentDir])
       rmSync(dir, { recursive: true, force: true });
   });
-  return { session, cwd, agentDir, requests, status, notices };
+  return { session, cwd, agentDir, requests, widgets, notices };
 }
 
 /** A temp directory, removed when the test ends. */
@@ -161,6 +162,7 @@ export function call(params: {
   tools?: string[];
   model?: string;
   cwd?: string;
+  background?: boolean;
 }) {
   const args = Object.fromEntries(
     Object.entries({

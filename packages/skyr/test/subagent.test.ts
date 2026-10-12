@@ -65,6 +65,8 @@ function registered(): ToolDefinition {
   const tools: ToolDefinition[] = [];
   registerSkyr({
     registerTool: (tool: ToolDefinition) => tools.push(tool),
+    registerCommand: () => {},
+    registerMessageRenderer: () => {},
     on: () => {},
   } as unknown as ExtensionAPI);
   const tool = tools.find((t) => t.name === "subagent");
@@ -228,7 +230,7 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
 
   const run = parent.session.prompt("go");
   await Promise.all([...holds.values()].map((h) => h.entered));
-  expect(parent.status.at(-1)).toBe("3 subagents");
+  expect(parent.widgets.at(-1)).toHaveLength(3);
 
   const started = Date.now();
   await parent.session.abort();
@@ -242,7 +244,7 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
       "subagent: scout was stopped before it answered",
     );
   }
-  expect(parent.status.at(-1)).toBeUndefined();
+  expect(parent.widgets.at(-1)).toBeUndefined();
 });
 
 test("a child gets exactly its agent file's tools or the default set, and the parent's model unless its agent file names one", async () => {
@@ -345,7 +347,7 @@ test("tools on a call is validated like an agent file's, maps Claude Code names,
     /^subagent: tools: unknown tools TodoWrite; valid tools are read, grep, find, ls, bash, edit, write, web_search, web_fetch/,
   );
   expect(parent.requests.some((r) => taskOf(r) === "t3")).toBe(false);
-  expect(parent.status).not.toContain("3 subagents");
+  expect(parent.widgets.some((w) => w?.length === 3)).toBe(false);
 });
 
 test("model on a call overrides the agent file's and the parent's, and an unknown model fails before any child starts", async () => {
@@ -444,7 +446,7 @@ test("a missing cwd, or a file as cwd, fails before any child starts and names t
     );
   }
   expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);
-  expect(parent.status).toEqual([]);
+  expect(parent.widgets).toEqual([]);
 });
 
 test("a foreign cwd takes its trust from Pi's trust store, then the parent's verdict, and agent files still come from the parent's cwd", async () => {
@@ -612,10 +614,10 @@ test("the row and status count follow the store while a child runs, and a resume
   expect(resultRow(tool, "s", { content: [], details: {} })[0]).toMatch(
     /^● running · 0 turns · 0 tools · \d+\.\ds/,
   );
-  expect(parent.status).toEqual(["1 subagent"]);
+  expect(parent.widgets.at(-1)).toHaveLength(1);
   held.release();
   await run;
-  expect(parent.status).toEqual(["1 subagent", undefined]);
+  expect(parent.widgets.at(-1)).toBeUndefined();
 
   const reopened = SessionManager.open(parent.session.sessionFile!);
   const saved = reopened

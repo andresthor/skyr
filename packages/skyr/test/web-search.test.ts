@@ -682,6 +682,8 @@ function registered(): Captured {
   const tools: Captured[] = [];
   const pi = {
     registerTool: (tool: Captured) => tools.push(tool),
+    registerCommand: () => {},
+    registerMessageRenderer: () => {},
     on: () => {},
   } as unknown as ExtensionAPI;
   registerSkyr(pi);

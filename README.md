@@ -58,6 +58,12 @@ a time: a second one for the same directory waits until the first ends. Writers 
 directories, such as worktrees you made, run in parallel. A directory other than the parent's
 takes its project trust from Pi's own record for it, then from the parent's verdict.
 
+With `background: true` the call returns at once and the answer arrives later as a message that
+starts a new turn, once the parent is idle. Esc does not stop a background subagent; `/subagents`
+lists the live ones and `/subagents stop <id|all>` stops them. A widget above the editor shows
+every live subagent, running, queued or in the background. Its token usage is in the delivered
+message, not in the footer.
+
 `packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.
 
 ## Embedding it

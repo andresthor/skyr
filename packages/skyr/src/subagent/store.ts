@@ -21,6 +21,8 @@ export interface RunSnapshot {
   activity?: string;
   /** Label of the writer directly ahead; present only while queued. */
   behind?: string;
+  /** The call returned at once; the answer is delivered as a message. */
+  background?: true;
   sessionFile?: string;
   spillFile?: string;
 }

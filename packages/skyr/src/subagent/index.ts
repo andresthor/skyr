@@ -1,14 +1,21 @@
 /**
  * `subagent`: runs a task in a fresh session as a named agent from an agent file, or as an ad-hoc
- * one, and returns the agent's final answer. A child loads no extensions, so it never gets this
- * tool itself.
+ * one, and returns the agent's final answer, at once or later as a message. A child loads no
+ * extensions, so it never gets this tool itself.
  */
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { errorRow, type Segment, seconds, toolRow } from "../tools/render.js";
+import {
+  errorRow,
+  type Segment,
+  sanitize,
+  seconds,
+  toolRow,
+} from "../tools/render.js";
 import { spill } from "../tools/spill.js";
 import { registerWebFetch } from "../tools/web-fetch.js";
 import { registerWebSearch } from "../tools/web-search.js";
@@ -30,12 +37,15 @@ const DEFAULT_TOOLS = [
 const MAX_ANSWER_BYTES = 10_000;
 const PULSE_MS = 250;
 const PULSE_FLOOR_MS = 1000;
-const STATUS_KEY = "skyr.subagents";
+const WIDGET_KEY = "skyr.subagents";
+const WIDGET_WIDTH = 100;
+const MESSAGE_TYPE = "skyr.subagent";
+const PREVIEW_LINES = 12;
 
 const ABOUT =
   "Run a task in a subagent: a fresh agent with its own context and tools that returns only its final answer. Use it for work that would fill your context, such as searching a codebase, reading many files or researching the web. The agent sees nothing of this conversation, so the task must stand alone: give paths, context and the answer you want back. Independent tasks go out as several subagent calls in one turn, and run in parallel.";
 const ADHOC =
-  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory: a second one for the same directory waits until the first ends, so issue writes that depend on each other in separate turns.";
+  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory: a second one for the same directory waits until the first ends, so issue writes that depend on each other in separate turns. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it.";
 
 const Params = Type.Object({
   agent: Type.Optional(
@@ -73,7 +83,21 @@ const Params = Type.Object({
         "Existing directory the subagent works in, absolute or relative to yours. Create it first if you need a fresh one.",
     }),
   ),
+  background: Type.Optional(
+    Type.Boolean({
+      description:
+        "Return at once; the answer arrives later as a message, and Esc does not stop it. For work you do not need before your next step.",
+    }),
+  ),
 });
+
+/** What a finished child hands back, for a tool result or a delivered message. */
+interface Outcome {
+  text: string;
+  details: RunSnapshot;
+  usage?: ChildResult["usage"];
+  isError: boolean;
+}
 
 function registerChildTools(pi: ExtensionAPI): void {
   registerWebSearch(pi);
@@ -146,15 +170,32 @@ const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 const tokens = (n: number) =>
   n < 1000 ? `${n} tok` : `${Math.round(n / 1000)}k tok`;
 
+const labelOf = (run: RunSnapshot) => run.agent ?? `"${run.description}"`;
+
+/** The model's one-line header for a delivered answer, then the answer. */
+function delivery(outcome: Outcome): string {
+  const run = outcome.details;
+  return `[background subagent ${labelOf(run)} (id ${run.id.slice(0, 8)}): ${run.status}, ${count(run.turns, "turn")}, ${count(run.toolCalls, "tool")}, ${tokens(run.tokens)}]\n\n${outcome.text}`;
+}
+
 export function registerSubagent(pi: ExtensionAPI): void {
   const store = createRunStore();
   // One writer per directory: a key's chain resolves once every earlier writer has released.
   const writers = new Map<string, { chain: Promise<void>; label: string }>();
+  // Per-child abort, for `/subagents stop`; everything a UI reads stays in the store.
+  const children = new Map<string, AbortController>();
+  // Finished background answers waiting for the parent to be idle. Never Pi's steer or followUp
+  // queues: Esc clears those.
+  let pending: Outcome[] = [];
+  // Bumped at every session start and shutdown, so a child that outlives its session touches
+  // neither the next session nor its own stale context.
+  let generation = 0;
   let agents = new Map<string, AgentDef>();
   let loadErrors: string[] = [];
   let description = describe(agents);
   let sessionAbort = new AbortController();
   let unsubscribe: (() => void) | undefined;
+  let widgetTick: ReturnType<typeof setInterval> | undefined;
 
   function unknownAgent(name: string): Error {
     const names = [...agents.keys()].sort().join(", ") || "none";
@@ -188,6 +229,51 @@ export function registerSubagent(pi: ExtensionAPI): void {
     if (fallback === "always") return true;
     if (fallback === "never") return false;
     return parentTrusted;
+  }
+
+  /** One message for everything that finished, so a second send never lands in a steer queue. */
+  function flush(): void {
+    if (pending.length === 0) return;
+    const batch = pending;
+    pending = [];
+    pi.sendMessage(
+      {
+        customType: MESSAGE_TYPE,
+        content: [
+          { type: "text", text: batch.map(delivery).join("\n\n---\n\n") },
+        ],
+        display: true,
+        details: batch.map((o) => o.details),
+      },
+      { triggerTurn: true },
+    );
+  }
+
+  function widgetLines(): string[] | undefined {
+    const runs = store.running();
+    if (runs.length === 0) return undefined;
+    const now = Date.now();
+    return runs.map((run) => {
+      const mark =
+        run.status === "queued"
+          ? "○ queued"
+          : run.background
+            ? "↗ running"
+            : "● running";
+      const progress =
+        run.status === "queued"
+          ? run.behind
+            ? ` · behind ${run.behind}`
+            : ""
+          : ` · ${count(run.turns, "turn")} · ${count(run.toolCalls, "tool")}${run.activity ? ` · ${run.activity}` : ""}`;
+      const line = `${mark} ${labelOf(run)}${progress} · ${Math.round((now - run.startedAt) / 1000)}s · ${run.id.slice(0, 8)}`;
+      return truncateToWidth(sanitize(line), WIDGET_WIDTH);
+    });
+  }
+
+  function stopTick(): void {
+    if (widgetTick) clearInterval(widgetTick);
+    widgetTick = undefined;
   }
 
   pi.registerTool({
@@ -237,9 +323,15 @@ export function registerSubagent(pi: ExtensionAPI): void {
       }
       const parentKey = realpathSync(ctx.cwd);
       const parentFile = ctx.sessionManager.getSessionFile();
-      const childSignal = AbortSignal.any(
-        signal ? [signal, sessionAbort.signal] : [sessionAbort.signal],
-      );
+      const background = params.background === true;
+      const own = new AbortController();
+      // A background child outlives the call, so the call's signal (Esc) is not part of its own.
+      const childSignal = AbortSignal.any([
+        ...(signal && !background ? [signal] : []),
+        sessionAbort.signal,
+        own.signal,
+      ]);
+      const born = generation;
 
       const id = randomUUID();
       let sent: RunSnapshot = {
@@ -252,6 +344,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         turns: 0,
         toolCalls: 0,
         tokens: 0,
+        ...(background ? { background: true as const } : {}),
       };
       let sentAt = 0;
       const send = (run: RunSnapshot) => {
@@ -276,49 +369,51 @@ export function registerSubagent(pi: ExtensionAPI): void {
         };
         if (ahead) sent = { ...sent, status: "queued", behind: ahead.label };
       }
+      children.set(id, own);
       store.apply(id, { type: "start", snapshot: sent });
       // Pi renders a row's result only once one exists, so the first update cannot wait.
       send(sent);
-      const pulse = setInterval(() => {
-        const run = store.byToolCall(toolCallId);
-        if (run && (run !== sent || Date.now() - sentAt >= PULSE_FLOOR_MS))
-          send(run);
-      }, PULSE_MS);
+      // A background row is static once the call returns; the widget shows its progress.
+      const pulse = background
+        ? undefined
+        : setInterval(() => {
+            const run = store.byToolCall(toolCallId);
+            if (run && (run !== sent || Date.now() - sentAt >= PULSE_FLOOR_MS))
+              send(run);
+          }, PULSE_MS);
 
-      try {
-        if (ahead) {
-          await Promise.race([
-            ahead.chain,
-            new Promise<void>((r) =>
-              childSignal.addEventListener("abort", () => r(), { once: true }),
-            ),
-          ]);
-          if (childSignal.aborted) {
-            const details: RunSnapshot = {
-              ...(store.byToolCall(toolCallId) ?? sent),
-              status: "aborted",
-              endedAt: Date.now(),
-            };
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `subagent: ${label} was stopped before it started`,
-                },
-              ],
-              details,
-              isError: true,
-            };
-          }
-          const { behind: _, ...rest } = sent;
-          sent = { ...rest, status: "running" };
-          store.apply(id, { type: "start", snapshot: sent });
-          send(sent);
-        }
-        const trusted = await trustFor(key, parentKey, ctx.isProjectTrusted());
-        let result: ChildResult;
+      const finish = async (): Promise<Outcome> => {
         try {
-          result = await inProcessRunner(
+          if (ahead) {
+            await Promise.race([
+              ahead.chain,
+              new Promise<void>((r) =>
+                childSignal.addEventListener("abort", () => r(), {
+                  once: true,
+                }),
+              ),
+            ]);
+            if (childSignal.aborted)
+              return {
+                text: `subagent: ${label} was stopped before it started`,
+                details: {
+                  ...(store.byToolCall(toolCallId) ?? sent),
+                  status: "aborted",
+                  endedAt: Date.now(),
+                },
+                isError: true,
+              };
+            const { behind: _, ...rest } = sent;
+            sent = { ...rest, status: "running" };
+            store.apply(id, { type: "start", snapshot: sent });
+            send(sent);
+          }
+          const trusted = await trustFor(
+            key,
+            parentKey,
+            ctx.isProjectTrusted(),
+          );
+          const result = await inProcessRunner(
             ctx.modelRegistry,
             registerChildTools,
           ).run(
@@ -344,36 +439,77 @@ export function registerSubagent(pi: ExtensionAPI): void {
             childSignal,
             (event) => store.apply(id, event),
           );
+          const { text, spillFile } = await answer(label, id, result);
+          return {
+            text,
+            // The store is empty here when a reload or shutdown cleared it mid-run.
+            details: {
+              ...(store.byToolCall(toolCallId) ?? sent),
+              status: result.status,
+              endedAt: Date.now(),
+              sessionFile: result.sessionFile,
+              spillFile,
+            },
+            usage: result.usage,
+            isError: result.status !== "done" || !result.text,
+          };
+        } finally {
+          if (pulse) clearInterval(pulse);
+          release();
+          children.delete(id);
+          store.apply(id, { type: "end" });
+        }
+      };
+      const wrap = (error: unknown) =>
+        new Error(
+          `subagent: ${label}: ${(error instanceof Error ? error.message : String(error)).replace(/^subagent: /, "")}`,
+          { cause: error },
+        );
+
+      if (!background) {
+        let outcome: Outcome;
+        try {
+          outcome = await finish();
         } catch (error: unknown) {
           // Cancelled before the child started: let Pi see its own cancellation.
           if (childSignal.aborted) throw error;
-          const message =
-            error instanceof Error ? error.message : String(error);
-          throw new Error(
-            `subagent: ${label}: ${message.replace(/^subagent: /, "")}`,
-            { cause: error },
-          );
+          throw wrap(error);
         }
-        const { text, spillFile } = await answer(label, id, result);
-        // The store is empty here when a reload or shutdown cleared it mid-run.
-        const details: RunSnapshot = {
-          ...(store.byToolCall(toolCallId) ?? sent),
-          status: result.status,
-          endedAt: Date.now(),
-          sessionFile: result.sessionFile,
-          spillFile,
-        };
         return {
-          content: [{ type: "text", text }],
-          details,
-          usage: result.usage,
-          isError: result.status !== "done" || !result.text,
+          content: [{ type: "text", text: outcome.text }],
+          details: outcome.details,
+          usage: outcome.usage,
+          isError: outcome.isError,
         };
-      } finally {
-        clearInterval(pulse);
-        release();
-        store.apply(id, { type: "end" });
       }
+      void finish()
+        .catch(
+          (error: unknown): Outcome => ({
+            text: childSignal.aborted
+              ? `subagent: ${label} was stopped before it started`
+              : wrap(error).message,
+            details: {
+              ...sent,
+              status: childSignal.aborted ? "aborted" : "failed",
+              endedAt: Date.now(),
+            },
+            isError: true,
+          }),
+        )
+        .then((outcome) => {
+          if (born !== generation) return;
+          pending.push(outcome);
+          if (ctx.isIdle()) flush();
+        });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `subagent: started ${label} in the background (id ${id.slice(0, 8)}); its answer arrives as a message when it finishes`,
+          },
+        ],
+        details: sent,
+      };
     },
     renderCall(args, theme) {
       return toolRow(theme, [
@@ -393,6 +529,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
           result.content,
           run ? [...summary(run), ...runTime(run)] : [],
         );
+      if (run.background)
+        return toolRow(theme, [
+          ["accent", "↗ background"],
+          ["muted", ` · ${labelOf(run)} · ${run.id.slice(0, 8)}`],
+        ]);
       if (run.status === "queued")
         return toolRow(theme, [
           ["warning", "● queued"],
@@ -415,9 +556,73 @@ export function registerSubagent(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerMessageRenderer<RunSnapshot[]>(
+    MESSAGE_TYPE,
+    (message, { expanded, outputPad }, theme) => {
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .map((c) => (c.type === "text" ? c.text : ""))
+              .join("");
+      const lines = text.split("\n").map(sanitize);
+      const shown = expanded ? lines : lines.slice(0, PREVIEW_LINES);
+      const hidden = lines.length - shown.length;
+      const box = new Box(outputPad, 1, (t) => theme.bg("customMessageBg", t));
+      box.addChild(
+        new Text(
+          [
+            ...shown,
+            ...(hidden > 0
+              ? [theme.fg("muted", `… ${hidden} more lines`)]
+              : []),
+          ].join("\n"),
+          0,
+          0,
+        ),
+      );
+      return box;
+    },
+  );
+
+  pi.registerCommand("subagents", {
+    description:
+      "List running subagents; `/subagents stop <id|all>` stops them",
+    handler: async (args, ctx) => {
+      const [verb, target] = args.trim().split(/\s+/);
+      if (verb === "stop") {
+        const hits = [...children].filter(
+          ([id]) => target === "all" || (target && id.startsWith(target)),
+        );
+        if (hits.length === 0) {
+          const ids = store.running().map((r) => r.id.slice(0, 8));
+          ctx.ui.notify(
+            `subagent: nothing matches "${target ?? ""}"; running: ${ids.join(", ") || "none"}`,
+            "warning",
+          );
+          return;
+        }
+        for (const [, controller] of hits) controller.abort();
+        ctx.ui.notify(
+          `subagent: stopping ${count(hits.length, "subagent")}`,
+          "info",
+        );
+        return;
+      }
+      ctx.ui.notify(
+        widgetLines()?.join("\n") ?? "subagent: none running",
+        "info",
+      );
+    },
+  });
+
+  pi.on("agent_settled", () => flush());
+
   pi.on("session_start", async (_event, ctx) => {
     store.clear();
     sessionAbort = new AbortController();
+    generation += 1;
+    pending = [];
     // Imported here, not at the top: a static value import would make loading skyr evaluate
     // pi-coding-agent, which reads environment variables at module scope.
     const { getAgentDir, CONFIG_DIR_NAME } = await import(
@@ -437,28 +642,27 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
     unsubscribe?.();
     unsubscribe = undefined;
+    stopTick();
     if (!ctx.hasUI) return;
-    let shown: string | undefined;
-    unsubscribe = store.subscribe(() => {
-      const runs = store.running();
-      const queued = runs.filter((r) => r.status === "queued").length;
-      const text =
-        runs.length === 0
-          ? undefined
-          : `${count(runs.length, "subagent")}${queued ? `, ${queued} queued` : ""}`;
-      // RPC mode writes a line per call, so only changes go out.
-      if (text === shown) return;
-      shown = text;
-      ctx.ui.setStatus(STATUS_KEY, text);
-    });
+    const draw = () => {
+      const lines = widgetLines();
+      ctx.ui.setWidget(WIDGET_KEY, lines);
+      // The clock in each line moves only while something is live.
+      if (lines && !widgetTick) widgetTick = setInterval(draw, 1000);
+      if (!lines) stopTick();
+    };
+    unsubscribe = store.subscribe(draw);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    generation += 1;
     sessionAbort.abort();
     unsubscribe?.();
     unsubscribe = undefined;
-    ctx.ui.setStatus(STATUS_KEY, undefined);
+    stopTick();
+    ctx.ui.setWidget(WIDGET_KEY, undefined);
     store.clear();
+    pending = [];
   });
 }
 

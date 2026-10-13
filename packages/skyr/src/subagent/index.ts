@@ -659,7 +659,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
             store.apply(id, { type: "start", snapshot: sent });
             send(sent);
           }
-          if (call.worktree !== undefined)
+          if (call.worktree !== undefined && resumed === undefined)
+            // A fresh bare writer creates its reserved worktree; a continue of an older
+            // worktree child reuses the existing one (re-adding would fail the identity).
             await addWorktree(call.parentKey, call.worktree, childSignal);
           const trusted =
             resumed !== undefined

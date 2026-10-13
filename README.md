@@ -74,6 +74,15 @@ same tag in its header. With `continue: <tag prefix>` the next call starts a sec
 finished subagent's saved session — same agent, tools, model and directory, a fresh task. The ids
 are valid in the current session only; ongoing and other sessions can't continue from them.
 
+A subagent runs in-process by default, but runs as its own process when (a) the child entry can
+load (a jiti-backed TypeScript child, checked by a one shot smoke probe per session) and (b) the
+call's model works from the agent dir's own `auth.json` + `models.json` — a model that only
+resolves in the parent's runtime (faux, registered providers, `--api-key` keys) stays in-process.
+Progress crosses back over a file protocol: a 500 ms heartbeat snapshot plus one final result.
+A stopped heart's row shows `· stalled`; nothing kills a stalled child, the user decides via
+`/subagents stop`. A crashed host's finished answers are collected and delivered on the next
+session start; nothing keeps a stale child crossing sessions.
+
 `packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.
 
 ## Embedding it

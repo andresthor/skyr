@@ -5,6 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
+import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import type {
   ExtensionAPI,
@@ -30,7 +31,8 @@ import {
   loadAgents,
   parseTools,
 } from "./agents.js";
-import { type ChildResult, inProcessRunner } from "./runner.js";
+import { readStoredResult } from "./child/proc-runner.js";
+import { type ChildResult, runnerFor } from "./runner.js";
 import { createRunStore, type RunSnapshot, type RunStatus } from "./store.js";
 import {
   addWorktree,
@@ -162,7 +164,6 @@ const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
 /** The directory where one session's child sessions live, next to the parent's .jsonl. */
-function childSessionDir(parentFile: string): string;
 function childSessionDir(parentFile: string | undefined): string | undefined {
   return parentFile === undefined
     ? undefined
@@ -198,15 +199,19 @@ async function answer(
   label: string,
   id: string,
   result: ChildResult,
+  recovered?: boolean,
 ): Promise<{ text: string; spillFile?: string }> {
+  const marker = recovered ? " (recovered after a restart)" : "";
   if (result.status === "aborted")
-    return { text: `subagent: ${label} was stopped before it answered` };
+    return {
+      text: `subagent: ${label} was stopped before it answered${marker}`,
+    };
   if (result.status === "failed")
     return {
-      text: `subagent: ${label} failed: ${result.error ?? "no error message"}`,
+      text: `subagent: ${label} failed${marker}: ${result.error ?? "no error message"}`,
     };
   if (!result.text)
-    return { text: `subagent: ${label} ended without an answer` };
+    return { text: `subagent: ${label} ended without an answer${marker}` };
   const { truncateHead, DEFAULT_MAX_LINES } = await loadPi();
   const cut = truncateHead(result.text, {
     maxBytes: MAX_ANSWER_BYTES,
@@ -524,7 +529,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           ? run.behind
             ? ` · behind ${run.behind}`
             : ""
-          : ` · ${count(run.turns, "turn")} · ${count(run.toolCalls, "tool")}${run.activity ? ` · ${run.activity}` : ""}${run.worktree ? " · worktree" : ""}`;
+          : ` · ${count(run.turns, "turn")} · ${count(run.toolCalls, "tool")}${run.activity ? ` · ${run.activity}` : ""}${run.worktree ? " · worktree" : ""}${run.stalled ? " · stalled" : ""}`;
       const line = `${mark} ${labelOf(run)}${progress} · ${Math.round((now - run.startedAt) / 1000)}s · ${run.id.slice(0, 8)}`;
       return truncateToWidth(sanitize(line), WIDGET_WIDTH);
     });
@@ -644,7 +649,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
             resumed !== undefined
               ? resumed.trusted
               : await trustFor(key, call.parentKey, ctx.isProjectTrusted());
-          const result = await inProcessRunner(
+          const result = await runnerFor(
             ctx.modelRegistry,
             registerChildTools,
           ).run(
@@ -657,10 +662,15 @@ export function registerSubagent(pi: ExtensionAPI): void {
               systemPrompt: call.systemPrompt,
               task: params.task,
               trusted,
+              description: params.description,
+              agent: call.agent,
               session: resumed
                 ? { resume: resumed.sessionFile }
                 : parentFile
-                  ? { dir: childSessionDir(parentFile), parent: parentFile }
+                  ? {
+                      dir: childSessionDir(parentFile) ?? "",
+                      parent: parentFile,
+                    }
                   : undefined,
             },
             childSignal,
@@ -784,6 +794,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           ["muted", run.activity ? ` · ${run.activity}` : ""],
           ...runTime(run),
           ["muted", run.worktree ? " · worktree" : ""],
+          ["muted", run.stalled ? " · stalled" : ""],
         ]);
       return toolRow(theme, [
         ["success", "✓ done"],
@@ -856,6 +867,78 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
   pi.on("agent_settled", () => flush());
 
+  /**
+   * A crashed parent's finished children wait in their job dirs. On any session start the
+   * valid results are delivered once; dirs older than a day are reaped, and the freshly
+   * delivered ones right after their read.
+   */
+  async function sweepJobs(parentFile: string | undefined): Promise<Outcome[]> {
+    const recovered: Outcome[] = [];
+    const base = childSessionDir(parentFile);
+    if (base === undefined) return [];
+    const jobsRoot = join(base, "jobs");
+
+    const entries = await readdir(jobsRoot, { withFileTypes: true }).catch(
+      () => [],
+    );
+    for (const entry of entries) {
+      const jobDir = join(jobsRoot, entry.name);
+      const raw = await readFile(join(jobDir, "result.json"), "utf8").then(
+        (body: string) => {
+          try {
+            return JSON.parse(body) as unknown;
+          } catch {
+            return undefined;
+          }
+        },
+        () => undefined,
+      );
+      const stored = raw === undefined ? undefined : readStoredResult(raw);
+      if (stored === undefined) {
+        // Aged-out leftovers only: a live sibling session's job dirs stay untouched.
+        const stamp = await stat(jobDir).catch(() => undefined);
+        if (
+          stamp !== undefined &&
+          Date.now() - stamp.mtimeMs > 24 * 60 * 60 * 1000
+        )
+          await rm(jobDir, { recursive: true, force: true }).catch(
+            () => undefined,
+          );
+        continue;
+      }
+      await rm(jobDir, { recursive: true, force: true }).catch(() => undefined);
+      const { text } = await answer(
+        stored.agent ?? `"${clip(stored.description)}"`,
+        entry.name,
+        {
+          status: stored.status,
+          text: stored.text,
+          error: stored.error,
+          usage: stored.usage,
+          sessionFile: stored.sessionFile,
+        },
+        true,
+      );
+      recovered.push({
+        text,
+        details: {
+          id: entry.name,
+          toolCallId: `recovered-${entry.name.slice(0, 8)}`,
+          ...(stored.agent !== undefined ? { agent: stored.agent } : {}),
+          description: stored.description,
+          status: stored.status,
+          startedAt: 0,
+          turns: 0,
+          toolCalls: 0,
+          tokens: stored.usage.input + stored.usage.output,
+          recovered: true as const,
+        },
+        isError: stored.status !== "done",
+      });
+    }
+    return recovered;
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     store.clear();
     sessionAbort = new AbortController();
@@ -863,6 +946,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
     pending = [];
     records.clear();
     runningContinues.clear();
+    const recovered = await sweepJobs(ctx.sessionManager.getSessionFile());
+    if (recovered.length > 0) {
+      pending.push(...recovered);
+      flush();
+    }
     const { getAgentDir, CONFIG_DIR_NAME } = await loadPi();
     const loaded = await loadAgents({
       user: join(getAgentDir(), "agents"),

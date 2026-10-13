@@ -25,6 +25,10 @@ export interface RunSnapshot {
   background?: true;
   /** The child writes in its own fresh git worktree, not the parent's tree. */
   worktree?: { path: string; branch: string };
+  /** Relative to the child's own heartbeat clock: quiet turns never stall. */
+  stalled?: true;
+  /** Delivered from a recovered job dir after a restarted session; not a live child. */
+  recovered?: true;
   sessionFile?: string;
   spillFile?: string;
 }
@@ -70,7 +74,13 @@ export function createRunStore(): RunStore {
           activity: event.name,
           toolCalls: run.toolCalls + 1,
         });
-      else
+      else if (event.type === "stalled") {
+        const { stalled: _, ...rest } = run;
+        runs.set(
+          id,
+          event.stalled ? { ...rest, stalled: true as const } : rest,
+        );
+      } else if (event.type === "turn")
         runs.set(id, {
           ...run,
           turns: run.turns + 1,

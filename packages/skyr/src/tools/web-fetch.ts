@@ -16,6 +16,7 @@ import { isPrivateAddress, redactUrl, withTimeout } from "./net.js";
 import {
   clip,
   elapsed,
+  errnoOf,
   errorRow,
   stripInvisible,
   took,
@@ -68,9 +69,7 @@ async function resolveHost(
   } catch (error: unknown) {
     // ENOTFOUND reads as a typo and EAI_AGAIN as a transient fault, so keep the code. Not the
     // message: it repeats the host, which doubles the width of the row.
-    const code =
-      error instanceof Error && "code" in error ? error.code : undefined;
-    const detail = typeof code === "string" ? ` (${code})` : "";
+    const detail = ` (${errnoOf(error)})`;
     throw new Error(`web_fetch: could not resolve ${host}${detail}`);
   }
 }

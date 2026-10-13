@@ -1,5 +1,5 @@
 // Continuing a child by id: a second run on the finished child's saved session.
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
   type FauxResponseFactory,
   fauxAssistantMessage,
@@ -14,6 +14,7 @@ import {
   type Parent,
   parentSession,
   results,
+  scratchDir,
   sections,
   taskOf,
   textOf,
@@ -364,4 +365,46 @@ test("a continue whose saved session file is gone fails with the honest error", 
   expect(res?.isError).toBe(true);
   expect(textOf(res!)).toContain("the saved session");
   expect(textOf(res!)).toContain("start a fresh subagent");
+});
+
+test("a continue whose child's cwd vanished, or stopped being a directory, fails with its own wording", async () => {
+  const { seen, child } = childLog({ look: "RUN1-ANSWER" });
+  const workdir = scratchDir("cont-cwd");
+  const parent = await parentSession({
+    userAgents: SCOUT,
+    respond: script(
+      child,
+      () =>
+        fauxAssistantMessage([
+          call({ agent: "scout", task: "look", cwd: workdir }),
+        ]),
+      () => fauxAssistantMessage("round one"),
+      (context) => fauxAssistantMessage([cont("gone", tagsOf(context)[0]!)]),
+      () => fauxAssistantMessage("round two"),
+      (context) => fauxAssistantMessage([cont("swapped", tagsOf(context)[0]!)]),
+    ),
+  });
+
+  // Run 1 lives in a scratch cwd; the record carries its realpath.
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+  expect(seen.get("look")?.length).toBe(1);
+
+  // Prompt 2: the cwd is gone — the continue refuses with the temporal wording.
+  rmSync(workdir, { recursive: true });
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+  const gone = results(parent.session).get("gone");
+  expect(gone?.isError).toBe(true);
+  expect(textOf(gone!)).toContain("no longer exists");
+
+  // Prompt 3: the path exists again but holds a file now — the kind wording.
+  mkdirSync(workdir.split("/").slice(0, -1).join("/"), { recursive: true });
+  writeFileSync(workdir, "a file");
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+  const swapped = results(parent.session).get("swapped");
+  expect(swapped?.isError).toBe(true);
+  expect(textOf(swapped!)).toContain("is not a directory anymore");
+  expect(textOf(swapped!)).toContain(workdir);
 });

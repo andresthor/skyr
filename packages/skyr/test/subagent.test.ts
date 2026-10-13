@@ -499,9 +499,11 @@ test("a missing cwd, or a file as cwd, fails before any child starts and names t
   const file = byTask.get("f");
   expect(missing?.isError).toBe(true);
   expect(file?.isError).toBe(true);
-  // Each diagnosis reads true: a missing path is missing, a file is a file.
+  // Each diagnosis reads true: a missing path is missing, a file is a file — named, with the path.
+  expect(textOf(missing!)).toContain(join(parent.cwd, "nope"));
   expect(textOf(missing!)).toContain("does not resolve (ENOENT)");
   expect(textOf(missing!)).toContain("pass an existing directory");
+  expect(textOf(file!)).toContain(join(parent.cwd, "a-file"));
   expect(textOf(file!)).toContain("is not a directory");
   expect(textOf(file!)).toContain("looked at");
   expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);

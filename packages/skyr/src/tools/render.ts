@@ -31,6 +31,15 @@ export function sanitize(raw: string): string {
 }
 
 /** Model-supplied text bound for an error message: its length is unbounded, so keep it readable. */
+/** The errno of a filesystem/DNS error ("ENOENT", …), "error" when it has none. */
+export function errnoOf(error: unknown): string {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? error.code
+      : undefined;
+  return typeof code === "string" ? code : "error";
+}
+
 export function clip(text: string, max = 120): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }

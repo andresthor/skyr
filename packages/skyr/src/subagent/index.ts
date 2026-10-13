@@ -242,7 +242,7 @@ async function answer(
   } catch {
     // ENOSPC or an unwritable temp dir must not cost the model the capped answer it paid for.
     return {
-      text: `${cut.content}\n\n[Truncated: the full answer could not be saved to disk]`,
+      text: `${cut.content}\n\n[Truncated: the full answer could not be saved to disk; tell the user]`,
     };
   }
 }
@@ -345,7 +345,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       parentKey = realpathSync(ctx.cwd);
     } catch (error: unknown) {
       throw fail(
-        `the working directory ${ctx.cwd} cannot be resolved (${errnoOf(error)}); tell the user to restart Pi in an existing directory`,
+        `the working directory ${ctx.cwd} does not resolve (${errnoOf(error)}); tell the user to restart Pi in an existing directory`,
       );
     }
     const message = `pass an existing directory, absolute or relative to ${ctx.cwd}`;
@@ -358,10 +358,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
         `cwd ${JSON.stringify(clip(params.cwd ?? "."))} does not resolve (${errnoOf(error)}) (looked at ${clip(cwd)}); ${message}`,
       );
     }
-    // A broken entry cannot survive a successful realpath, so undefined means a same-line
-    // deletion: rare, but the honest word for it is the same.
+    // A broken entry cannot survive a successful realpath, so undefined means the directory
+    // disappeared while resolving: same diagnosis as a continue's record losing its cwd.
     const entry = statSync(key, { throwIfNoEntry: false });
-    if (entry !== undefined && !entry.isDirectory())
+    if (entry === undefined)
+      throw fail(
+        `cwd ${JSON.stringify(clip(params.cwd ?? "."))} no longer exists (looked at ${clip(key)}); ${message}`,
+      );
+    if (!entry.isDirectory())
       throw fail(
         `cwd ${JSON.stringify(clip(params.cwd ?? "."))} is not a directory (looked at ${clip(key)}); ${message}`,
       );

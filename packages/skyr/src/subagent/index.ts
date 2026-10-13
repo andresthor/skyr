@@ -45,7 +45,7 @@ const PREVIEW_LINES = 12;
 const ABOUT =
   "Run a task in a subagent: a fresh agent with its own context and tools that returns only its final answer. Use it for work that would fill your context, such as searching a codebase, reading many files or researching the web. The agent sees nothing of this conversation, so the task must stand alone: give paths, context and the answer you want back. Independent tasks go out as several subagent calls in one turn, and run in parallel.";
 const ADHOC =
-  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory tree: a second one for the same directory, or one above or below it, waits until the first ends, so issue writes that depend on each other in separate turns. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
+  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory tree: a second one for the same directory, or one above or below it, waits until the first ends, so issue writes that depend on each other in separate turns. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it. With `continue: <id prefix>` the call starts a new run on a finished subagent's saved session, reusing its tools, model and directory: give a fresh task only. Ids are the `(id ab12cd34)` tag at the end of every subagent result, and they are valid only while the current session lives. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
 
 const Params = Type.Object({
   agent: Type.Optional(
@@ -89,6 +89,12 @@ const Params = Type.Object({
         "Return at once; the answer arrives later as a message, and Esc does not stop it. For work you do not need before your next step.",
     }),
   ),
+  continue: Type.Optional(
+    Type.String({
+      description:
+        "ID prefix (8 chars) of a finished subagent (every subagent result ends with its `(id …)` tag) whose saved session gets another run: same tools, model and directory; give a fresh task only. Omit agent, prompt, tools, model and cwd.",
+    }),
+  ),
 });
 
 /** A call resolved against its agent file and the defaults; nothing has been spent yet. */
@@ -104,6 +110,22 @@ interface Call {
   key: string;
   parentKey: string;
   background: boolean;
+  /** Present: this call continues a finished child; the record carries its calling facts. */
+  continueOf?: ChildRecord;
+}
+
+/** A finished child's calling facts, for a second run through its saved session. */
+interface ChildRecord {
+  id: string;
+  agent?: string;
+  description: string;
+  model: string;
+  tools: string[];
+  cwd: string;
+  key: string;
+  trusted: boolean;
+  systemPrompt: string;
+  sessionFile: string;
 }
 
 /** A writer's place in its directory's queue. */
@@ -211,6 +233,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
   // Finished background answers waiting for the parent to be idle. Never Pi's steer or followUp
   // queues: Esc clears those.
   let pending: Outcome[] = [];
+  // Finished children (this session only), for `continue`; cleared with the store.
+  const records = new Map<string, ChildRecord>();
+  // Child ids whose continued run is live: set synchronously in resolveCall, so two same-turn
+  // continues on one child cannot both resolve (and both append one session file).
+  const runningContinues = new Set<string>();
   // Bumped at every session start and shutdown, so a child that outlives its session touches
   // neither the next session nor its own stale context.
   let generation = 0;
@@ -241,6 +268,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
     const agent =
       params.agent === undefined ? undefined : agents.get(params.agent);
     if (params.agent !== undefined && !agent) throw unknownAgent(params.agent);
+    if (params.continue !== undefined)
+      return resolveContinue(params, params.continue.trim());
     const label = labelOf({
       agent: agent?.name,
       description: params.description,
@@ -287,6 +316,64 @@ export function registerSubagent(pi: ExtensionAPI): void {
       key,
       parentKey,
       background: params.background === true,
+    };
+  }
+
+  /** The `continue` branch of `resolveCall`: synchronous, and takes the same-turn guard. */
+  function resolveContinue(params: Static<typeof Params>, raw: string): Call {
+    const prefix = raw;
+    if (
+      params.agent !== undefined ||
+      params.prompt !== undefined ||
+      params.tools !== undefined ||
+      params.model !== undefined ||
+      params.cwd !== undefined
+    )
+      throw fail(
+        "continue reuses the subagent's tools, model and directory; omit agent, prompt, tools, model and cwd",
+      );
+    if (prefix === "")
+      throw fail("continue: pass a subagent id prefix from one of its results");
+    const matches = [...records.entries()].filter(([id]) =>
+      id.startsWith(prefix),
+    );
+    if (matches.length === 0)
+      throw fail(
+        [...children.keys()].some((id) => id.startsWith(prefix))
+          ? `subagent ...${clip(prefix)} is still running; wait for its answer or stop it`
+          : `no subagent matches "${clip(prefix)}"; ids are the 8-char prefixes in subagent results and are valid only in this session - start a fresh subagent instead`,
+      );
+    if (matches.length > 1)
+      throw fail(
+        `"${clip(prefix)}" matches more than one finished subagent (${matches.map(([, r]) => labelOf(r)).join(", ")}); give a longer prefix or start a fresh subagent`,
+      );
+    const [match] = matches;
+    if (!match) throw fail(`no subagent matches "${clip(prefix)}"`);
+    const record = match[1];
+    try {
+      statSync(record.cwd);
+    } catch {
+      throw fail(
+        `the subagent's working directory ${clip(record.cwd)} no longer exists; start a fresh subagent instead`,
+      );
+    }
+    if (runningContinues.has(record.id))
+      throw fail(
+        `subagent ${record.id.slice(0, 8)} already has a run in progress; wait for it to finish`,
+      );
+    runningContinues.add(record.id);
+    return {
+      agent: record.agent,
+      label: labelOf({ agent: record.agent, description: params.description }),
+      model: record.model,
+      tools: record.tools,
+      writer: record.tools.includes("edit") || record.tools.includes("write"),
+      systemPrompt: record.systemPrompt,
+      cwd: record.cwd,
+      key: record.key,
+      parentKey: record.key,
+      background: params.background === true,
+      continueOf: record,
     };
   }
 
@@ -413,7 +500,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
     prepareLoadout: () => ({ descriptions: { subagent: description } }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const call = resolveCall(params, ctx);
-      const { label, key, background } = call;
+      const { label, background, key } = call;
+      // A continued run reuses the child's id (via the record the resolve read).
+      const resumed = call.continueOf;
       const parentFile = ctx.sessionManager.getSessionFile();
       const own = new AbortController();
       // A background child outlives the call, so the call's signal (Esc) is not part of its own.
@@ -423,7 +512,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         own.signal,
       ]);
       const born = generation;
-      const id = randomUUID();
+      const id = resumed !== undefined ? resumed.id : randomUUID();
       // Before the first await: Pi starts a batch's calls in order only up to that point.
       const slot = call.writer ? takeSlot(key, label) : undefined;
       let sent: RunSnapshot = {
@@ -490,11 +579,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
             store.apply(id, { type: "start", snapshot: sent });
             send(sent);
           }
-          const trusted = await trustFor(
-            key,
-            call.parentKey,
-            ctx.isProjectTrusted(),
-          );
+          const trusted =
+            resumed !== undefined
+              ? resumed.trusted
+              : await trustFor(key, call.parentKey, ctx.isProjectTrusted());
           const result = await inProcessRunner(
             ctx.modelRegistry,
             registerChildTools,
@@ -508,20 +596,35 @@ export function registerSubagent(pi: ExtensionAPI): void {
               systemPrompt: call.systemPrompt,
               task: params.task,
               trusted,
-              session: parentFile
-                ? {
-                    dir: join(
-                      dirname(parentFile),
-                      basename(parentFile, ".jsonl"),
-                    ),
-                    parent: parentFile,
-                  }
-                : undefined,
+              session: resumed
+                ? { resume: resumed.sessionFile }
+                : parentFile
+                  ? {
+                      dir: join(
+                        dirname(parentFile),
+                        basename(parentFile, ".jsonl"),
+                      ),
+                      parent: parentFile,
+                    }
+                  : undefined,
             },
             childSignal,
             (event) => store.apply(id, event),
           );
           const { text, spillFile } = await answer(label, id, result);
+          if (result.sessionFile !== undefined && result.sessionFile !== "")
+            records.set(id, {
+              id,
+              agent: call.agent,
+              description: params.description,
+              model: call.model,
+              tools: call.tools,
+              cwd: call.cwd,
+              key,
+              trusted,
+              systemPrompt: call.systemPrompt,
+              sessionFile: result.sessionFile,
+            });
           return {
             ...ended(
               result.status,
@@ -535,6 +638,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           if (pulse) clearInterval(pulse);
           slot?.release();
           children.delete(id);
+          runningContinues.delete(id);
           store.apply(id, { type: "end" });
         }
       };
@@ -548,8 +652,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
           if (childSignal.aborted) throw error;
           throw failed(error);
         }
+        // Only a foreground result needs the id tag: a background one's delivered header carries it.
         return {
-          content: [{ type: "text", text: outcome.text }],
+          content: [
+            { type: "text", text: `${outcome.text}\n(id ${id.slice(0, 8)})` },
+          ],
           details: outcome.details,
           usage: outcome.usage,
           isError: outcome.isError,
@@ -564,7 +671,12 @@ export function registerSubagent(pi: ExtensionAPI): void {
         .then((outcome) => {
           if (born !== generation) return;
           pending.push(outcome);
-          if (ctx.isIdle()) flush();
+          try {
+            if (ctx.isIdle()) flush();
+          } catch {
+            // The only thrower: the runner is stale because the host disposed or reloaded the
+            // session without events; the instance is gone, so there is nothing to deliver.
+          }
         });
       return {
         content: [
@@ -688,6 +800,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
     sessionAbort = new AbortController();
     generation += 1;
     pending = [];
+    records.clear();
+    runningContinues.clear();
     const { getAgentDir, CONFIG_DIR_NAME } = await loadPi();
     const loaded = await loadAgents({
       user: join(getAgentDir(), "agents"),
@@ -728,6 +842,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
     ctx.ui.setWidget(WIDGET_KEY, undefined);
     store.clear();
     pending = [];
+    records.clear();
+    runningContinues.clear();
   });
 }
 

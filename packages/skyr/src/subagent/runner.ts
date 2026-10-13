@@ -1,4 +1,5 @@
 /** Runs one subagent to completion behind a seam a separate-process runner can also fill. */
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type {
   AgentSession,
@@ -29,7 +30,10 @@ export interface ChildSpec {
   /** Whether the child may read the project's `.pi/` settings and prompts. */
   trusted: boolean;
   /** Absent: the child is not saved, as for a parent run under `--no-session`. */
-  session?: { dir: string; parent: string };
+  session?:
+    | { dir: string; parent: string }
+    /** An earlier run's session file: this run continues it. */
+    | { resume: string };
 }
 
 /** `usage` is the child's running total, not the turn's own. */
@@ -115,12 +119,14 @@ export function inProcessRunner(
           spec.systemPrompt ? [...base, spec.systemPrompt] : base,
       });
       await resourceLoader.reload();
-      const sessionManager = spec.session
-        ? pi.SessionManager.create(spec.cwd, spec.session.dir, {
-            id: spec.id,
-            parentSession: spec.session.parent,
-          })
-        : pi.SessionManager.inMemory(spec.cwd, { id: spec.id });
+      const sessionManager = !spec.session
+        ? pi.SessionManager.inMemory(spec.cwd, { id: spec.id })
+        : "resume" in spec.session
+          ? openResumable(pi, spec.session.resume)
+          : pi.SessionManager.create(spec.cwd, spec.session.dir, {
+              id: spec.id,
+              parentSession: spec.session.parent,
+            });
       const { session } = await pi.createAgentSession({
         cwd: spec.cwd,
         agentDir,
@@ -206,6 +212,18 @@ export function inProcessRunner(
       }
     },
   };
+}
+
+function openResumable(pi: Awaited<ReturnType<typeof loadPi>>, file: string) {
+  if (!existsSync(file))
+    throw new Error(
+      `the saved session ${file} is gone; start a fresh subagent instead`,
+    );
+  if (typeof pi.SessionManager.open !== "function")
+    throw new Error(
+      "this runtime cannot resume subagent sessions (SessionManager.open is missing); update the host Pi, or start a fresh subagent instead",
+    );
+  return pi.SessionManager.open(file);
 }
 
 function emptyUsage(): Usage {

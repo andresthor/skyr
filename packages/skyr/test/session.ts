@@ -163,6 +163,7 @@ export function call(params: {
   model?: string;
   cwd?: string;
   background?: boolean;
+  continue?: string;
 }) {
   const args = Object.fromEntries(
     Object.entries({

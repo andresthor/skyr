@@ -208,8 +208,8 @@ test("a failed first writer still lets the second start", async () => {
 
   const byTask = results(parent.session);
   expect(byTask.get("w1")?.isError).toBe(true);
-  expect(textOf(byTask.get("w1")!)).toBe(
-    'subagent: "run w1" failed: provider exploded',
+  expect(textOf(byTask.get("w1")!)).toMatch(
+    /^subagent: "run w1" failed: provider exploded\n\(id [0-9a-f]{8}\)$/,
   );
   expect(byTask.get("w2")?.isError).toBe(false);
 });
@@ -245,7 +245,9 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
 
   const w2 = results(parent.session).get("w2");
   expect(w2?.isError).toBe(true);
-  expect(textOf(w2!)).toBe('subagent: "run w2" was stopped before it started');
+  expect(textOf(w2!)).toMatch(
+    /^subagent: "run w2" was stopped before it started\n\(id [0-9a-f]{8}\)$/,
+  );
   expect(w2?.details).toMatchObject({ status: "aborted", turns: 0, tokens: 0 });
   expect(w2?.details).not.toHaveProperty("sessionFile");
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
@@ -277,8 +279,8 @@ test("session_shutdown aborts queued children", async () => {
 
   const byTask = results(parent.session);
   expect(byTask.get("w1")?.isError).toBe(true);
-  expect(textOf(byTask.get("w2")!)).toBe(
-    'subagent: "run w2" was stopped before it started',
+  expect(textOf(byTask.get("w2")!)).toMatch(
+    /^subagent: "run w2" was stopped before it started\n\(id [0-9a-f]{8}\)$/,
   );
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
   expect(parent.widgets.at(-1)).toBeUndefined();

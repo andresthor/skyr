@@ -261,7 +261,7 @@ test("a child's final text reaches the parent model, and its usage counts toward
   await session.prompt("go");
 
   const result = requests.at(-1)?.messages.find((m) => m.role === "toolResult");
-  expect(result && textOf(result)).toBe("FINDING-42");
+  expect(result && textOf(result)).toMatch(/^FINDING-42\n\(id [0-9a-f]{8}\)$/);
   const childInput = results(session).get("look")?.usage?.input ?? 0;
   expect(childInput).toBeGreaterThan(0);
   const parentInput = session.messages.reduce(
@@ -297,8 +297,8 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
   for (const task of holds.keys()) {
     const result = results(parent.session).get(task);
     expect(result?.isError).toBe(true);
-    expect(result && textOf(result)).toBe(
-      "subagent: scout was stopped before it answered",
+    expect(result && textOf(result)).toMatch(
+      /^subagent: scout was stopped before it answered\n\(id [0-9a-f]{8}\)$/,
     );
   }
   expect(parent.widgets.at(-1)).toBeUndefined();
@@ -624,7 +624,9 @@ test("a broken or unknown agent, an unresolvable model, or a child that errors f
   expect(text("f")).toMatch(
     /^subagent: faraway: model "nowhere\/none" is not available .* set `model:` on the call or in the agent file/,
   );
-  expect(text("s")).toBe("subagent: scout failed: provider exploded");
+  expect(text("s")).toMatch(
+    /^subagent: scout failed: provider exploded\n\(id [0-9a-f]{8}\)$/,
+  );
   expect(parent.notices).toHaveLength(1);
   expect(parent.notices[0]).toMatch(/broken\.md/);
 });
@@ -642,7 +644,10 @@ test("output past the cap ends with a pointer to a file holding the full answer,
 
   const result = results(session).get("s");
   const text = result ? textOf(result) : "";
-  const path = /\[Truncated: the full answer is in (.+)\]$/.exec(text)?.[1];
+  const path =
+    /\[Truncated: the full answer is in (.+)\]\n\(id [0-9a-f]{8}\)$/.exec(
+      text,
+    )?.[1];
   expect(path).toBeDefined();
   expect(readFileSync(path!, "utf8")).toBe(long);
   expect(Buffer.byteLength(text)).toBeLessThan(10_200);

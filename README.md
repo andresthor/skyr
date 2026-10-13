@@ -64,6 +64,11 @@ lists the live ones and `/subagents stop <id|all>` stops them. A widget above th
 every live subagent, running, queued or in the background. Its token usage is in the delivered
 message, not in the footer.
 
+Every foreground result ends with an `(id ab12cd34)` tag and every background message names the
+same tag in its header. With `continue: <tag prefix>` the next call starts a second run on a
+finished subagent's saved session — same agent, tools, model and directory, a fresh task. The ids
+are valid in the current session only; ongoing and other sessions can't continue from them.
+
 `packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.
 
 ## Embedding it

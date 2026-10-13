@@ -2,8 +2,9 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
   ExtensionFactory,
@@ -55,13 +56,15 @@ export function inProcessRunner(
 /**
  * The child is a TypeScript entry whose sibling imports are .js specifiers naming .ts files,
  * exactly as Pi's own extension tree does. Pi loads those through jiti; the child's spawn
- * does the same with jiti resolved from Pi's own dependency set.
+ * does the same with jiti resolved from Pi's own dependency graph — Node's own resolution,
+ * so both a nested (pnpm) and a hoisted (installed release) layout land on it.
  */
 async function childLoaderArgs(): Promise<string[]> {
   try {
     const pi = await loadPi();
-    const dir = pi.getPackageDir();
-    const reg = join(dir, "node_modules", "jiti", "lib", "jiti-register.mjs");
+    const req = createRequire(join(pi.getPackageDir(), "package.json"));
+    const jitiPkg = req.resolve("jiti/package.json");
+    const reg = join(dirname(jitiPkg), "lib", "jiti-register.mjs");
     if (existsSync(reg)) return ["--import", pathToFileURL(reg).href];
   } catch {
     // fall through: the probe fails, the in-process runner stays

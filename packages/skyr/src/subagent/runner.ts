@@ -93,15 +93,16 @@ async function probeProcRunner(): Promise<boolean> {
 }
 
 /**
- * Does this model resolve in the file-only runtime a child gets, and NOT in the runtime the
- * parent's providers compose? A model both resolve composes differently in the child: the
- * parent's effective config is the one that runs, so those stay in-process. The preflight
- * fails soft — a call that always worked must never start failing here.
+ * Would a child, armed with the agent dir's own file config alone, run this model? Three
+ * checks, all in the file runtime's own terms: the model resolves there, its provider holds
+ * configured auth in the files (not a key injected only into the parent, like --api-key),
+ * and the parent does not carry the provider as a registered live-object provider — live
+ * objects cannot cross a process boundary, so the child would lose the registration. The
+ * preflight fails soft: a call that always worked must never start failing here.
  */
 async function canSpawnModelFor(
   providers: Providers,
   model: string,
-  state: { mixed?: ModelRuntime },
 ): Promise<boolean> {
   try {
     const pi = await loadPi();
@@ -110,19 +111,16 @@ async function canSpawnModelFor(
       authPath: join(agentDir, "auth.json"),
       modelsPath: join(agentDir, "models.json"),
     });
-    if (
-      !pi.resolveCliModel({ cliModel: model, modelRuntime: fileRuntime }).model
-    )
-      return false;
-    state.mixed ??= await pi.ModelRuntime.create({
-      authPath: join(agentDir, "auth.json"),
-      modelsPath: join(agentDir, "models.json"),
-    });
-    copyProviders(providers, state.mixed);
-    return !pi.resolveCliModel({
+    const filed = pi.resolveCliModel({
       cliModel: model,
-      modelRuntime: state.mixed,
+      modelRuntime: fileRuntime,
     }).model;
+    if (!filed) return false;
+    if (typeof fileRuntime.hasConfiguredAuth !== "function") return false;
+    if (!fileRuntime.hasConfiguredAuth(filed.provider)) return false;
+    if (providers.getRegisteredNativeProvider(filed.provider) !== undefined)
+      return false;
+    return true;
   } catch {
     return false;
   }
@@ -139,15 +137,12 @@ export function runnerFor(
   registerTools: ExtensionFactory,
 ): Runner {
   const inProcess = inProcessRunner(providers, registerTools);
-  const state: { canSpawn?: boolean; mixed?: ModelRuntime } = {};
+  const state: { canSpawn?: boolean } = {};
   return {
     async run(spec, signal, onEvent) {
       state.canSpawn ??=
         (await probeProcRunner()) && process.platform !== "win32";
-      if (
-        state.canSpawn &&
-        (await canSpawnModelFor(providers, spec.model, state))
-      ) {
+      if (state.canSpawn && (await canSpawnModelFor(providers, spec.model))) {
         const entry = fileURLToPath(
           new URL("./child/main.ts", import.meta.url),
         );

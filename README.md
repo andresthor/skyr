@@ -56,7 +56,12 @@ agent file or the default gives.
 A subagent whose tools include `edit` or `write` is a writer, and one writer runs per directory at
 a time: a second one for the same directory waits until the first ends. Writers in different
 directories, such as worktrees you made, run in parallel. A directory other than the parent's
-takes its project trust from Pi's own record for it, then from the parent's verdict.
+takes its project trust from Pi's own record for it, then from the parent's verdict. A writer call
+with no `cwd` runs in its own fresh git worktree (cut from HEAD, under the session's directory)
+instead of queueing: the result states the path and branch, its writes are uncommitted there
+(usually untracked), and the note carries the inspect and commit-then-merge recipes. Nothing
+deletes a worktree automatically; in a non-git directory a bare writer falls back in-tree
+and the result says so.
 
 With `background: true` the call returns at once and the answer arrives later as a message that
 starts a new turn, once the parent is idle. Esc does not stop a background subagent; `/subagents`

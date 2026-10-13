@@ -23,6 +23,8 @@ export interface RunSnapshot {
   behind?: string;
   /** The call returned at once; the answer is delivered as a message. */
   background?: true;
+  /** The child writes in its own fresh git worktree, not the parent's tree. */
+  worktree?: { path: string; branch: string };
   sessionFile?: string;
   spillFile?: string;
 }

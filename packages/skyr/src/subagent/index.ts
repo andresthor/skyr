@@ -32,6 +32,12 @@ import {
 } from "./agents.js";
 import { type ChildResult, inProcessRunner } from "./runner.js";
 import { createRunStore, type RunSnapshot, type RunStatus } from "./store.js";
+import {
+  addWorktree,
+  planWorktree,
+  type WorktreePlan,
+  worktreeNote,
+} from "./worktree.js";
 
 const MAX_ANSWER_BYTES = 10_000;
 const PULSE_MS = 250;
@@ -45,7 +51,7 @@ const PREVIEW_LINES = 12;
 const ABOUT =
   "Run a task in a subagent: a fresh agent with its own context and tools that returns only its final answer. Use it for work that would fill your context, such as searching a codebase, reading many files or researching the web. The agent sees nothing of this conversation, so the task must stand alone: give paths, context and the answer you want back. Independent tasks go out as several subagent calls in one turn, and run in parallel.";
 const ADHOC =
-  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory tree: a second one for the same directory, or one above or below it, waits until the first ends, so issue writes that depend on each other in separate turns. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it. With `continue: <id prefix>` the call starts a new run on a finished subagent's saved session, reusing its tools, model and directory: give a fresh task only. Ids are the `(id ab12cd34)` tag at the end of every subagent result, and they are valid only while the current session lives. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
+  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory tree: a second one for the same directory, or one above or below it, waits until the first ends, so issue writes that depend on each other in separate turns. A writer call with NO cwd runs in its own fresh git worktree cut from HEAD instead of queueing; its writes stay uncommitted, and the result states the worktree path, branch, and how to inspect and merge them. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it. With `continue: <id prefix>` the call starts a new run on a finished subagent's saved session, reusing its tools, model and directory: give a fresh task only. Ids are the `(id ab12cd34)` tag at the end of every subagent result, and they are valid only while the current session lives. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
 
 const Params = Type.Object({
   agent: Type.Optional(
@@ -110,6 +116,12 @@ interface Call {
   key: string;
   parentKey: string;
   background: boolean;
+  /** The child's id, minted at resolve time so a reserved worktree shares it. */
+  id: string;
+  /** Present: a worktree was reserved for a bare writer; the child runs inside it. */
+  worktree?: WorktreePlan;
+  /** Why a bare writer fell back to writing in-tree (non-repo, unborn HEAD, no git). */
+  worktreeWhy?: string;
   /** Present: this call continues a finished child; the record carries its calling facts. */
   continueOf?: ChildRecord;
 }
@@ -148,6 +160,14 @@ const fail = (detail: string, cause?: unknown) =>
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+/** The directory where one session's child sessions live, next to the parent's .jsonl. */
+function childSessionDir(parentFile: string): string;
+function childSessionDir(parentFile: string | undefined): string | undefined {
+  return parentFile === undefined
+    ? undefined
+    : join(dirname(parentFile), basename(parentFile, ".jsonl"));
+}
 
 const labelOf = (run: { agent?: string; description: string }) =>
   run.agent ?? `"${clip(run.description)}"`;
@@ -263,13 +283,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
    */
   function resolveCall(
     params: Static<typeof Params>,
-    ctx: Pick<ExtensionContext, "cwd" | "model">,
+    ctx: Pick<ExtensionContext, "cwd" | "model" | "sessionManager">,
   ): Call {
     const agent =
       params.agent === undefined ? undefined : agents.get(params.agent);
     if (params.agent !== undefined && !agent) throw unknownAgent(params.agent);
     if (params.continue !== undefined)
       return resolveContinue(params, params.continue.trim());
+    const childId = randomUUID();
     const label = labelOf({
       agent: agent?.name,
       description: params.description,
@@ -305,17 +326,39 @@ export function registerSubagent(pi: ExtensionAPI): void {
         `cwd ${JSON.stringify(clip(params.cwd ?? "."))} is not a directory (looked at ${clip(cwd)}); pass an existing directory, absolute or relative to ${ctx.cwd}`,
       );
     }
+    const writer = tools.includes("edit") || tools.includes("write");
+    let worktree: WorktreePlan | undefined;
+    let worktreeWhy: string | undefined;
+    if (writer && params.cwd === undefined) {
+      // The same child-session dir the runner would use: the worktree sits beside it.
+      const parentFile = ctx.sessionManager.getSessionFile();
+      const sessionDir =
+        parentFile === undefined
+          ? undefined
+          : join(dirname(parentFile), basename(parentFile, ".jsonl"));
+      const planned = planWorktree(
+        cwd,
+        sessionDir,
+        childId,
+        params.description,
+      );
+      if ("why" in planned) worktreeWhy = planned.why;
+      else worktree = planned;
+    }
     return {
       agent: agent?.name,
       label,
       model,
       tools,
-      writer: tools.includes("edit") || tools.includes("write"),
+      writer,
       systemPrompt: [agent?.body, params.prompt].filter(Boolean).join("\n\n"),
-      cwd,
-      key,
+      cwd: worktree !== undefined ? worktree.path : cwd,
+      key: worktree !== undefined ? worktree.path : key,
       parentKey,
       background: params.background === true,
+      id: childId,
+      ...(worktree !== undefined ? { worktree } : {}),
+      ...(worktreeWhy !== undefined ? { worktreeWhy } : {}),
     };
   }
 
@@ -373,6 +416,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       key: record.key,
       parentKey: record.key,
       background: params.background === true,
+      id: record.id,
       continueOf: record,
     };
   }
@@ -480,7 +524,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           ? run.behind
             ? ` · behind ${run.behind}`
             : ""
-          : ` · ${count(run.turns, "turn")} · ${count(run.toolCalls, "tool")}${run.activity ? ` · ${run.activity}` : ""}`;
+          : ` · ${count(run.turns, "turn")} · ${count(run.toolCalls, "tool")}${run.activity ? ` · ${run.activity}` : ""}${run.worktree ? " · worktree" : ""}`;
       const line = `${mark} ${labelOf(run)}${progress} · ${Math.round((now - run.startedAt) / 1000)}s · ${run.id.slice(0, 8)}`;
       return truncateToWidth(sanitize(line), WIDGET_WIDTH);
     });
@@ -512,7 +556,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         own.signal,
       ]);
       const born = generation;
-      const id = resumed !== undefined ? resumed.id : randomUUID();
+      const id = call.id;
       // Before the first await: Pi starts a batch's calls in order only up to that point.
       const slot = call.writer ? takeSlot(key, label) : undefined;
       let sent: RunSnapshot = {
@@ -527,6 +571,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
         tokens: 0,
         ...(slot?.behind ? { behind: slot.behind } : {}),
         ...(background ? { background: true as const } : {}),
+        ...(call.worktree
+          ? {
+              worktree: {
+                path: call.worktree.path,
+                branch: call.worktree.branch,
+              },
+            }
+          : {}),
       };
       let sentAt = 0;
       const send = (run: RunSnapshot) => {
@@ -548,8 +600,15 @@ export function registerSubagent(pi: ExtensionAPI): void {
           }, PULSE_MS);
 
       const stoppedBeforeStart = `subagent: ${label} was stopped before it started`;
-      const failed = (error: unknown) =>
-        fail(`${label}: ${errorText(error)}`, error);
+      const failed = (error: unknown, worktree?: WorktreePlan) =>
+        fail(
+          `${label}: ` +
+            (worktree
+              ? `created worktree ${worktree.path} on branch ${worktree.branch}; it is empty — `
+              : "") +
+            errorText(error),
+          error,
+        );
       // From the store while the child is live, else the last snapshot this call sent: the
       // store is empty once the child has ended, or when a reload cleared it mid-run.
       const ended = (
@@ -579,6 +638,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
             store.apply(id, { type: "start", snapshot: sent });
             send(sent);
           }
+          if (call.worktree !== undefined)
+            await addWorktree(call.parentKey, call.worktree, childSignal);
           const trusted =
             resumed !== undefined
               ? resumed.trusted
@@ -599,19 +660,18 @@ export function registerSubagent(pi: ExtensionAPI): void {
               session: resumed
                 ? { resume: resumed.sessionFile }
                 : parentFile
-                  ? {
-                      dir: join(
-                        dirname(parentFile),
-                        basename(parentFile, ".jsonl"),
-                      ),
-                      parent: parentFile,
-                    }
+                  ? { dir: childSessionDir(parentFile), parent: parentFile }
                   : undefined,
             },
             childSignal,
             (event) => store.apply(id, event),
           );
           const { text, spillFile } = await answer(label, id, result);
+          const noted = call.worktree
+            ? worktreeNote(call.worktree, result.status === "done")
+            : call.worktreeWhy === undefined
+              ? ""
+              : `${call.worktreeWhy}; writing in-tree: NOT isolated from your uncommitted files.\n`;
           if (result.sessionFile !== undefined && result.sessionFile !== "")
             records.set(id, {
               id,
@@ -628,7 +688,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           return {
             ...ended(
               result.status,
-              text,
+              noted + text,
               result.status !== "done" || !result.text,
               { sessionFile: result.sessionFile, spillFile },
             ),
@@ -650,7 +710,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         } catch (error: unknown) {
           // Cancelled before the child started: let Pi see its own cancellation.
           if (childSignal.aborted) throw error;
-          throw failed(error);
+          throw failed(error, call.worktree);
         }
         // Only a foreground result needs the id tag: a background one's delivered header carries it.
         return {
@@ -666,7 +726,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         .catch((error: unknown) =>
           childSignal.aborted
             ? ended("aborted", stoppedBeforeStart)
-            : ended("failed", failed(error).message),
+            : ended("failed", failed(error, call.worktree).message),
         )
         .then((outcome) => {
           if (born !== generation) return;
@@ -723,6 +783,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           ...summary(run),
           ["muted", run.activity ? ` · ${run.activity}` : ""],
           ...runTime(run),
+          ["muted", run.worktree ? " · worktree" : ""],
         ]);
       return toolRow(theme, [
         ["success", "✓ done"],

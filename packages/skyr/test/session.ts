@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,8 +48,30 @@ export async function parentSession(o: {
   /** Agent files by file name, written to the user's and the repo's agents dirs. */
   userAgents?: Record<string, string>;
   repoAgents?: Record<string, string>;
+  /** Make the parent's cwd a git repo with one seed commit (for worktree-y tests). */
+  git?: boolean;
 }): Promise<Parent> {
   const cwd = tmp("cwd");
+  if (o.git) {
+    execFileSync("git", ["-C", cwd, "init"], { stdio: "ignore" });
+    writeFileSync(join(cwd, "seed.txt"), "seed\n");
+    execFileSync("git", ["-C", cwd, "add", "."], { stdio: "ignore" });
+    execFileSync(
+      "git",
+      [
+        "-C",
+        cwd,
+        "-c",
+        "user.name=skyr-test",
+        "-c",
+        "user.email=skyr-test@example.com",
+        "commit",
+        "-m",
+        "seed",
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+  }
   const sessionDir = tmp("sessions");
   const agentDir = tmp("agent");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -127,6 +150,30 @@ export async function parentSession(o: {
 export function scratchDir(name: string): string {
   const dir = tmp(name);
   onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+/** A temp git repo with one seed commit, removed when the test ends. */
+export function gitRepo(name: string): string {
+  const dir = scratchDir(name);
+  execFileSync("git", ["-C", dir, "init"], { stdio: "ignore" });
+  writeFileSync(join(dir, "seed.txt"), "seed\n");
+  execFileSync("git", ["-C", dir, "add", "."], { stdio: "ignore" });
+  execFileSync(
+    "git",
+    [
+      "-C",
+      dir,
+      "-c",
+      "user.name=skyr-test",
+      "-c",
+      "user.email=skyr-test@example.com",
+      "commit",
+      "-m",
+      "seed",
+    ],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
   return dir;
 }
 

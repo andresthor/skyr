@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const SECRET_ENV =
-  /_(API_KEY|TOKEN)$|^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|PROFILE)$|^GOOGLE_(APPLICATION_CREDENTIALS|CLOUD_PROJECT)$|^AZURE_/;
+  /_(API_KEY|TOKEN)$|^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|PROFILE)$|^GOOGLE_(APPLICATION_CREDENTIALS|CLOUD_PROJECT)$|^AZURE_|^CORTI_/;
 
 process.env.HOME = mkdtempSync(join(tmpdir(), "skyr-test-home-"));
 // Not under HOME, so code that hardcodes ~/.pi instead of calling getAgentDir() misses it.

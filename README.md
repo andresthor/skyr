@@ -28,6 +28,42 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
   session with its own context and returns only its final answer. Several calls in one turn run
   in parallel, and Esc stops them.
 
+## Voice
+
+`ctrl+space` (or `/voice`) starts dictating into the input editor: spoken words commit at the
+cursor as plain text, with the interim ones following the cursor as ghost text. Esc cancels and
+puts the editor back the way it was, Enter stops without sending (the next Enter sends), so text
+is never auto-sent. Quiet only asks the server for the pending final early — it never ends a
+dictation. Without `CORTI_*` credentials, `/voice` says so in one line and does nothing else.
+
+Credentials, like every other secret here, come from the environment:
+
+```
+CORTI_ENVIRONMENT          e.g. eu
+CORTI_TENANT_NAME          the tenant realm
+CORTI_CLIENT_ID
+CORTI_CLIENT_SECRET
+```
+
+Behaviour knobs live in `<agentDir>/skyr.json` under the `voice` key:
+
+```json
+{
+  "voice": {
+    "language": "en-US",
+    "interims": true,
+    "punctuation": "automatic",
+    "keyterms": ["TypeScript"],
+    "replacements": [{ "find": "type script", "replace": "TypeScript" }]
+  }
+}
+```
+
+`keyterms` and `replacements` are appended to the built-in coding vocabulary; edits apply on the
+next session. A malformed section degrades to the defaults and is said once at startup, never a
+startup failure. Term caps are Corti's: 50 chars / 5 words per keyterm, 100 chars / 10 words per
+replacement, 1,000 per connection.
+
 ## Subagents
 
 An agent is a markdown file. The frontmatter describes it; the body is added to its system

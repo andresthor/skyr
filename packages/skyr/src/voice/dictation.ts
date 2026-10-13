@@ -1,0 +1,319 @@
+/**
+ * The dictation state machine, free of any TUI:
+ *
+ *   idle ─toggle→ arming ─CONFIG_ACCEPTED→ listening ─toggle / enter→ transcribing ─finals drained→ idle
+ *                   └──────────── any failure ───────────→ error ─(hold)→ idle
+ *
+ * Quiet never stops a dictation: people pause to think. It only asks the server for
+ * the pending final early, so a stop has little left to wait for.
+ *
+ * Text goes to a `DictationSink` (the editor); levels go to the indicator's history.
+ */
+import type { Readable } from "node:stream";
+import {
+  type SessionOptions,
+  type SttSession,
+  startSession,
+} from "./client.js";
+import type { SttCredentials } from "./credentials.js";
+import { VoiceError, voiceErrorLine } from "./errors.js";
+import { micSource } from "./mic.js";
+
+export type VoiceState =
+  | "idle"
+  | "arming"
+  | "listening"
+  | "transcribing"
+  | "error";
+
+export interface DictationSink {
+  /** A dictation is starting; remember whatever is needed to undo it. */
+  begin(): void;
+  /** Provisional text of the current segment, replacing the previous interim. */
+  interim(segment: string): void;
+  /** A finished segment: commit it into the buffer at the cursor. */
+  final(segment: string): void;
+  /** Dictation over; drop any provisional text. */
+  end(): void;
+  /** Esc: put the buffer back the way `begin()` found it. */
+  revert(): void;
+}
+
+export interface DictationTiming {
+  /** Keep capturing after a manual stop so the last word is not clipped. */
+  tailMs: number;
+  /** Ask for the segment's final after this much quiet, so a stop has little left to drain. */
+  flushMs: number;
+  /** Give up with "nothing heard" when no speech arrives this long after start. */
+  noSpeechMs: number;
+  /** Hard cap on one dictation; stops and keeps, as if toggled. */
+  maxMs: number;
+  /** Give up if the server has not accepted the session by then. */
+  armTimeoutMs: number;
+  /** How long an error line stays up. */
+  errorHoldMs: number;
+}
+
+export const DEFAULT_TIMING: DictationTiming = {
+  tailMs: 400,
+  flushMs: 900,
+  noSpeechMs: 8000,
+  maxMs: 120_000,
+  armTimeoutMs: 10_000,
+  errorHoldMs: 4000,
+};
+
+/** Meter level that counts as someone speaking; room noise sits around 0.05–0.15, speech well above. */
+const SPEECH_LEVEL = 0.15;
+/** ~1.5 s of chunks that are exactly zero: macOS hands a mic-denied process silence, not an error. */
+const ZERO_CHUNKS_BLOCKED = 24;
+
+/** RMS (0..1 of full scale) to a perceptual 0..1 for the meter; linear reads as flat. */
+export function levelFromRms(rms: number): number {
+  return Math.min(1, ((rms * 32768) / 2500) ** 0.6);
+}
+
+export interface DictationControllerOptions {
+  creds: SttCredentials;
+  sink: DictationSink;
+  /** The Corti config fields, resolved from the skyr.json voice section by registerVoice;
+   * read at every `start`, so the owning object may be updated between sessions. */
+  language?: string;
+  interims?: boolean;
+  punctuation?: "automatic" | "spoken";
+  keyterms?: readonly string[];
+  replacements?: readonly { find: string; replace: string }[];
+  onChange: () => void;
+  onLevel?: (level: number) => void;
+  source?: () => Readable;
+  timing?: Partial<DictationTiming>;
+  start?: (o: SessionOptions) => SttSession;
+  now?: () => number;
+}
+
+export class DictationController {
+  state: VoiceState = "idle";
+  /** When the current state began, for the indicator's state-relative animation. */
+  stateSince = 0;
+  listeningSince = 0;
+  message = "";
+
+  private session: SttSession | undefined;
+  private readonly timing: DictationTiming;
+  private readonly now: () => number;
+  private timers = new Set<ReturnType<typeof setTimeout>>();
+  private quietStartTimer: ReturnType<typeof setTimeout> | undefined;
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private heardSpeech = false;
+  private zeroChunks = 0;
+  private pendingInterim = "";
+  private finals = 0;
+  private generation = 0;
+
+  constructor(private readonly o: DictationControllerOptions) {
+    this.timing = { ...DEFAULT_TIMING, ...o.timing };
+    this.now = o.now ?? Date.now;
+  }
+
+  get active(): boolean {
+    return (
+      this.state === "arming" ||
+      this.state === "listening" ||
+      this.state === "transcribing"
+    );
+  }
+
+  /** The trigger: start when idle, stop-and-keep when capturing, ignored while draining. */
+  toggle(): void {
+    if (this.state === "idle" || this.state === "error") this.start();
+    else if (this.state === "arming" || this.state === "listening")
+      this.finish();
+  }
+
+  start(): void {
+    this.clearTimers();
+    const gen = ++this.generation;
+    this.heardSpeech = false;
+    this.zeroChunks = 0;
+    this.pendingInterim = "";
+    this.finals = 0;
+    this.o.sink.begin();
+    this.setState("arming");
+    const live = () => gen === this.generation;
+    this.later(this.timing.armTimeoutMs, () => {
+      if (live() && this.state === "arming")
+        this.fail(new VoiceError("network", "Corti didn't answer"));
+    });
+    this.quietStartTimer = this.later(this.timing.noSpeechMs, () => {
+      if (
+        live() &&
+        !this.heardSpeech &&
+        (this.state === "arming" || this.state === "listening")
+      )
+        this.fail(new VoiceError("mic", "nothing heard"));
+    });
+    this.later(
+      this.timing.maxMs,
+      () => live() && this.state === "listening" && this.finish(0),
+    );
+    this.session = (this.o.start ?? startSession)({
+      creds: this.o.creds,
+      source: this.o.source ?? micSource,
+      language: this.o.language,
+      interims: this.o.interims,
+      punctuation: this.o.punctuation,
+      keyterms: this.o.keyterms,
+      replacements: this.o.replacements,
+      onReady: () => {
+        if (!live() || this.state !== "arming") return;
+        this.listeningSince = this.now();
+        this.setState("listening");
+      },
+      onInterim: (segment) => {
+        if (!live()) return;
+        this.pendingInterim = segment;
+        this.o.sink.interim(segment);
+      },
+      onFinal: (segment) => {
+        if (!live()) return;
+        this.pendingInterim = "";
+        this.finals++;
+        this.o.sink.final(segment);
+        this.o.onChange();
+      },
+      onLevel: (rms) => live() && this.level(rms),
+      onError: (err) => live() && this.fail(err),
+    });
+  }
+
+  /** Stop and keep: capture a short tail, then drain the finals. */
+  finish(tailMs = this.timing.tailMs): void {
+    if (this.state !== "arming" && this.state !== "listening") return;
+    const gen = this.generation;
+    const session = this.session;
+    const wasArming = this.state === "arming";
+    if (this.flushTimer) this.cancelTimer(this.flushTimer);
+    this.setState("transcribing");
+    this.later(wasArming ? 0 : tailMs, () => {
+      if (gen !== this.generation || !session) return;
+      session.stop().then(() => {
+        if (gen !== this.generation || this.state !== "transcribing") return;
+        // a segment whose final never came is still better kept than lost
+        if (this.pendingInterim) this.o.sink.final(this.pendingInterim);
+        else if (this.finals === 0)
+          return this.fail(new VoiceError("mic", "nothing heard"));
+        this.done();
+      });
+    });
+  }
+
+  /** Esc: stop everything and restore the editor. */
+  cancel(): void {
+    if (!this.active) return;
+    this.generation++;
+    this.session?.cancel();
+    this.session = undefined;
+    this.clearTimers();
+    this.o.sink.end();
+    this.o.sink.revert();
+    this.setState("idle");
+  }
+
+  /** Any keypress clears an error line early. */
+  dismiss(): void {
+    if (this.state !== "error") return;
+    this.clearTimers();
+    this.setState("idle");
+  }
+
+  /** session_shutdown: no callbacks, no timers, nothing on screen. */
+  dispose(): void {
+    this.generation++;
+    this.session?.cancel();
+    this.session = undefined;
+    this.clearTimers();
+    this.state = "idle";
+  }
+
+  private done(): void {
+    this.generation++;
+    this.session = undefined;
+    this.clearTimers();
+    this.o.sink.end();
+    this.setState("idle");
+  }
+
+  private fail(err: unknown): void {
+    this.generation++;
+    this.session?.cancel();
+    this.session = undefined;
+    this.clearTimers();
+    // finals already committed stay; only the provisional text goes
+    this.o.sink.end();
+    this.message = voiceErrorLine(err);
+    this.setState("error");
+    const gen = this.generation;
+    this.later(this.timing.errorHoldMs, () => {
+      if (gen === this.generation && this.state === "error")
+        this.setState("idle");
+    });
+  }
+
+  private level(rms: number): void {
+    const level = levelFromRms(rms);
+    this.o.onLevel?.(level);
+    if (this.state !== "listening" && this.state !== "arming") return;
+    if (rms === 0) {
+      if (++this.zeroChunks >= ZERO_CHUNKS_BLOCKED && !this.heardSpeech) {
+        this.fail(
+          new VoiceError(
+            "mic",
+            "microphone blocked · System Settings › Privacy",
+          ),
+        );
+      }
+      return;
+    }
+    this.zeroChunks = -Infinity;
+    if (level > SPEECH_LEVEL) {
+      this.heardSpeech = true;
+      if (this.quietStartTimer) this.cancelTimer(this.quietStartTimer);
+      this.quietStartTimer = undefined;
+    }
+    if (this.state === "listening" && level > SPEECH_LEVEL) {
+      const gen = this.generation;
+      if (this.flushTimer) this.cancelTimer(this.flushTimer);
+      this.flushTimer = this.later(this.timing.flushMs, () => {
+        if (gen === this.generation && this.state === "listening")
+          this.session?.flush?.();
+      });
+    }
+  }
+
+  private setState(s: VoiceState): void {
+    this.state = s;
+    this.stateSince = this.now();
+    this.o.onChange();
+  }
+
+  private later(ms: number, fn: () => void): ReturnType<typeof setTimeout> {
+    const t = setTimeout(() => {
+      this.timers.delete(t);
+      fn();
+    }, ms);
+    this.timers.add(t);
+    return t;
+  }
+
+  private cancelTimer(t: ReturnType<typeof setTimeout>): void {
+    clearTimeout(t);
+    this.timers.delete(t);
+  }
+
+  private clearTimers(): void {
+    for (const t of this.timers) clearTimeout(t);
+    this.timers.clear();
+    this.quietStartTimer = undefined;
+    this.flushTimer = undefined;
+  }
+}

@@ -9,11 +9,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
   ExtensionFactory,
   ModelRegistry,
-  ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { loadPi } from "../pi.js";
 import { processRunner } from "./child/proc-runner.js";
-import { copyProviders, runChildSession } from "./child/spec-session.js";
+import { runChildSession } from "./child/spec-session.js";
 import type { ChildSpec, Runner } from "./child/types.js";
 
 export type {

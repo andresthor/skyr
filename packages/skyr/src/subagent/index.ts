@@ -1001,7 +1001,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
     if (!ctx.hasUI) return;
     const draw = () => {
       const lines = widgetLines();
-      ctx.ui.setWidget(WIDGET_KEY, lines);
+      // A reload or session replacement between ticks leaves ctx stale; pi reports a throw
+      // from a handler, but a timer callback is not one, so the draw dead-stops instead.
+      try {
+        ctx.ui.setWidget(WIDGET_KEY, lines);
+      } catch {
+        stopTick();
+        return;
+      }
       // The clock in each line moves only while something is live.
       if (lines && !widgetTick) widgetTick = setInterval(draw, 1000);
       if (!lines) stopTick();

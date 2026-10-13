@@ -167,6 +167,17 @@ const fail = (detail: string, cause?: unknown) =>
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+/** The errno of a filesystem error ("ENOENT", …), "fs error" when it has none. */
+const errnoOf = (error: unknown): string => {
+  const code =
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : undefined;
+  return code ?? "fs error";
+};
+
 /** The directory where one session's child sessions live, next to the parent's .jsonl. */
 function childSessionDir(parentFile: string | undefined): string | undefined {
   return parentFile === undefined
@@ -222,11 +233,18 @@ async function answer(
     maxLines: DEFAULT_MAX_LINES,
   });
   if (!cut.truncated) return { text: result.text };
-  const spillFile = await spill(id, result.text);
-  return {
-    text: `${cut.content}\n\n[Truncated: the full answer is in ${spillFile}]`,
-    spillFile,
-  };
+  try {
+    const spillFile = await spill(id, result.text);
+    return {
+      text: `${cut.content}\n\n[Truncated: the full answer is in ${spillFile}]`,
+      spillFile,
+    };
+  } catch {
+    // ENOSPC or an unwritable temp dir must not cost the model the capped answer it paid for.
+    return {
+      text: `${cut.content}\n\n[Truncated: the full answer could not be saved to disk]`,
+    };
+  }
 }
 
 /** Saved details can be `{}` from a call that threw, or from an older shape. */
@@ -325,21 +343,28 @@ export function registerSubagent(pi: ExtensionAPI): void {
     let parentKey: string;
     try {
       parentKey = realpathSync(ctx.cwd);
-    } catch {
+    } catch (error: unknown) {
       throw fail(
-        `the working directory ${ctx.cwd} no longer exists; tell the user to restart Pi in an existing directory`,
+        `the working directory ${ctx.cwd} cannot be resolved (${errnoOf(error)}); tell the user to restart Pi in an existing directory`,
       );
     }
+    const message = `pass an existing directory, absolute or relative to ${ctx.cwd}`;
     const cwd = resolve(ctx.cwd, params.cwd ?? ".");
     let key: string;
     try {
       key = realpathSync(cwd);
-      if (!statSync(key).isDirectory()) throw new Error("not a directory");
-    } catch {
+    } catch (error: unknown) {
       throw fail(
-        `cwd ${JSON.stringify(clip(params.cwd ?? "."))} is not a directory (looked at ${clip(cwd)}); pass an existing directory, absolute or relative to ${ctx.cwd}`,
+        `cwd ${JSON.stringify(clip(params.cwd ?? "."))} does not resolve (${errnoOf(error)}) (looked at ${clip(cwd)}); ${message}`,
       );
     }
+    // A broken entry cannot survive a successful realpath, so undefined means a same-line
+    // deletion: rare, but the honest word for it is the same.
+    const entry = statSync(key, { throwIfNoEntry: false });
+    if (entry !== undefined && !entry.isDirectory())
+      throw fail(
+        `cwd ${JSON.stringify(clip(params.cwd ?? "."))} is not a directory (looked at ${clip(key)}); ${message}`,
+      );
     const writer = tools.includes("edit") || tools.includes("write");
     let worktree: WorktreePlan | undefined;
     let worktreeWhy: string | undefined;
@@ -412,13 +437,15 @@ export function registerSubagent(pi: ExtensionAPI): void {
     const [match] = matches;
     if (!match) throw fail(`no subagent matches "${clip(prefix)}"`);
     const record = match[1];
-    try {
-      statSync(record.cwd);
-    } catch {
+    const entry = statSync(record.cwd, { throwIfNoEntry: false });
+    if (entry === undefined)
       throw fail(
         `the subagent's working directory ${clip(record.cwd)} no longer exists; start a fresh subagent instead`,
       );
-    }
+    if (!entry.isDirectory())
+      throw fail(
+        `the subagent's working directory ${clip(record.cwd)} is not a directory anymore; start a fresh subagent instead`,
+      );
     if (runningContinues.has(record.id))
       throw fail(
         `subagent ${record.id.slice(0, 8)} already has a run in progress; wait for it to finish`,

@@ -8,16 +8,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
   ExtensionFactory,
   ModelRegistry,
+  ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 import { loadPi } from "../pi.js";
 import { processRunner } from "./child/proc-runner.js";
-import { type Providers, runChildSession } from "./child/spec-session.js";
-import type {
-  ChildEvent,
-  ChildResult,
-  ChildSpec,
-  Runner,
-} from "./child/types.js";
+import { copyProviders, runChildSession } from "./child/spec-session.js";
+import type { ChildSpec, Runner } from "./child/types.js";
 
 export type {
   ChildEvent,
@@ -27,22 +23,25 @@ export type {
   Usage,
 } from "./child/types.js";
 
+/** How the parent's providers name themselves for the copy; both runners agree on this. */
+export type Providers = Pick<
+  ModelRegistry,
+  | "getRegisteredProviderIds"
+  | "getRegisteredNativeProvider"
+  | "getRegisteredProviderConfig"
+>;
+
 /**
  * `providers` are copied into each child's own model runtime, since the parent's is private;
  * `--api-key` keys and virtual models do not carry over. `registerTools` is the child's only
  * extension: Pi's and the user's extensions, skills and prompt templates stay off.
  */
 export function inProcessRunner(
-  providers: Pick<
-    ModelRegistry,
-    | "getRegisteredProviderIds"
-    | "getRegisteredNativeProvider"
-    | "getRegisteredProviderConfig"
-  >,
+  providers: Providers,
   registerTools: ExtensionFactory,
 ): Runner {
   return {
-    async run(spec, signal, onEvent) {
+    async run(spec: ChildSpec, signal, onEvent) {
       return runChildSession(spec, {
         providers,
         registerTools,
@@ -53,11 +52,8 @@ export function inProcessRunner(
   };
 }
 
-/** The smoke probe runs once per process; its verdict is whether the child entry can load. */
-let probed: boolean | undefined;
-
 /**
- * The child is a TypeScript entry whose sibling imports are .js specifiers into .ts files,
+ * The child is a TypeScript entry whose sibling imports are .js specifiers naming .ts files,
  * exactly as Pi's own extension tree does. Pi loads those through jiti; the child's spawn
  * does the same with jiti resolved from Pi's own dependency set.
  */
@@ -73,6 +69,7 @@ async function childLoaderArgs(): Promise<string[]> {
   return [];
 }
 
+/** One `--smoke` child: whether the child entry can load and speak the protocol. */
 async function probeProcRunner(): Promise<boolean> {
   const entry = fileURLToPath(new URL("./child/main.ts", import.meta.url));
   const loader = await childLoaderArgs();
@@ -96,20 +93,15 @@ async function probeProcRunner(): Promise<boolean> {
 }
 
 /**
- * Does the model a child would get (the agent dir's file config alone) resolve this model,
- * AND does the same model NOT resolve through the parent's providers? A model both resolve
- * composes differently in the child; the parent's effective config is the one that runs, so
- * those stay in-process. A parent-runtime-only model (faux, registered provider, --api-key
- * key) is the in-process runner's case; the preflight fails soft, never failing the call.
+ * Does this model resolve in the file-only runtime a child gets, and NOT in the runtime the
+ * parent's providers compose? A model both resolve composes differently in the child: the
+ * parent's effective config is the one that runs, so those stay in-process. The preflight
+ * fails soft — a call that always worked must never start failing here.
  */
-async function childModelResolves(
-  providers: Pick<
-    ModelRegistry,
-    | "getRegisteredProviderIds"
-    | "getRegisteredNativeProvider"
-    | "getRegisteredProviderConfig"
-  >,
+async function canSpawnModelFor(
+  providers: Providers,
   model: string,
+  state: { mixed?: ModelRuntime },
 ): Promise<boolean> {
   try {
     const pi = await loadPi();
@@ -118,53 +110,44 @@ async function childModelResolves(
       authPath: join(agentDir, "auth.json"),
       modelsPath: join(agentDir, "models.json"),
     });
-    const fileModel = pi.resolveCliModel({
-      cliModel: model,
-      modelRuntime: fileRuntime,
-    }).model;
-    if (!fileModel) return false;
-    mixedRuntime ??= await pi.ModelRuntime.create({
+    if (
+      !pi.resolveCliModel({ cliModel: model, modelRuntime: fileRuntime }).model
+    )
+      return false;
+    state.mixed ??= await pi.ModelRuntime.create({
       authPath: join(agentDir, "auth.json"),
       modelsPath: join(agentDir, "models.json"),
     });
-    for (const id of providers.getRegisteredProviderIds()) {
-      const native = providers.getRegisteredNativeProvider(id);
-      const config = providers.getRegisteredProviderConfig(id);
-      if (native) mixedRuntime.registerNativeProvider(native);
-      else if (config) mixedRuntime.registerProvider(id, config);
-    }
+    copyProviders(providers, state.mixed);
     return !pi.resolveCliModel({
       cliModel: model,
-      modelRuntime: mixedRuntime,
+      modelRuntime: state.mixed,
     }).model;
   } catch {
     return false;
   }
 }
 
-/** One mixed runtime per session: the provider copy loop mutates it, so it is cached. */
-let mixedRuntime:
-  | import("@earendil-works/pi-coding-agent").ModelRuntime
-  | undefined;
-
 /**
- * The session's runner: the subprocess kind when the child entry can load AND the model
- * resolves in a file-only child runtime; else the in-process kind it has always been.
- * Everything else — records, abort wiring, results — flows through the same Runner seam.
+ * The session's runner: the subprocess kind when the child entry can load (smoke probe per
+ * session, POSIX only) and the call's model runs in a child's file-only runtime; else the
+ * in-process kind it has always been. Records, abort wiring and results flow through the
+ * same Runner seam whichever way the call lands.
  */
 export function runnerFor(
-  providers: Pick<
-    ModelRegistry,
-    | "getRegisteredProviderIds"
-    | "getRegisteredNativeProvider"
-    | "getRegisteredProviderConfig"
-  >,
+  providers: Providers,
   registerTools: ExtensionFactory,
 ): Runner {
+  const inProcess = inProcessRunner(providers, registerTools);
+  const state: { canSpawn?: boolean; mixed?: ModelRuntime } = {};
   return {
     async run(spec, signal, onEvent) {
-      probed ??= await probeProcRunner();
-      if (probed && (await childModelResolves(providers, spec.model))) {
+      state.canSpawn ??=
+        (await probeProcRunner()) && process.platform !== "win32";
+      if (
+        state.canSpawn &&
+        (await canSpawnModelFor(providers, spec.model, state))
+      ) {
         const entry = fileURLToPath(
           new URL("./child/main.ts", import.meta.url),
         );
@@ -174,11 +157,7 @@ export function runnerFor(
           onEvent,
         );
       }
-      return inProcessRunner(providers, registerTools).run(
-        spec,
-        signal,
-        onEvent,
-      );
+      return inProcess.run(spec, signal, onEvent);
     },
   };
 }

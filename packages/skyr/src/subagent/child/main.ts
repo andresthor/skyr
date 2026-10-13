@@ -6,15 +6,13 @@
  */
 
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Providers } from "./spec-session.js";
-import { runChildSession } from "./spec-session.js";
+import { PROTOCOL, writeJson, zeroUsage } from "./protocol.js";
+import { type Providers, runChildSession } from "./spec-session.js";
 import { registerChildTools } from "./tools.js";
-import type { ChildEvent, ChildResult, ChildSpec, Usage } from "./types.js";
-
-const PROTOCOL = 1;
+import type { ChildEvent, ChildResult, ChildSpec } from "./types.js";
 
 interface Snapshot {
   v: number;
@@ -35,30 +33,6 @@ interface StoredResult extends ChildResult {
   description: string;
   agent?: string;
 }
-
-const EMPTY_USAGE: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-async function writeJson(target: string, data: unknown): Promise<void> {
-  const temp = `${target}.tmp-${process.pid}`;
-  await writeFile(temp, JSON.stringify(data), "utf8");
-  await rename(temp, target);
-}
-
-/** The one Usage shape the store sums; anything else falls back to zeros. */
-const usageOf = (u: unknown): Usage => {
-  if (typeof u !== "object" || u === null) return EMPTY_USAGE;
-  const r = u as Record<string, unknown>;
-  return typeof r.input === "number" && typeof r.output === "number"
-    ? (u as Usage)
-    : EMPTY_USAGE;
-};
 
 const readSpec = (raw: unknown): { spec: ChildSpec } | { invalid: string } => {
   if (typeof raw !== "object" || raw === null)
@@ -118,7 +92,7 @@ export async function runChild(
       status: "failed",
       text: undefined,
       error: "invalid spec: unreadable spec.json",
-      usage: EMPTY_USAGE,
+      usage: zeroUsage(),
       sessionFile: undefined,
       description: "",
     };
@@ -130,9 +104,9 @@ export async function runChild(
       status: "failed",
       text: undefined,
       error: `invalid spec: ${shape.invalid}`,
-      usage: EMPTY_USAGE,
+      usage: zeroUsage(),
       sessionFile: undefined,
-      description: "",
+      description: "invalid spec",
     };
   const spec = shape.spec;
   const failed = (error: string): StoredResult => ({
@@ -140,7 +114,7 @@ export async function runChild(
     status: "failed",
     text: undefined,
     error,
-    usage: EMPTY_USAGE,
+    usage: zeroUsage(),
     sessionFile: undefined,
     description: spec.description,
     ...(spec.agent !== undefined ? { agent: spec.agent } : {}),
@@ -204,17 +178,13 @@ export async function runChild(
       onEvent,
     });
   } catch (error: unknown) {
-    result = {
-      status: "failed",
-      text: undefined,
-      error: terminated
+    result = failed(
+      terminated
         ? "stopped"
         : error instanceof Error
           ? error.message
           : String(error),
-      usage: EMPTY_USAGE,
-      sessionFile: undefined,
-    };
+    );
   }
   stopped = true;
   clearInterval(tick);
@@ -250,7 +220,7 @@ const main = () => {
           status: "done",
           text: undefined,
           error: undefined,
-          usage: EMPTY_USAGE,
+          usage: zeroUsage(),
           sessionFile: undefined,
           description: "smoke",
         }),

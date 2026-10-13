@@ -4,7 +4,7 @@
  * extensions, so it never gets this tool itself.
  */
 import { randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import type {
@@ -118,6 +118,8 @@ interface Call {
   key: string;
   parentKey: string;
   background: boolean;
+  /** The trimmed description; the label's description half. */
+  description: string;
   /** The child's id, minted at resolve time so a reserved worktree shares it. */
   id: string;
   /** Present: a worktree was reserved for a bare writer; the child runs inside it. */
@@ -140,6 +142,8 @@ interface ChildRecord {
   trusted: boolean;
   systemPrompt: string;
   sessionFile: string;
+  /** A bare writer's worktree: a continued run writes the same tree again. */
+  worktree?: WorktreePlan;
 }
 
 /** A writer's place in its directory's queue. */
@@ -296,9 +300,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
     if (params.continue !== undefined)
       return resolveContinue(params, params.continue.trim());
     const childId = randomUUID();
+    const description = params.description.trim();
+    if (description === "")
+      throw fail(
+        "give a short description: 3-5 words for the user, in description",
+      );
     const label = labelOf({
       agent: agent?.name,
-      description: params.description,
+      description,
     });
     const model =
       params.model ??
@@ -335,12 +344,16 @@ export function registerSubagent(pi: ExtensionAPI): void {
     let worktree: WorktreePlan | undefined;
     let worktreeWhy: string | undefined;
     if (writer && params.cwd === undefined) {
-      // The same child-session dir the runner would use: the worktree sits beside it.
+      // The worktree's slice of the session dir must keep the canonical spelling (realpath),
+      // so a later bare writer naming "the worktree" resolves to the same slot key.
       const parentFile = ctx.sessionManager.getSessionFile();
       const sessionDir =
         parentFile === undefined
           ? undefined
-          : join(dirname(parentFile), basename(parentFile, ".jsonl"));
+          : join(
+              realpathSync(dirname(parentFile)),
+              basename(parentFile, ".jsonl"),
+            );
       const planned = planWorktree(
         cwd,
         sessionDir,
@@ -357,6 +370,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       tools,
       writer,
       systemPrompt: [agent?.body, params.prompt].filter(Boolean).join("\n\n"),
+      description,
       cwd: worktree !== undefined ? worktree.path : cwd,
       key: worktree !== undefined ? worktree.path : key,
       parentKey,
@@ -412,6 +426,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
     runningContinues.add(record.id);
     return {
       agent: record.agent,
+      description: params.description.trim(),
+      worktree: record.worktree,
       label: labelOf({ agent: record.agent, description: params.description }),
       model: record.model,
       tools: record.tools,
@@ -935,6 +951,15 @@ export function registerSubagent(pi: ExtensionAPI): void {
         },
         isError: stored.status !== "done",
       });
+      // A recovered bare writer keeps stating its worktree: the writes live on there.
+      const worktreeDir = join(base, "worktrees", entry.name.slice(0, 8));
+      if (existsSync(worktreeDir)) {
+        const outcome = recovered[recovered.length - 1];
+        if (outcome === undefined) continue;
+        outcome.text =
+          `Ran in worktree ${worktreeDir} — its writes are uncommitted there; nothing deletes it\n` +
+          outcome.text;
+      }
     }
     return recovered;
   }

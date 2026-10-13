@@ -7,6 +7,7 @@ import type {
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import { loadPi } from "../../pi.js";
+import { zeroUsage } from "./protocol.js";
 import type {
   AssistantMessage,
   ChildEvent,
@@ -23,6 +24,24 @@ export type Providers = Pick<
   | "getRegisteredProviderConfig"
 >;
 
+/** Copies the parent's registered providers into a child runtime; both runners share this. */
+export function copyProviders(
+  providers: Pick<
+    ModelRegistry,
+    | "getRegisteredProviderIds"
+    | "getRegisteredNativeProvider"
+    | "getRegisteredProviderConfig"
+  >,
+  target: import("@earendil-works/pi-coding-agent").ModelRuntime,
+): void {
+  for (const id of providers.getRegisteredProviderIds()) {
+    const native = providers.getRegisteredNativeProvider(id);
+    const config = providers.getRegisteredProviderConfig(id);
+    if (native) target.registerNativeProvider(native);
+    else if (config) target.registerProvider(id, config);
+  }
+}
+
 export interface ChildRun {
   /** Absent: the child resolves model/auth from the agent dir's auth.json + models.json alone. */
   providers?: Providers;
@@ -32,16 +51,7 @@ export interface ChildRun {
   onEvent: (event: ChildEvent) => void;
 }
 
-function emptyUsage(): Usage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
+const emptyUsage = () => zeroUsage();
 
 function addUsage(a: Usage, b: Usage): Usage {
   return {

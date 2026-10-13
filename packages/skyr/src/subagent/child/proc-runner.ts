@@ -10,8 +10,7 @@ import {
 } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import type { ChildEvent, ChildResult, ChildSpec, Runner } from "./types.js";
+import type { ChildResult, Runner } from "./types.js";
 
 /** Seconds a child gets between SIGTERM and SIGKILL once its abort fires. */
 const GRACE_MS = 3_000;
@@ -114,8 +113,7 @@ export function processRunner(
           process.execPath,
           [...(o?.loader ?? []), entryPath, jobDir],
           {
-            // Nothing raw reaches the parent's terminal: stdout is dropped; stderr joins
-            // only a failure message, clipped, when the child dies without reporting.
+            // Nothing raw reaches the parent's terminal; the tail below explains what stays.
             stdio: ["ignore", "ignore", "pipe"],
             env: process.env,
           },
@@ -185,15 +183,17 @@ export function processRunner(
 
         try {
           const code = await exited(child);
-          const parsed = await readFile(
-            join(jobDir, "result.json"),
-            "utf8",
-          ).then(
-            (raw: string) => JSON.parse(raw) as unknown,
+          const raw = await readFile(join(jobDir, "result.json"), "utf8").then(
+            (body: string) => {
+              try {
+                return JSON.parse(body) as unknown;
+              } catch {
+                return undefined;
+              }
+            },
             () => undefined,
           );
-          const result =
-            parsed === undefined ? undefined : readStoredResult(parsed);
+          const result = raw === undefined ? undefined : readStoredResult(raw);
           if (result === undefined) {
             // Nothing reported: the child never started or died mid-run. Escalation's
             // signal is the outcome.

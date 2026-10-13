@@ -19,9 +19,9 @@ const beat = () =>
       now: Date.now(),
     }),
   );
-let stopped = false;
+let _stopped = false;
 process.on("SIGTERM", () => {
-  stopped = true;
+  _stopped = true;
   write(
     `${dir}/result.json`,
     JSON.stringify({

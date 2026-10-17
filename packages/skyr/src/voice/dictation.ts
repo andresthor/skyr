@@ -117,6 +117,7 @@ export class DictationController {
   private quietStartTimer: ReturnType<typeof setTimeout> | undefined;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private stallTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastChunkAt = 0;
   private heard = false;
   private mic: "waiting" | "open" | "closed" = "closed";
   private sessionAccepted = false;
@@ -312,16 +313,21 @@ export class DictationController {
     const level = levelFromRms(rms);
     this.o.onLevel?.(rms);
     if (this.mic === "waiting") this.mic = "open";
+    this.lastChunkAt = this.now();
     if (this.state !== "listening" && this.state !== "arming") return;
     if (this.stallTimer) this.cancelTimer(this.stallTimer);
     const capturing = this.generation;
-    this.stallTimer = this.later(this.timing.stallMs, () => {
-      if (
-        capturing === this.generation &&
-        (this.state === "listening" || this.state === "arming")
-      )
-        this.fail(new VoiceError("mic", "microphone stopped"));
-    });
+    this.stallTimer = this.later(this.timing.stallMs, () =>
+      // after a long block the timer can run before queued chunks are read; one turn lets them land
+      setImmediate(() => {
+        if (
+          capturing === this.generation &&
+          (this.state === "listening" || this.state === "arming") &&
+          this.now() - this.lastChunkAt >= this.timing.stallMs
+        )
+          this.fail(new VoiceError("mic", "microphone stopped"));
+      }),
+    );
     if (rms === 0) {
       if (++this.zeroChunks >= ZERO_CHUNKS_BLOCKED && !this.heard) {
         this.fail(

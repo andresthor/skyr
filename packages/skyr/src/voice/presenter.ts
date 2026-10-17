@@ -21,7 +21,7 @@ export interface StatusUI {
 
 /** The narrowest shape of the voice editor the presenter needs. */
 export interface RuleEditor {
-  decor: { rule?: VoiceSnapshot };
+  decor: { rule?: VoiceSnapshot; ruleFailed?: boolean };
   readonly focused: boolean;
 }
 
@@ -50,7 +50,8 @@ export function voicePresenter({
   return {
     update(snapshot) {
       const ed = editor();
-      const onRule = ed?.focused === true;
+      // a rule that failed to draw would leave voice invisible, so the footer takes over
+      const onRule = ed?.focused === true && !ed.decor.ruleFailed;
       if (ed) ed.decor.rule = onRule ? snapshot : undefined;
       const row = onRule
         ? undefined

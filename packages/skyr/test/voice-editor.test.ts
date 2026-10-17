@@ -290,6 +290,8 @@ describe("bottom rule", () => {
       throw new Error("theme went away");
     };
     expect(editor.render(40).at(-1)).toBe(`<${"─".repeat(40)}>`);
+    // and the presenter is told, so voice moves to the footer rather than vanishing
+    expect(editor.decor.ruleFailed).toBe(true);
   });
 });
 

@@ -48,6 +48,8 @@ export interface VoiceDecor {
   drying: { chars: number; lead: number; at: number }[];
   /** What the bottom rule shows while voice is on; undefined leaves Pi's own rule. */
   rule?: VoiceSnapshot;
+  /** Drawing the rule threw once: for this editor's life, voice shows in the footer instead. */
+  ruleFailed?: boolean;
   mode?: VoiceMode;
 }
 
@@ -148,7 +150,9 @@ export function createVoiceEditorClass(
             mode,
           });
         if (row !== undefined) return row;
-      } catch {}
+      } catch {
+        this.decor.ruleFailed = true;
+      }
       return super.renderBottomBorder(width, hiddenLineCount);
     }
 

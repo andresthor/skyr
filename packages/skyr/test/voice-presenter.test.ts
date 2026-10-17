@@ -157,3 +157,11 @@ test("the footer carries the rule's advisories, so a hidden editor still hears a
     ),
   ).toBe("voice ○ starting · no audio yet ────────");
 });
+
+test("if the rule ever fails to draw, voice moves to the footer instead of vanishing", () => {
+  const editor: RuleEditor = { decor: { ruleFailed: true }, focused: true };
+  const { ui, present } = setup(editor);
+  present.update(snap());
+  expect(editor.decor.rule).toBeUndefined();
+  expect(stripAnsi(ui.last ?? "")).toMatch(/^voice ● listening /);
+});

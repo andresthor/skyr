@@ -409,8 +409,8 @@ export function spliceGhost(
 
   // faint carries the ghost where the theme's dim is close to its text colour, and under NO_COLOR
   const style = (s: string) => `\x1b[2m\x1b[3m${fg(T.dim, s)}\x1b[23m\x1b[22m`;
-  // server text is untrusted: escape bytes must never reach the terminal, and plain text
-  // lets the wrap cuts land between characters, never inside colour markup
+  // the client strips terminal sequences from server text; stripping again keeps the wrap cuts
+  // between characters, never inside colour markup
   const g = stripAnsi(ghost).replace(/^\s+/, "");
   const sep =
     visibleWidth(beforeText) > paddingX && !/\s$/.test(beforeText) ? " " : "";

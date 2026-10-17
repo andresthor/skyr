@@ -261,6 +261,22 @@ test("transcripts route finals and interims", async () => {
   h.session.cancel();
 });
 
+test("terminal sequences and invisible characters in server text never reach the editor", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  h.sock.server({
+    type: "transcript",
+    data: {
+      text: "clear\x1b[2J the \x1b]52;c;aGk=\x07screen\u202e now",
+      start: 0,
+      isFinal: true,
+    },
+  });
+  expect(h.final).toHaveBeenCalledWith("clear the screen now");
+  h.session.cancel();
+});
+
 test("ended and then a 1006 close is success: the committed text resolves", async () => {
   const h = await drive();
   h.sock.onopen?.();

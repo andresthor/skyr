@@ -5,6 +5,8 @@
  * normal 1006 close after `ended`.
  */
 import type { Readable } from "node:stream";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripInvisible } from "../tools/render.js";
 import type { SttCredentials } from "./credentials.js";
 import { VoiceError } from "./errors.js";
 import { pcmRms } from "./mic.js";
@@ -216,7 +218,8 @@ export function startSession(o: SessionOptions): SttSession {
           fail(new VoiceError("config", "Corti rejected the session"));
         } else if (m.type === "transcript" && m.data) {
           const u = transcript.accept({
-            text: m.data.text ?? "",
+            // server text reaches the screen and the prompt: whole terminal sequences and invisibles go here
+            text: stripInvisible(stripTerminalSequences(m.data.text ?? "")),
             start: m.data.start ?? 0,
             isFinal: m.data.isFinal === true,
           });

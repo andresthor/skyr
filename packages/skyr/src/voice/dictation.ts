@@ -65,12 +65,18 @@ export const DEFAULT_TIMING: DictationTiming = {
 
 /** Meter level that counts as someone speaking; room noise sits around 0.05–0.15, speech well above. */
 const SPEECH_LEVEL = 0.15;
+/** The RMS the level curve calls full scale: ordinary close-mic speech reaches it. */
+const FULL_RMS = 2500 / 32768;
+const LEVEL_CURVE = 0.6;
+/** SPEECH_LEVEL in dBFS, so a display drawing decibels gates exactly where the controller does. */
+export const SPEECH_DBFS =
+  20 * Math.log10(FULL_RMS * SPEECH_LEVEL ** (1 / LEVEL_CURVE));
 /** ~1.5 s of chunks that are exactly zero: macOS hands a mic-denied process silence, not an error. */
 const ZERO_CHUNKS_BLOCKED = 24;
 
 /** RMS (0..1 of full scale) to a perceptual 0..1 for the meter; linear reads as flat. */
 export function levelFromRms(rms: number): number {
-  return Math.min(1, ((rms * 32768) / 2500) ** 0.6);
+  return Math.min(1, (rms / FULL_RMS) ** LEVEL_CURVE);
 }
 
 export interface DictationControllerOptions {
@@ -84,7 +90,8 @@ export interface DictationControllerOptions {
   keyterms?: readonly string[];
   replacements?: readonly { find: string; replace: string }[];
   onChange: () => void;
-  onLevel?: (level: number) => void;
+  /** Each chunk's raw RMS (0..1 of full scale), before the level curve clips it. */
+  onLevel?: (rms: number) => void;
   source?: () => Readable;
   timing?: Partial<DictationTiming>;
   start?: (o: SessionOptions) => SttSession;
@@ -95,7 +102,6 @@ export class DictationController {
   state: VoiceState = "idle";
   /** When the current state began, for the indicator's state-relative animation. */
   stateSince = 0;
-  listeningSince = 0;
   message = "";
 
   private session: SttSession | undefined;
@@ -104,7 +110,9 @@ export class DictationController {
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private quietStartTimer: ReturnType<typeof setTimeout> | undefined;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
-  private heardSpeech = false;
+  private heard = false;
+  private mic: "waiting" | "open" | "closed" = "closed";
+  private sessionAccepted = false;
   private zeroChunks = 0;
   private pendingInterim = "";
   private finals = 0;
@@ -113,6 +121,21 @@ export class DictationController {
   constructor(private readonly o: DictationControllerOptions) {
     this.timing = { ...DEFAULT_TIMING, ...o.timing };
     this.now = o.now ?? Date.now;
+  }
+
+  /** The recorder is delivering audio: from its first chunk until the stop that ends the tail. */
+  get micOpen(): boolean {
+    return this.mic === "open" && this.active;
+  }
+
+  /** The server took the session; before that, audio is only buffered. */
+  get accepted(): boolean {
+    return this.sessionAccepted;
+  }
+
+  /** Something above SPEECH_LEVEL arrived in this dictation. */
+  get heardSpeech(): boolean {
+    return this.heard;
   }
 
   get active(): boolean {
@@ -133,7 +156,9 @@ export class DictationController {
   start(): void {
     this.clearTimers();
     const gen = ++this.generation;
-    this.heardSpeech = false;
+    this.heard = false;
+    this.mic = "waiting";
+    this.sessionAccepted = false;
     this.zeroChunks = 0;
     this.pendingInterim = "";
     this.finals = 0;
@@ -147,7 +172,7 @@ export class DictationController {
     this.quietStartTimer = this.later(this.timing.noSpeechMs, () => {
       if (
         live() &&
-        !this.heardSpeech &&
+        !this.heard &&
         (this.state === "arming" || this.state === "listening")
       )
         this.fail(new VoiceError("mic", "nothing heard"));
@@ -166,7 +191,7 @@ export class DictationController {
       replacements: this.o.replacements,
       onReady: () => {
         if (!live() || this.state !== "arming") return;
-        this.listeningSince = this.now();
+        this.sessionAccepted = true;
         this.setState("listening");
       },
       onInterim: (segment) => {
@@ -196,6 +221,7 @@ export class DictationController {
     this.setState("transcribing");
     this.later(wasArming ? 0 : tailMs, () => {
       if (gen !== this.generation || !session) return;
+      this.mic = "closed";
       session.stop().then(() => {
         if (gen !== this.generation || this.state !== "transcribing") return;
         // a segment whose final never came is still better kept than lost
@@ -261,10 +287,11 @@ export class DictationController {
 
   private level(rms: number): void {
     const level = levelFromRms(rms);
-    this.o.onLevel?.(level);
+    this.o.onLevel?.(rms);
+    if (this.mic === "waiting") this.mic = "open";
     if (this.state !== "listening" && this.state !== "arming") return;
     if (rms === 0) {
-      if (++this.zeroChunks >= ZERO_CHUNKS_BLOCKED && !this.heardSpeech) {
+      if (++this.zeroChunks >= ZERO_CHUNKS_BLOCKED && !this.heard) {
         this.fail(
           new VoiceError(
             "mic",
@@ -276,7 +303,7 @@ export class DictationController {
     }
     this.zeroChunks = -Infinity;
     if (level > SPEECH_LEVEL) {
-      this.heardSpeech = true;
+      this.heard = true;
       if (this.quietStartTimer) this.cancelTimer(this.quietStartTimer);
       this.quietStartTimer = undefined;
     }

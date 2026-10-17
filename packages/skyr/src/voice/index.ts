@@ -27,6 +27,7 @@ import { resolveSttCredentials } from "./credentials.js";
 import {
   DictationController,
   type DictationControllerOptions,
+  levelFromRms,
 } from "./dictation.js";
 import {
   createVoiceEditorClass,
@@ -178,7 +179,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   const controllerOptions: DictationControllerOptions = {
     creds,
     sink,
-    onLevel: (level) => history.push(level),
+    onLevel: (rms) => history.push(levelFromRms(rms)),
     onChange: () => {
       if (controller.state === "arming") {
         history.reset();

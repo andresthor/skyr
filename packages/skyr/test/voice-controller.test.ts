@@ -10,6 +10,8 @@ import type { SttCredentials } from "../src/voice/credentials.js";
 import {
   DictationController,
   type DictationTiming,
+  levelFromRms,
+  SPEECH_DBFS,
 } from "../src/voice/dictation.js";
 
 const CREDS: SttCredentials = {
@@ -52,7 +54,10 @@ class FakeSession implements SttSession {
   };
 }
 
-function harness(timing: Partial<DictationTiming> = TIMING) {
+function harness(
+  timing: Partial<DictationTiming> = TIMING,
+  onLevel?: (rms: number) => void,
+) {
   const events: SinkEvent[] = [];
   const states: string[] = [];
   const sessions: FakeSession[] = [];
@@ -68,6 +73,7 @@ function harness(timing: Partial<DictationTiming> = TIMING) {
       revert: () => events.push({ op: "revert" }),
     },
     onChange: () => states.push(controller.state),
+    onLevel,
     source: () => new PassThrough(),
     start: (o) => {
       options.push(o);
@@ -232,4 +238,47 @@ test("session_shutdown detaches everything: callbacks are dead and state goes id
   h.opts().onReady?.();
   expect(h.events).toHaveLength(since);
   expect(h.controller.state).toBe("idle");
+});
+
+test("the mic counts as open from its first chunk until the tail ends, whatever the server is doing", async () => {
+  const h = harness({ ...TIMING, tailMs: 30 });
+  h.controller.toggle();
+  expect(h.controller.micOpen).toBe(false);
+  expect(h.controller.accepted).toBe(false);
+  // audio flows before the server accepts: it is buffered, and the mic is open
+  h.opts().onLevel?.(0.001);
+  expect(h.controller.micOpen).toBe(true);
+  expect(h.controller.accepted).toBe(false);
+  h.opts().onReady?.();
+  expect(h.controller.accepted).toBe(true);
+  h.controller.finish();
+  // Enter moved the state on, but the tail is still recording
+  expect(h.controller.state).toBe("transcribing");
+  expect(h.controller.micOpen).toBe(true);
+  await vi.waitFor(() => expect(h.sessions[0]?.stopCalls).toBe(1));
+  expect(h.controller.micOpen).toBe(false);
+});
+
+test("heardSpeech latches on the first chunk above the speech threshold, and resets per dictation", () => {
+  const h = harness();
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.opts().onLevel?.(0.0005);
+  expect(h.controller.heardSpeech).toBe(false);
+  h.opts().onLevel?.(0.05);
+  expect(h.controller.heardSpeech).toBe(true);
+  h.controller.cancel();
+  h.controller.toggle();
+  expect(h.controller.heardSpeech).toBe(false);
+});
+
+test("listeners get each chunk's raw RMS, and SPEECH_DBFS is where the level curve crosses speech", () => {
+  const seen: number[] = [];
+  const h = harness(TIMING, (rms) => seen.push(rms));
+  h.controller.toggle();
+  h.opts().onLevel?.(0.5);
+  expect(seen).toEqual([0.5]);
+  const rmsAtGate = 10 ** (SPEECH_DBFS / 20);
+  expect(levelFromRms(rmsAtGate)).toBeCloseTo(0.15, 6);
+  expect(SPEECH_DBFS).toBeCloseTo(-49.8, 1);
 });

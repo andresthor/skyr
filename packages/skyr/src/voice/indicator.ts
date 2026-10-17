@@ -1,6 +1,7 @@
 /**
  * Voice dictation visuals. Pure: state in, ANSI rows out; no I/O, no timers.
  *
+ *   renderRule()          the editor's bottom rule while voice is on: meter, mic light, state, keys
  *   renderStatus()        the one-row footer status artist: state glyph + level bars, SGR allowed
  *   createLevelHistory()  levels in at whatever rate the mic delivers, one smoothed bar per BAR_MS
  *   spliceGhost()         decorates Pi's Editor.render(): dim italic interim after the cursor, freshly
@@ -18,7 +19,7 @@ import {
   parseColor,
   type TerminalColorMode,
 } from "@earendil-works/pi-tui";
-import type { VoiceState } from "./dictation.js";
+import { SPEECH_DBFS, type VoiceState } from "./dictation.js";
 
 export const TICK_MS = 50;
 export const DRY_MS = 300;
@@ -29,7 +30,14 @@ const BAR_MS = 100;
 /** What the terminal can show: `mono` is NO_COLOR (glyphs and attributes, no colour), `ascii` is TERM=dumb. */
 export type VoiceMode = "color" | "mono" | "ascii";
 
-type VoiceToken = "accent" | "text" | "muted" | "dim" | "border" | "error";
+type VoiceToken =
+  | "accent"
+  | "text"
+  | "muted"
+  | "dim"
+  | "border"
+  | "error"
+  | "warning";
 
 /** Theme colours plus the terminal's colour mode, so 256-colour terminals get 256-colour escapes. */
 export interface VoicePalette {
@@ -46,6 +54,7 @@ export const FALLBACK_PALETTE: VoicePalette = {
     dim: parseColor("#666666"),
     border: parseColor("#3f5c12"),
     error: parseColor("#cc6666"),
+    warning: parseColor("#d7af5f"),
   },
   mode: "truecolor",
 };
@@ -59,9 +68,9 @@ interface ThemeLike {
 /** Reads the live theme's token colours so the indicator follows theme switches. */
 export function paletteFromTheme(theme: ThemeLike | undefined): VoicePalette {
   if (!theme) return FALLBACK_PALETTE;
-  const { accent, text, muted, dim, border, error } = theme.colors;
+  const { accent, text, muted, dim, border, error, warning } = theme.colors;
   return {
-    colors: { accent, text, muted, dim, border, error },
+    colors: { accent, text, muted, dim, border, error, warning },
     mode: theme.getColorMode(),
   };
 }
@@ -459,5 +468,234 @@ export function spliceGhost(
     return pad(paddingX) + style(q) + pad(width - paddingX - cellWidth(q));
   });
   out.splice(ci + 1, 0, ...extra);
+  return out;
+}
+
+/** What a voice display needs to know at one moment; the controller and editor own the facts. */
+export interface VoiceSnapshot {
+  state: VoiceState;
+  /** ms since this state began: the finishing ellipsis steps on it. */
+  t: number;
+  /** ms since the dictation started: the slow-start and silence advisories wait on it. */
+  sinceStart: number;
+  micOpen: boolean;
+  accepted: boolean;
+  heardSpeech: boolean;
+  /** Committed meter bars in `meterUnit`s, newest first. */
+  bars: readonly number[];
+  /** The error line while `state` is `error`. */
+  message: string;
+  /** Committed text was just reverted: offer the undo, briefly. */
+  discarded?: boolean;
+  /** ms left before the dictation's hard cap, while it is close. */
+  capLeftMs?: number;
+}
+
+const METER_FLOOR_DB = -60;
+const METER_SPAN_DB = 50;
+
+/** A chunk's RMS as the meter's 0..1 unit: −60…−10 dBFS, so close-mic speech never clips. */
+export function meterUnit(rms: number): number {
+  const db = rms > 0 ? 20 * Math.log10(rms) : METER_FLOOR_DB;
+  return clamp01((db - METER_FLOOR_DB) / METER_SPAN_DB);
+}
+
+const METER_CELLS = 8;
+const RISE = "▂▃▄▅▆▇█";
+/** Auto-ranging never stretches less than this much above the gate to full height, so a quiet room stays quiet. */
+const MIN_RANGE_DB = 15;
+
+/** The accent at a shifted OKLCH lightness, same hue: short bars recede, peaks come forward. */
+function shade(c: Color, dL: number, chroma = 1): Color {
+  const { l, c: ch, h } = colorToOklch(c);
+  return oklchColor(
+    Math.min(0.95, Math.max(0.2, l + dL)),
+    Math.min(0.37, ch * chroma),
+    h,
+  );
+}
+
+type Phase = "starting" | "listening" | "tail" | "finishing";
+
+function phaseOf(s: VoiceSnapshot): Phase | undefined {
+  if (s.state === "arming") return s.micOpen ? "listening" : "starting";
+  if (s.state === "listening") return "listening";
+  if (s.state === "transcribing") return s.micOpen ? "tail" : "finishing";
+  return undefined;
+}
+
+/** Key names as Pi prints them in its own hints. */
+export interface VoiceKeys {
+  submit: string;
+  cancel: string;
+  undo: string;
+}
+
+export interface RuleOptions {
+  width: number;
+  /** Text rows scrolled out below the editor; Pi's own `↓ N more` label. */
+  hiddenBelow?: number;
+  /** The editor's `borderColor`: Pi colours its rules by thinking level and bash mode. */
+  rule: (s: string) => string;
+  keys: VoiceKeys;
+  palette?: VoicePalette;
+  mode?: VoiceMode;
+}
+
+/**
+ * The editor's bottom rule while voice is on, exactly `width` columns: the meter rises out of the
+ * rule, then the mic light, the state and any advisory, and the keys that apply right now. Narrow
+ * widths drop whole elements; undefined means voice has nothing to say and Pi draws its own rule.
+ */
+export function renderRule(
+  s: VoiceSnapshot,
+  {
+    width,
+    hiddenBelow = 0,
+    rule,
+    keys,
+    palette = FALLBACK_PALETTE,
+    mode = "color",
+  }: RuleOptions,
+): string | undefined {
+  const T = palette.colors;
+  const fg = painter(palette, mode);
+  const ascii = mode === "ascii";
+  const phase = phaseOf(s);
+  const line = (n: number) => rule("─".repeat(Math.max(0, n)));
+  const key = (k: string, what: string) =>
+    `${fg(T.dim, k)}${fg(T.muted, ` ${what}`)}`;
+  const sep = ascii ? ", " : fg(T.dim, " · ");
+
+  /** `── left ──…── right ──`, or undefined when it can't fit. */
+  const compose = (left: string, right: string, meter = "") => {
+    const head = meter
+      ? `${line(2)}${meter}${line(1)} ${left}`
+      : `${line(2)} ${left}`;
+    const tail = right ? ` ${right} ${line(2)}` : line(2);
+    const n = width - cellWidth(head) - cellWidth(tail) - 1;
+    if (n < 1) return undefined;
+    const more = hiddenBelow > 0 ? ` ↓ ${hiddenBelow} more ` : "";
+    const fill =
+      more && n >= cellWidth(more) + 2
+        ? (() => {
+            const a = Math.floor((n - cellWidth(more)) / 2);
+            return `${line(a)}${more}${line(n - a - cellWidth(more))}`;
+          })()
+        : line(n);
+    return `${head} ${fill}${tail}`;
+  };
+  const first = (rows: (string | undefined)[]) =>
+    rows.find((r) => r !== undefined) ?? line(width);
+
+  if (s.state === "error") {
+    const mark = fg(T.error, ascii ? "x" : "✗");
+    const room = Math.max(0, width - 9);
+    const full = s.message;
+    const text =
+      cellWidth(full) <= room ? full : `${truncate(full, room - 1)}…`;
+    return first([compose(`${mark}${fg(T.muted, ` ${text}`)}`, "")]);
+  }
+  if (!phase) {
+    return s.discarded
+      ? first([
+          compose(fg(T.muted, "discarded"), key(keys.undo, "undo")),
+          compose(fg(T.muted, "discarded"), ""),
+        ])
+      : undefined;
+  }
+
+  const light =
+    phase === "listening" || phase === "tail"
+      ? ascii
+        ? "[rec]"
+        : fg(T.accent, "●")
+      : ascii
+        ? "[...]"
+        : fg(T.muted, "○");
+  let word = fg(
+    T.muted,
+    phase === "starting"
+      ? "starting"
+      : phase === "listening"
+        ? "listening"
+        : "finishing",
+  );
+  if (phase === "tail" || phase === "finishing") {
+    // server work is a slow textual ellipsis, never motion in the meter; three cells kept so nothing shifts
+    const n = (Math.floor(s.t / 300) % 3) + 1;
+    word += `${fg(T.dim, (ascii ? "." : "·").repeat(n))}${" ".repeat(3 - n)}`;
+  }
+
+  const advisories: string[] = [];
+  if (phase === "starting" && s.sinceStart > 1500)
+    advisories.push(fg(T.warning, "no audio yet"));
+  if (s.state === "arming" && s.micOpen && s.sinceStart > 1500)
+    advisories.push(fg(T.muted, "connecting"));
+  if (phase === "listening" && !s.heardSpeech && s.sinceStart > 4000)
+    advisories.push(fg(T.warning, "no voice yet"));
+  if (phase === "listening" && s.capLeftMs !== undefined)
+    advisories.push(fg(T.warning, `${Math.ceil(s.capLeftMs / 1000)}s left`));
+
+  // Enter keeps only what the server will transcribe: speech, on an accepted session
+  const canKeep = s.heardSpeech && s.accepted;
+  const hints =
+    phase === "listening" && canKeep
+      ? `${key(keys.submit, "keep")}${sep}${key(keys.cancel, "discard")}`
+      : phase === "listening" || phase === "starting"
+        ? key(keys.cancel, "cancel")
+        : key(keys.cancel, "discard");
+  const fewerHints =
+    phase === "listening" && canKeep ? key(keys.cancel, "discard") : hints;
+
+  const meter =
+    phase === "listening" || phase === "tail"
+      ? meterCells(s.bars, rule, palette, mode)
+      : line(METER_CELLS);
+  const lw = `${light} ${word}`;
+  const phrase = advisories.length ? [lw, ...advisories].join(sep) : lw;
+  return first([
+    compose(phrase, hints, meter),
+    compose(phrase, fewerHints, meter),
+    compose(phrase, "", meter),
+    compose(lw, "", meter),
+    compose(phrase, ""),
+    compose(lw, ""),
+    compose(light, ""),
+  ]);
+}
+
+/** Eight cells, newest on the right: the rule in silence, speech rising from ▂ to █ against its own recent peak. */
+function meterCells(
+  bars: readonly number[],
+  rule: (s: string) => string,
+  palette: VoicePalette,
+  mode: VoiceMode,
+): string {
+  const fg = painter(palette, mode);
+  const toDb = (u: number) => METER_FLOOR_DB + u * METER_SPAN_DB;
+  const lo = SPEECH_DBFS;
+  const hi = Math.max(lo + MIN_RANGE_DB, ...bars.map(toDb));
+  let out = "";
+  for (let i = METER_CELLS - 1; i >= 0; i--) {
+    const u = bars[i];
+    const db = u === undefined ? Number.NEGATIVE_INFINITY : toDb(u);
+    if (db < lo) {
+      out += rule("─");
+      continue;
+    }
+    const k = Math.round(clamp01((db - lo) / (hi - lo)) * (RISE.length - 1));
+    if (mode === "ascii") {
+      out += k < 4 ? "=" : "#";
+      continue;
+    }
+    const top = k === RISE.length - 1;
+    const colour = shade(
+      palette.colors.accent,
+      -0.22 + (0.22 * k) / (RISE.length - 1) + (top ? 0.04 : 0),
+      top ? 1.3 : 1,
+    );
+    out += fg(colour, RISE.charAt(k));
+  }
   return out;
 }

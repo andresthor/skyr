@@ -1,0 +1,184 @@
+/**
+ * The bottom rule voice draws into Pi's editor: exactly `width` columns in every state and mode,
+ * one mark per fact (the meter for speech, the light for the mic, the word for the phase, the
+ * keys for what they do now), and nothing drawn when voice has nothing to say.
+ */
+import { expect, test } from "vitest";
+import { SPEECH_DBFS } from "../src/voice/dictation.js";
+import {
+  cellWidth,
+  FALLBACK_PALETTE,
+  meterUnit,
+  renderRule,
+  stripAnsi,
+  type VoiceMode,
+  type VoiceSnapshot,
+} from "../src/voice/indicator.js";
+
+const KEYS = { submit: "enter", cancel: "escape", undo: "ctrl+-" };
+const rule = (s: string) => s;
+const atDb = (db: number) => meterUnit(10 ** (db / 20));
+/** A spoken phrase: syllables between the gate and a −20 dBFS peak, newest first. */
+const SPEECH = [-30, -22, -40, -26, -45, -20, -35, -28].map(atDb);
+const SILENCE = Array.from({ length: 8 }, () => atDb(-58));
+
+const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({
+  state: "listening",
+  t: 0,
+  sinceStart: 2000,
+  micOpen: true,
+  accepted: true,
+  heardSpeech: true,
+  bars: SPEECH,
+  message: "",
+  ...s,
+});
+const draw = (
+  s: Partial<VoiceSnapshot>,
+  o: { width?: number; mode?: VoiceMode; hiddenBelow?: number } = {},
+) =>
+  renderRule(snap(s), {
+    width: o.width ?? 72,
+    rule,
+    keys: KEYS,
+    mode: o.mode,
+    hiddenBelow: o.hiddenBelow,
+  });
+const plain = (s: Partial<VoiceSnapshot>, o = {}) =>
+  stripAnsi(draw(s, o) ?? "");
+
+const STATES: Partial<VoiceSnapshot>[] = [
+  { state: "arming", micOpen: false, sinceStart: 300 },
+  { state: "arming", micOpen: false, sinceStart: 2000 },
+  { state: "arming", accepted: false, heardSpeech: false, sinceStart: 2000 },
+  { state: "listening" },
+  { state: "listening", bars: SILENCE, heardSpeech: false, sinceStart: 5000 },
+  { state: "listening", capLeftMs: 9_500 },
+  { state: "transcribing", t: 100 },
+  { state: "transcribing", micOpen: false, t: 700 },
+  { state: "error", message: "connection lost · words kept" },
+  { state: "error", message: "x".repeat(200) },
+  { state: "idle", discarded: true },
+];
+
+test("every row is exactly the width, at every width, in every state and mode", () => {
+  for (const mode of ["color", "mono", "ascii"] as const)
+    for (const s of STATES)
+      for (let width = 9; width <= 140; width++) {
+        const row = draw(s, { width, mode, hiddenBelow: width % 3 });
+        expect(cellWidth(row ?? ""), `${mode} ${s.state} @${width}`).toBe(
+          width,
+        );
+      }
+});
+
+test("idle draws nothing, so Pi's own rule stands", () => {
+  expect(draw({ state: "idle" })).toBeUndefined();
+});
+
+test("a thinking pause and waiting on the server never look alike", () => {
+  const pause = plain({ state: "listening", bars: SILENCE });
+  const finishing = plain({ state: "transcribing", micOpen: false, t: 700 });
+  expect(pause).toContain("● listening");
+  expect(finishing).toContain("○ finishing");
+  expect(pause).not.toBe(finishing);
+});
+
+test("Enter is offered only once speech was heard on an accepted session", () => {
+  expect(plain({ heardSpeech: false })).toContain("escape cancel");
+  expect(plain({ heardSpeech: false })).not.toContain("keep");
+  expect(plain({ accepted: false })).not.toContain("keep");
+  expect(plain({})).toContain("enter keep · escape discard");
+  // finishing swallows Enter, so only the discard is offered
+  expect(plain({ state: "transcribing", t: 50 })).toMatch(/escape discard ──$/);
+  expect(plain({ state: "transcribing", t: 50 })).not.toContain("keep");
+});
+
+test("the mic light stays on through the tail after Enter, and goes out when the mic closes", () => {
+  expect(plain({ state: "transcribing", t: 50 })).toContain("● finishing·");
+  expect(plain({ state: "transcribing", micOpen: false, t: 50 })).toContain(
+    "○ finishing·",
+  );
+});
+
+test("silence is the rule itself: no meter cell rises for anything below the speech gate", () => {
+  const quiet = SILENCE.map(() => atDb(SPEECH_DBFS - 0.5));
+  expect(plain({ bars: quiet })).toMatch(/^─{11} ● listening/);
+});
+
+test("speech spans the full ramp against its own recent peak, so syllables stand apart", () => {
+  const row = plain({});
+  const meter = row.slice(2, 10);
+  expect(meter).toContain("█");
+  expect(meter).toMatch(/[▂▃]/);
+  expect(new Set(meter).size).toBeGreaterThanOrEqual(4);
+  // a quiet room can't stretch near-gate noise to full height
+  const soft = SILENCE.map(() => atDb(SPEECH_DBFS + 2));
+  expect(plain({ bars: soft }).slice(2, 10)).not.toContain("█");
+});
+
+test("the finishing ellipsis steps every 300 ms and keeps the row from shifting", () => {
+  const at = (t: number) => plain({ state: "transcribing", micOpen: false, t });
+  expect(at(0)).toContain("finishing·   ");
+  expect(at(300)).toContain("finishing··  ");
+  expect(at(600)).toContain("finishing··· ");
+  expect(at(0).length).toBe(at(600).length);
+});
+
+test("advisories ride with the word they qualify", () => {
+  expect(
+    plain({ state: "arming", micOpen: false, sinceStart: 2000 }),
+  ).toContain("○ starting · no audio yet");
+  expect(
+    plain({ bars: SILENCE, heardSpeech: false, sinceStart: 5000 }),
+  ).toContain("● listening · no voice yet");
+  expect(plain({ capLeftMs: 9_500 })).toContain("● listening · 10s left");
+  expect(
+    plain({ state: "arming", accepted: false, sinceStart: 2000 }),
+  ).toContain("● listening · connecting");
+});
+
+test("the rule keeps Pi's colour: every rule cell goes through the editor's own border colour", () => {
+  const row = renderRule(snap({ bars: SILENCE }), {
+    width: 40,
+    rule: (s) => `<${s}>`,
+    keys: KEYS,
+  })!;
+  expect(row.startsWith("<──>")).toBe(true);
+  expect(row.endsWith("<──>")).toBe(true);
+});
+
+test("Pi's scroll label survives in the fill when the editor is scrolled", () => {
+  expect(plain({}, { width: 90, hiddenBelow: 3 })).toContain(" ↓ 3 more ");
+});
+
+test("after Esc reverted committed words, the rule says so and names the undo", () => {
+  expect(plain({ state: "idle", discarded: true })).toMatch(
+    /^── discarded ─+ ctrl\+- undo ──$/,
+  );
+});
+
+test("an error names its cause on the rule, truncated by whole columns", () => {
+  expect(plain({ state: "error", message: "connection lost" })).toMatch(
+    /^── ✗ connection lost ─+$/,
+  );
+  expect(
+    plain({ state: "error", message: "x".repeat(200) }, { width: 30 }),
+  ).toContain("…");
+});
+
+test("TERM=dumb marks are ASCII; NO_COLOR keeps the glyphs without colour; 256-colour stays indexed", () => {
+  const dumb = plain({}, { mode: "ascii" });
+  expect(dumb).toContain("[rec] listening");
+  expect(dumb).toMatch(/[=#]{3}/);
+  const mono = draw({}, { mode: "mono" })!;
+  expect(mono).not.toContain("\x1b[");
+  expect(mono).toContain("●");
+  const indexed = renderRule(snap({}), {
+    width: 72,
+    rule,
+    keys: KEYS,
+    palette: { ...FALLBACK_PALETTE, mode: "256color" },
+  })!;
+  expect(indexed).not.toContain("\x1b[38;2;");
+});

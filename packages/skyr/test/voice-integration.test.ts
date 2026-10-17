@@ -76,7 +76,15 @@ function fakeCtx(
 const theme = (hex: string): ThemeStub & Record<string, unknown> => {
   const c = parseColor(hex);
   return {
-    colors: { accent: c, text: c, muted: c, dim: c, border: c, error: c },
+    colors: {
+      accent: c,
+      text: c,
+      muted: c,
+      dim: c,
+      border: c,
+      error: c,
+      warning: c,
+    },
     getColorMode: () => "truecolor",
   };
 };

@@ -222,6 +222,7 @@ test("the palette is the theme's own colours and colour mode", () => {
       dim: c("#72727d"),
       border: c("#679dc0"),
       error: c("#cc6666"),
+      warning: c("#d7af5f"),
     },
     getColorMode: () => "256color",
   });

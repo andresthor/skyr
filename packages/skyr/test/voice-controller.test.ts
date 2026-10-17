@@ -325,3 +325,31 @@ test("listeners get each chunk's raw RMS, and SPEECH_DBFS is where the level cur
   expect(levelFromRms(rmsAtGate)).toBeCloseTo(0.15, 6);
   expect(SPEECH_DBFS).toBeCloseTo(-49.8, 1);
 });
+
+test("an open mic that stops delivering fails as microphone stopped, keeping what was said", async () => {
+  const h = harness({ ...TIMING, stallMs: 40, errorHoldMs: 10_000 });
+  h.controller.toggle();
+  h.opts().onReady?.();
+  // silence keeps arriving as chunks: no stall
+  for (let i = 0; i < 4; i++) {
+    h.opts().onLevel?.(0.0005);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  expect(h.controller.state).toBe("listening");
+  h.opts().onFinal?.("said before it died");
+  // then nothing at all: the recorder is gone
+  await vi.waitFor(() => expect(h.controller.state).toBe("error"));
+  expect(h.controller.message).toBe("microphone stopped · words kept");
+});
+
+test("the stall watchdog stands down once the mic closes after Enter", async () => {
+  const h = harness({ ...TIMING, stallMs: 30, tailMs: 5 });
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.opts().onLevel?.(0.05);
+  h.opts().onFinal?.("done talking");
+  h.controller.finish();
+  await vi.waitFor(() => expect(h.controller.state).toBe("idle"));
+  await new Promise((r) => setTimeout(r, 60));
+  expect(h.states).not.toContain("error");
+});

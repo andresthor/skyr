@@ -52,6 +52,8 @@ export interface DictationTiming {
   armTimeoutMs: number;
   /** How long an error line stays up. */
   errorHoldMs: number;
+  /** Fail when an open mic delivers nothing for this long: silence still arrives as chunks, a dead mic doesn't. */
+  stallMs: number;
 }
 
 export const DEFAULT_TIMING: DictationTiming = {
@@ -61,6 +63,7 @@ export const DEFAULT_TIMING: DictationTiming = {
   maxMs: 120_000,
   armTimeoutMs: 10_000,
   errorHoldMs: 4000,
+  stallMs: 1500,
 };
 
 /** Meter level that counts as someone speaking; room noise sits around 0.05–0.15, speech well above. */
@@ -110,6 +113,7 @@ export class DictationController {
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private quietStartTimer: ReturnType<typeof setTimeout> | undefined;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private stallTimer: ReturnType<typeof setTimeout> | undefined;
   private heard = false;
   private mic: "waiting" | "open" | "closed" = "closed";
   private sessionAccepted = false;
@@ -300,6 +304,15 @@ export class DictationController {
     this.o.onLevel?.(rms);
     if (this.mic === "waiting") this.mic = "open";
     if (this.state !== "listening" && this.state !== "arming") return;
+    if (this.stallTimer) this.cancelTimer(this.stallTimer);
+    const capturing = this.generation;
+    this.stallTimer = this.later(this.timing.stallMs, () => {
+      if (
+        capturing === this.generation &&
+        (this.state === "listening" || this.state === "arming")
+      )
+        this.fail(new VoiceError("mic", "microphone stopped"));
+    });
     if (rms === 0) {
       if (++this.zeroChunks >= ZERO_CHUNKS_BLOCKED && !this.heard) {
         this.fail(
@@ -352,5 +365,6 @@ export class DictationController {
     this.timers.clear();
     this.quietStartTimer = undefined;
     this.flushTimer = undefined;
+    this.stallTimer = undefined;
   }
 }

@@ -364,3 +364,15 @@ test("the time left before the cap counts from this dictation's start, by the co
   h.controller.toggle();
   expect(h.controller.capLeftMs).toBeGreaterThan(950);
 });
+
+test("a chunk that arrives in the same pass as the stall check still counts: no false dead mic", async () => {
+  const h = harness({ ...TIMING, stallMs: 30, errorHoldMs: 10_000 });
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.opts().onLevel?.(0.0005);
+  // same duration, same pass: the stall timer runs first, then this chunk
+  setTimeout(() => h.opts().onLevel?.(0.0005), 30);
+  await new Promise((r) => setTimeout(r, 45));
+  expect(h.states).not.toContain("error");
+  h.controller.cancel();
+});

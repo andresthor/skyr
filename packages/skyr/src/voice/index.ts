@@ -162,7 +162,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     return {
       state: controller.state,
       t: now - controller.stateSince,
-      sinceStart: now - controller.startedAt,
+      sinceStart: controller.sinceStartMs,
       micOpen: controller.micOpen,
       accepted: controller.accepted,
       heardSpeech: controller.heardSpeech,

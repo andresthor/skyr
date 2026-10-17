@@ -107,7 +107,7 @@ export class DictationController {
   /** When the current state began, for the indicator's state-relative animation. */
   stateSince = 0;
   /** When the current dictation started: its advisories and its hard cap count from here. */
-  startedAt = 0;
+  private startedAt = 0;
   message = "";
 
   private session: SttSession | undefined;
@@ -141,9 +141,14 @@ export class DictationController {
     return this.sessionAccepted;
   }
 
+  /** ms since this dictation started, on the controller's own clock. */
+  get sinceStartMs(): number {
+    return this.now() - this.startedAt;
+  }
+
   /** ms before the hard cap stops this dictation, as the controller enforces it. */
   get capLeftMs(): number {
-    return this.timing.maxMs - (this.now() - this.startedAt);
+    return this.timing.maxMs - this.sinceStartMs;
   }
 
   /** Something above SPEECH_LEVEL arrived in this dictation. */

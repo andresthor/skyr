@@ -197,6 +197,23 @@ test("a tui session_start mounts no widget, starts the status cleared, and dicta
   });
 });
 
+test("the voice editor keeps Pi's working status in its top rule, as Pi's own editor does", async () => {
+  await withCreds(async () => {
+    ownAgentDir();
+    const pi = fakePi();
+    registerVoice(pi as never, { ascii: true });
+    const { ui, ctx } = fakeCtx("tui");
+    await pi.handlers.get("session_start")!(null, ctx);
+    const factory = ui.setEditorComponent.mock.calls[0]?.[0] as (
+      t: unknown,
+      theme: unknown,
+      keys: unknown,
+    ) => { embedWorkingStatus: boolean };
+    const ed = factory({ requestRender: () => {} }, {}, {});
+    expect(ed.embedWorkingStatus).toBe(true);
+  });
+});
+
 test("the refused start names the fix, only when a focused editor could have dictated", () => {
   expect(
     startRefusal(true, { focused: false } as unknown as VoiceEditorLike),

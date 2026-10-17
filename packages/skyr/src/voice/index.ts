@@ -232,10 +232,13 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     if (installed && installed !== editorFactory) return;
     const { CustomEditor } = await loadPi();
     editorFactory = (t, theme, keybindings) => {
+      // Pi copies padding and autocomplete into a custom editor, but not this constructor-only flag;
+      // without it the working spinner leaves the top rule for a separate row
       const ed = new (createVoiceEditorClass(CustomEditor))(
         t,
         theme,
         keybindings,
+        { embedWorkingStatus: true },
       );
       ed.keyHook = keyHook;
       // read per frame: /theme must reach the ghost/firm colours without a remount

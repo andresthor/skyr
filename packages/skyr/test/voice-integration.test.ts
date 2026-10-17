@@ -8,6 +8,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type Color, parseColor } from "@earendil-works/pi-tui";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { SessionOptions } from "../src/voice/client.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
@@ -16,6 +17,7 @@ import {
   registerVoice,
   startRefusal,
   VOICE_SHORTCUT,
+  voiceMode,
 } from "../src/voice/index.js";
 
 interface FakePi {
@@ -48,8 +50,8 @@ function fakePi(): FakePi {
 }
 
 interface ThemeStub {
-  name: string;
-  getFgAnsi(token: string): string;
+  colors: Record<string, Color>;
+  getColorMode(): "truecolor";
 }
 
 /** `theme` is a mutable property so a test can swap it mid-session the way /theme does. */
@@ -70,14 +72,14 @@ function fakeCtx(
   return { ui, ctx: ctx as never, uiTyped: ui as unknown };
 }
 
-/** A theme stub where every token answers in one SGR colour, so any glyph names the theme. */
-const theme = (
-  light: boolean,
-  rgb: string,
-): ThemeStub & Record<string, unknown> => ({
-  name: light ? "fake-light" : "fake-dark",
-  getFgAnsi: () => rgb,
-});
+/** A theme stub where every token is one colour, so any glyph names the theme. */
+const theme = (hex: string): ThemeStub & Record<string, unknown> => {
+  const c = parseColor(hex);
+  return {
+    colors: { accent: c, text: c, muted: c, dim: c, border: c, error: c },
+    getColorMode: () => "truecolor",
+  };
+};
 
 const CORTI = [
   "CORTI_ENVIRONMENT",
@@ -122,7 +124,7 @@ function ownAgentDir(skyrJson?: string): string {
 
 test("without credentials only the stub /voice exists, and it says so once", async () => {
   const pi = fakePi();
-  registerVoice(pi as never, { ascii: true });
+  registerVoice(pi as never, { mode: "ascii" });
   expect(pi.commands.get("voice")?.description).toContain("speech-to-text");
   expect([...pi.shortcuts.keys()]).toEqual([]);
   const ui = { notify: vi.fn() };
@@ -135,7 +137,7 @@ test("with credentials, a headless session_start reads the config but mounts no 
   await withCreds(() => {
     const agentDir = ownAgentDir('{"voice": {"frobnicate": true}}');
     const pi = fakePi();
-    registerVoice(pi as never, { ascii: true });
+    registerVoice(pi as never, { mode: "ascii" });
     const ui = {
       notify: vi.fn(),
       setStatus: vi.fn(),
@@ -165,7 +167,7 @@ test("a tui session_start mounts no widget, starts the status cleared, and dicta
     const pi = fakePi();
     const starts: SessionOptions[] = [];
     registerVoice(pi as never, {
-      ascii: true,
+      mode: "ascii",
       controller: {
         start: (o) => {
           starts.push(o);
@@ -201,7 +203,7 @@ test("the voice editor keeps Pi's working status in its top rule, as Pi's own ed
   await withCreds(async () => {
     ownAgentDir();
     const pi = fakePi();
-    registerVoice(pi as never, { ascii: true });
+    registerVoice(pi as never, { mode: "ascii" });
     const { ui, ctx } = fakeCtx("tui");
     await pi.handlers.get("session_start")!(null, ctx);
     const factory = ui.setEditorComponent.mock.calls[0]?.[0] as (
@@ -233,7 +235,7 @@ test("a second session_start reinstates the voice editor, and a foreign factory 
     const pi = fakePi();
     const starts: SessionOptions[] = [];
     registerVoice(pi as never, {
-      ascii: true,
+      mode: "ascii",
       controller: {
         start: (o) => {
           starts.push(o);
@@ -280,7 +282,7 @@ test("a mid-session theme switch reaches the status row and the editor's ghost/f
     const pi = fakePi();
     const starts: SessionOptions[] = [];
     registerVoice(pi as never, {
-      ascii: false,
+      mode: "color",
       controller: {
         start: (o) => {
           starts.push(o);
@@ -288,8 +290,8 @@ test("a mid-session theme switch reaches the status row and the editor's ghost/f
         },
       },
     });
-    const dark = theme(false, "\x1b[38;2;10;20;30m");
-    const light = theme(true, "\x1b[38;2;200;190;180m");
+    const dark = theme("#0a141e");
+    const light = theme("#c8beb4");
     const { ui, ctx } = fakeCtx("tui", dark);
     return pi.handlers.get("session_start")!(null, ctx).then(() => {
       pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
@@ -305,13 +307,21 @@ test("a mid-session theme switch reaches the status row and the editor's ghost/f
         t: unknown,
         theme2: unknown,
         keys: unknown,
-      ) => { palette(): { accent: string } };
+      ) => { palette(): { colors: { accent: Color } } };
       const ed = factory(
         { requestRender: () => {} } as never,
         {} as never,
         {} as never,
       );
-      expect(ed.palette().accent).toBe("#c8beb4");
+      expect(ed.palette().colors.accent).toEqual(parseColor("#c8beb4"));
     });
   });
+});
+
+test("TERM=dumb is ascii; NO_COLOR is mono, keeping glyphs; FORCE_COLOR wins over NO_COLOR", () => {
+  expect(voiceMode({ TERM: "dumb", NO_COLOR: "1" })).toBe("ascii");
+  expect(voiceMode({ TERM: "xterm-256color", NO_COLOR: "1" })).toBe("mono");
+  expect(voiceMode({ NO_COLOR: "1", FORCE_COLOR: "1" })).toBe("color");
+  expect(voiceMode({ NO_COLOR: "" })).toBe("color");
+  expect(voiceMode({})).toBe("color");
 });

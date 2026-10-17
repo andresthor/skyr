@@ -3,10 +3,11 @@
  * the extension's own width-erring measure, the error line truncates whole columns, and "idle"
  * exists as `setStatus(key, undefined)`, never as a permanent row.
  */
+import { parseColor } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import {
   cellWidth,
-  PALETTES,
+  FALLBACK_PALETTE,
   renderStatus,
   stripAnsi,
 } from "../src/voice/indicator.js";
@@ -23,6 +24,12 @@ const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({
   t: 0,
   ...s,
 });
+
+/** A second palette, as a light theme would give, so a switch is visible in the escapes. */
+const LIGHT = {
+  ...FALLBACK_PALETTE,
+  colors: { ...FALLBACK_PALETTE.colors, accent: parseColor("#157937") },
+};
 
 class FakeStatusUi {
   lines: (string | undefined)[] = [];
@@ -53,7 +60,7 @@ test("silent bars are hairlines, not full accent blocks", () => {
   const row = renderStatus(snap({ state: "listening", level: 0 }))!;
   // the dim colour leaves as SGR, not raw hex
   expect(row).toContain("\x1b[38;2;102;102;102m");
-  expect(row).not.toContain(PALETTES.dark.accent);
+  expect(row).not.toContain("\x1b[38;2;184;248;24m▁");
 });
 
 test("the error line names the state and the reason, truncated by whole columns", () => {
@@ -76,10 +83,10 @@ test("the error line names the state and the reason, truncated by whole columns"
 });
 
 test("TERM=dumb forms are plain: `[mic]` live, `x voice` for the error", () => {
-  expect(renderStatus({ state: "listening", level: 1, ascii: true })).toBe(
+  expect(renderStatus({ state: "listening", level: 1, mode: "ascii" })).toBe(
     "[mic]",
   );
-  expect(renderStatus({ state: "arming", level: 0, ascii: true })).toBe(
+  expect(renderStatus({ state: "arming", level: 0, mode: "ascii" })).toBe(
     "[mic]",
   );
   expect(
@@ -87,7 +94,7 @@ test("TERM=dumb forms are plain: `[mic]` live, `x voice` for the error", () => {
       state: "error",
       level: 0,
       message: "needs sox",
-      ascii: true,
+      mode: "ascii",
     }),
   ).toBe("x voice · needs sox");
 });
@@ -95,7 +102,7 @@ test("TERM=dumb forms are plain: `[mic]` live, `x voice` for the error", () => {
 test("the status row reads the palette afresh each frame, so it follows theme switches", () => {
   const ui = new FakeStatusUi();
   const present = statusPresenter(ui, {
-    palette: () => (ui.lines.length % 2 ? PALETTES.light : PALETTES.dark),
+    palette: () => (ui.lines.length % 2 ? LIGHT : FALLBACK_PALETTE),
   });
   present.update(snap({ state: "listening", level: 1 }));
   expect(ui.last!.startsWith("\x1b[38;2;184;248;24m●")).toBe(true);
@@ -118,4 +125,17 @@ test("arming pulses on a ~600 ms cycle; transcribing drains the bars", () => {
   expect(drained).toBe(
     renderStatus(snap({ state: "transcribing", level: 0, t: 2000 }))!,
   );
+});
+
+test("NO_COLOR draws the same glyphs uncoloured; a 256-colour theme never gets 24-bit escapes", () => {
+  const mono = renderStatus({ state: "listening", level: 1, mode: "mono" })!;
+  expect(mono).not.toContain("\x1b[");
+  expect(mono).toContain("●");
+  const indexed = renderStatus({
+    state: "listening",
+    level: 1,
+    palette: { ...FALLBACK_PALETTE, mode: "256color" },
+  })!;
+  expect(indexed).not.toContain("\x1b[38;2;");
+  expect(indexed).toContain("\x1b[38;5;");
 });

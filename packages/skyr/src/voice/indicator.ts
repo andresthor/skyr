@@ -4,10 +4,17 @@
  *   renderStatus()        the one-row footer status artist: state glyph + level bars, SGR allowed
  *   createLevelHistory()  levels in at whatever rate the mic delivers, one smoothed bar per BAR_MS
  *   spliceGhost()         decorates Pi's Editor.render(): dim italic interim after the cursor, freshly
- *                         committed words born lime and drying to text, brand-green rules while live
+ *                         committed words born in the accent and drying to text, live rules recoloured
  *
  * Every glyph is in U+2580–259F or is a width-1 symbol. Never braille.
  */
+import {
+  type Color,
+  foregroundAnsi,
+  mixColors,
+  parseColor,
+  type TerminalColorMode,
+} from "@earendil-works/pi-tui";
 import type { VoiceState } from "./dictation.js";
 
 export const TICK_MS = 50;
@@ -16,81 +23,56 @@ export const DRY_MS = 300;
 /** One smoothed bar cell per this many ms of recording. */
 const BAR_MS = 100;
 
+/** What the terminal can show: `mono` is NO_COLOR (glyphs and attributes, no colour), `ascii` is TERM=dumb. */
+export type VoiceMode = "color" | "mono" | "ascii";
+
+type VoiceToken = "accent" | "text" | "muted" | "dim" | "border" | "error";
+
+/** Theme colours plus the terminal's colour mode, so 256-colour terminals get 256-colour escapes. */
 export interface VoicePalette {
-  accent: string;
-  text: string;
-  muted: string;
-  dim: string;
-  borderMuted: string;
-  border: string;
-  error: string;
+  colors: Record<VoiceToken, Color>;
+  mode: TerminalColorMode;
 }
 
-/** corti-dark / corti-light token values; used when a theme can't be read as truecolor. */
-export const PALETTES: Record<"dark" | "light", VoicePalette> = {
-  dark: {
-    accent: "#B8F818",
-    text: "#d4d4d4",
-    muted: "#808080",
-    dim: "#666666",
-    borderMuted: "#505050",
-    border: "#3f5c12",
-    error: "#cc6666",
+/** Corti dark token values: the palette when there is no theme to read. */
+export const FALLBACK_PALETTE: VoicePalette = {
+  colors: {
+    accent: parseColor("#B8F818"),
+    text: parseColor("#d4d4d4"),
+    muted: parseColor("#808080"),
+    dim: parseColor("#666666"),
+    border: parseColor("#3f5c12"),
+    error: parseColor("#cc6666"),
   },
-  light: {
-    accent: "#157937",
-    text: "#1f2328",
-    muted: "#6c6c6c",
-    dim: "#767676",
-    borderMuted: "#b0b0b0",
-    border: "#9fbf6a",
-    error: "#aa5555",
-  },
+  mode: "truecolor",
 };
 
+/** The narrow shape of Pi's Theme the palette reads; `colors` is concrete in every colour mode. */
 interface ThemeLike {
-  name?: string;
-  getFgAnsi(token: string): string;
+  readonly colors: Readonly<Record<VoiceToken, Color>>;
+  getColorMode(): TerminalColorMode;
 }
 
 /** Reads the live theme's token colours so the indicator follows theme switches. */
 export function paletteFromTheme(theme: ThemeLike | undefined): VoicePalette {
-  const base = theme?.name?.includes("light") ? PALETTES.light : PALETTES.dark;
-  if (!theme) return base;
-  const out = { ...base };
-  for (const key of Object.keys(base) as (keyof VoicePalette)[]) {
-    try {
-      const m = /38;2;(\d+);(\d+);(\d+)m/.exec(theme.getFgAnsi(key));
-      if (m)
-        out[key] =
-          `#${[m[1], m[2], m[3]].map((v) => Number(v).toString(16).padStart(2, "0")).join("")}`;
-    } catch {}
-  }
-  return out;
+  if (!theme) return FALLBACK_PALETTE;
+  const { accent, text, muted, dim, border, error } = theme.colors;
+  return {
+    colors: { accent, text, muted, dim, border, error },
+    mode: theme.getColorMode(),
+  };
 }
 
-const rgb = (h: string) =>
-  [1, 3, 5].map((i) => Number.parseInt(h.slice(i, i + 2), 16)) as [
-    number,
-    number,
-    number,
-  ];
 const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const smooth = (x: number) => {
   const u = clamp01(x);
   return u * u * (3 - 2 * u);
 };
-function mix(a: string, b: string, k: number): string {
-  const [ar, ag, ab] = rgb(a);
-  const [br, bg, bb] = rgb(b);
-  const u = clamp01(k);
-  const to = (v: number) => Math.round(v).toString(16).padStart(2, "0");
-  return `#${to(ar + (br - ar) * u)}${to(ag + (bg - ag) * u)}${to(ab + (bb - ab) * u)}`;
-}
-const fg = (hex: string, s: string) => {
-  const [r, g, b] = rgb(hex);
-  return `\x1b[38;2;${r};${g};${b}m${s}\x1b[39m`;
-};
+/** Colours `s` in the palette's mode; mono and ascii draw no colour at all. */
+const painter =
+  (P: VoicePalette, mode: VoiceMode) =>
+  (c: Color, s: string): string =>
+    mode === "color" ? `${foregroundAnsi(c, P.mode)}${s}\x1b[39m` : s;
 const RESET = "\x1b[0m";
 
 const LOWER = "▁▂▃▄▅▆▇";
@@ -189,9 +171,8 @@ export interface StatusInput {
   /** ms since this state began — the arming pulse and the transcribing drain run on it. */
   t?: number;
   message?: string;
-  theme?: VoicePalette;
-  /** TERM=dumb and friends: one plain form, no blocks, no colour. */
-  ascii?: boolean;
+  palette?: VoicePalette;
+  mode?: VoiceMode;
 }
 
 /** Truncates to whole visible columns, erring wide exactly like `cellWidth`. */
@@ -210,7 +191,7 @@ function truncate(text: string, max: number): string {
 /**
  * One row for the footer status line ("idle" → undefined, a `setStatus(key, undefined)`
  * clear). pi's footer passes SGR and truncates by width, so the row is coloured here and
- * bounded by `cellWidth` here, and an `ascii` terminal gets the same shape uncoloured.
+ * bounded by `cellWidth` here; mono draws the same glyphs uncoloured, ascii one plain form.
  */
 export function renderStatus({
   state,
@@ -218,19 +199,21 @@ export function renderStatus({
   levels = [],
   t = 0,
   message = "",
-  theme = PALETTES.dark,
-  ascii = false,
+  palette = FALLBACK_PALETTE,
+  mode = "color",
 }: StatusInput): string | undefined {
-  const T = theme;
+  const T = palette.colors;
+  const fg = painter(palette, mode);
+  const ascii = mode === "ascii";
   if (state === "idle") return undefined;
   if (state === "error") {
     const text = truncate(
       `${ascii ? "x" : "✗"} voice · ${message}`,
       ERROR_COLS,
     );
-    return ascii
-      ? text
-      : `${fg(T.error, text.slice(0, 1))}${fg(T.muted, text.slice(1))}${RESET}`;
+    return mode === "color"
+      ? `${fg(T.error, text.slice(0, 1))}${fg(T.muted, text.slice(1))}${RESET}`
+      : text;
   }
   if (ascii) return "[mic]";
   const glyph =
@@ -298,13 +281,13 @@ export interface GhostInput {
   ghost?: string;
   /** The last `chars` characters before the cursor were committed `age` ms ago. */
   firm?: { chars: number; age: number } | null;
-  /** Mic open: rules drawn in the brand green. */
+  /** Mic open: rules drawn in the theme's border colour. */
   live?: boolean;
   /** Rows the editor drew under its bottom rule (the autocomplete list). */
   below?: number;
-  theme?: VoicePalette;
-  /** TERM=dumb and friends: no decoration at all, not even the coloured rules. */
-  ascii?: boolean;
+  palette?: VoicePalette;
+  /** `ascii` draws no decoration at all; `mono` keeps the ghost as italic and faint text. */
+  mode?: VoiceMode;
 }
 
 /**
@@ -322,13 +305,14 @@ export function spliceGhost(
     firm = null,
     live = false,
     below = 0,
-    theme = PALETTES.dark,
-    ascii = false,
+    palette = FALLBACK_PALETTE,
+    mode = "color",
   }: GhostInput,
 ): string[] {
   const out = lines.slice();
-  if (ascii) return out;
-  const T = theme;
+  if (mode === "ascii") return out;
+  const T = palette.colors;
+  const fg = painter(palette, mode);
   const topRule = 0;
   const botRule = out.length - 1 - below;
   if (botRule <= topRule) return out;
@@ -336,7 +320,7 @@ export function spliceGhost(
   const bottom = out[botRule];
   // both rows exist: topRule is 0 and the early return bounds botRule inside
   if (top === undefined || bottom === undefined) return out;
-  if (live) {
+  if (live && mode === "color") {
     out[topRule] = fg(T.border, stripAnsi(top));
     out[botRule] = fg(T.border, stripAnsi(bottom));
   }
@@ -350,7 +334,7 @@ export function spliceGhost(
   let before = cursorRow?.split(CURSOR_CELL)[0] ?? "";
   const beforeText = stripAnsi(before);
   if (firm && firm.chars > 0 && firm.age < DRY_MS) {
-    const wet = mix(T.accent, T.text, smooth(firm.age / DRY_MS));
+    const wet = mixColors(T.accent, T.text, smooth(firm.age / DRY_MS), "oklch");
     const hasMarker = before.includes(CURSOR_MARKER);
     const plain = stripAnsi(before);
     const k = Math.min(firm.chars, Math.max(0, plain.length - paddingX));
@@ -378,7 +362,8 @@ export function spliceGhost(
     return out;
   }
 
-  const style = (s: string) => `\x1b[3m${fg(T.dim, s)}\x1b[23m`;
+  // faint carries the ghost where the theme's dim is close to its text colour, and under NO_COLOR
+  const style = (s: string) => `\x1b[2m\x1b[3m${fg(T.dim, s)}\x1b[23m\x1b[22m`;
   // server text is untrusted: escape bytes must never reach the terminal, and plain text
   // lets the wrap cuts land between characters, never inside colour markup
   const g = stripAnsi(ghost).replace(/^\s+/, "");

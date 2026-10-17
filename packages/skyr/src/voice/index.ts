@@ -38,6 +38,7 @@ import {
   DRY_MS,
   paletteFromTheme,
   TICK_MS,
+  type VoiceMode,
 } from "./indicator.js";
 import {
   statusPresenter,
@@ -48,8 +49,8 @@ import {
 export const VOICE_SHORTCUT = "ctrl+space";
 
 export interface VoiceOptions {
-  /** TERM=dumb and friends; read from the environment when not given. */
-  ascii?: boolean;
+  /** What the terminal can show; read from the environment when not given. */
+  mode?: VoiceMode;
   env?: NodeJS.ProcessEnv;
   /** Test seam: replaces the live Corti session and microphone. */
   controller?: Partial<
@@ -61,17 +62,16 @@ interface Tui {
   requestRender(): void;
 }
 
-/** corti-code's glyph rule (lib/env.ts): ASCII on TERM=dumb and NO_COLOR, unless FORCE_COLOR forces colour on. */
-function asciiMode(): boolean {
-  const env = process.env;
+/** TERM=dumb gets ASCII; NO_COLOR forbids colour, not glyphs or italics, unless FORCE_COLOR overrides it. */
+export function voiceMode(env: NodeJS.ProcessEnv): VoiceMode {
+  if (env.TERM === "dumb") return "ascii";
   const forcedOn =
     env.FORCE_COLOR !== undefined &&
     env.FORCE_COLOR !== "0" &&
     env.FORCE_COLOR !== "false";
-  return (
-    env.TERM === "dumb" ||
-    (env.NO_COLOR !== undefined && env.NO_COLOR !== "" && !forcedOn)
-  );
+  return env.NO_COLOR !== undefined && env.NO_COLOR !== "" && !forcedOn
+    ? "mono"
+    : "color";
 }
 
 /** Read at load and again per `session_start`; `getAgentDir()` is env-true per call. */
@@ -99,7 +99,7 @@ export function startRefusal(
 }
 
 export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
-  const ascii = opts.ascii ?? asciiMode();
+  const mode = opts.mode ?? voiceMode(opts.env ?? process.env);
   const creds = resolveSttCredentials(opts.env ?? process.env);
 
   if (!creds) {
@@ -243,7 +243,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       ed.keyHook = keyHook;
       // read per frame: /theme must reach the ghost/firm colours without a remount
       ed.palette = () => paletteFromTheme(ctxRef?.ui.theme);
-      ed.decor.ascii = ascii;
+      ed.decor.mode = mode;
       editor = ed;
       tui = t as unknown as Tui;
       return ed;
@@ -278,7 +278,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     await mount(ctx);
     presenter = statusPresenter(ctx.ui, {
-      ascii,
+      mode,
       // re-read per frame: /theme reaches the status row without a remount
       palette: () => paletteFromTheme(ctxRef?.ui.theme),
     });

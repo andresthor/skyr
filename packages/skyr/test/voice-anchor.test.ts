@@ -3,18 +3,23 @@
  * cell a focused editor emits; `spliceGhost` anchors on it, keeps every row within the width,
  * and must never let an escape byte inside transcription text reach the terminal.
  */
-import { CURSOR_MARKER, renderFakeCursor } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  parseColor,
+  renderFakeCursor,
+} from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import {
   CURSOR_CELL,
   cellWidth,
   DRY_MS,
-  PALETTES,
+  FALLBACK_PALETTE,
+  paletteFromTheme,
   spliceGhost,
   stripAnsi,
 } from "../src/voice/indicator.js";
 
-const T = PALETTES.dark;
+const T = FALLBACK_PALETTE;
 
 /**
  * [top rule, ...text rows, bottom rule], as Pi's focused editor renders it around the plain
@@ -46,7 +51,7 @@ test("the ghost lands right after the cursor cell, on the cursor's own row", () 
     width: 40,
     paddingX: 2,
     ghost: "world",
-    theme: T,
+    palette: T,
   });
   expect(lines).toHaveLength(3);
   const row = lines[1] ?? "";
@@ -64,7 +69,7 @@ test("a ghost too wide for the cursor row wraps below it and never passes the bo
     width,
     paddingX,
     ghost: "one two three four five",
-    theme: T,
+    palette: T,
   });
   const botRule = lines.length - 1;
   expect(botRule).toBeGreaterThan(2);
@@ -88,7 +93,7 @@ test("a cursor row with room only in the padding still keeps every row within wi
     width,
     paddingX,
     ghost,
-    theme: T,
+    palette: T,
   });
   for (const row of lines) {
     expect(cellWidth(row)).toBeLessThanOrEqual(width);
@@ -105,7 +110,7 @@ test("escape bytes in the ghost text never reach any rendered row", () => {
     width: 30,
     paddingX: 1,
     ghost,
-    theme: T,
+    palette: T,
   });
   const all = lines.join("\n");
   expect(all).not.toContain("\x1b[31m");
@@ -116,7 +121,7 @@ test("escape bytes in the ghost text never reach any rendered row", () => {
 
 test("an editor without the cursor cell draws no ghost and no wet colouring", () => {
   const base = editorBase("hello", 20, { focused: false });
-  expect(spliceGhost(base, { width: 20, ghost: "ghost", theme: T })).toEqual(
+  expect(spliceGhost(base, { width: 20, ghost: "ghost", palette: T })).toEqual(
     base,
   );
   expect(
@@ -124,15 +129,15 @@ test("an editor without the cursor cell draws no ghost and no wet colouring", ()
       width: 20,
       ghost: "ghost",
       firm: { chars: 2, age: 10 },
-      theme: T,
+      palette: T,
     }),
   ).toEqual(base);
 });
 
 test("an idle buffer is returned exactly; only the rules turn brand-green while live", () => {
   const base = editorBase("hello", 20);
-  expect(spliceGhost(base, { width: 20, theme: T })).toEqual(base);
-  const live = spliceGhost(base, { width: 20, live: true, theme: T });
+  expect(spliceGhost(base, { width: 20, palette: T })).toEqual(base);
+  const live = spliceGhost(base, { width: 20, live: true, palette: T });
   expect(live[0]).toBe(`\x1b[38;2;63;92;18m${"─".repeat(20)}\x1b[39m`);
   expect(live[1]).toBe(base[1]);
   // a firm span past its drying window colours nothing, even while live
@@ -140,7 +145,7 @@ test("an idle buffer is returned exactly; only the rules turn brand-green while 
     width: 20,
     live: true,
     firm: { chars: 3, age: DRY_MS },
-    theme: T,
+    palette: T,
   });
   expect(dried[1]).toBe(base[1]);
 });
@@ -150,7 +155,7 @@ test("a committed span is born brand-lime at the cursor and dries colourless aft
     width: 40,
     paddingX: 2,
     firm: { chars: 5, age: 0 },
-    theme: T,
+    palette: T,
   });
   const row = wet[1] ?? "";
   // the accent token (#B8F818) at age 0
@@ -160,7 +165,65 @@ test("a committed span is born brand-lime at the cursor and dries colourless aft
     width: 40,
     paddingX: 2,
     firm: { chars: 5, age: DRY_MS },
-    theme: T,
+    palette: T,
   });
   expect(dried[1]).toBe(`  hello${CURSOR_CELL}${" ".repeat(32)}`);
+});
+
+test("a 256-colour terminal gets 256-colour escapes from the theme, never 24-bit ones", () => {
+  const palette = { ...T, mode: "256color" as const };
+  const lines = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
+    width: 40,
+    paddingX: 2,
+    ghost: "world",
+    firm: { chars: 5, age: 50 },
+    live: true,
+    palette,
+  });
+  const all = lines.join("\n");
+  expect(all).not.toContain("\x1b[38;2;");
+  expect(all).toContain("\x1b[38;5;");
+});
+
+test("NO_COLOR keeps the ghost as italic and faint text, with no colour anywhere", () => {
+  const lines = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
+    width: 40,
+    paddingX: 2,
+    ghost: "world",
+    firm: { chars: 5, age: 50 },
+    live: true,
+    palette: T,
+    mode: "mono",
+  });
+  const all = lines.join("\n");
+  expect(all).not.toContain("\x1b[38;");
+  expect(lines[1]).toContain("\x1b[2m\x1b[3m world\x1b[23m\x1b[22m");
+  // TERM=dumb draws no decoration at all
+  const base = editorBase("hello", 40, { paddingX: 2 });
+  expect(
+    spliceGhost(base, {
+      width: 40,
+      paddingX: 2,
+      ghost: "world",
+      mode: "ascii",
+    }),
+  ).toEqual(base);
+});
+
+test("the palette is the theme's own colours and colour mode", () => {
+  const c = (hex: string) => parseColor(hex);
+  const palette = paletteFromTheme({
+    colors: {
+      accent: c("#88acb5"),
+      text: c("#9a9aa7"),
+      muted: c("#898a96"),
+      dim: c("#72727d"),
+      border: c("#679dc0"),
+      error: c("#cc6666"),
+    },
+    getColorMode: () => "256color",
+  });
+  expect(palette.colors.accent).toEqual(c("#88acb5"));
+  expect(palette.mode).toBe("256color");
+  expect(paletteFromTheme(undefined)).toBe(FALLBACK_PALETTE);
 });

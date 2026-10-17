@@ -17,7 +17,12 @@ import type {
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { DictationSink } from "./dictation.js";
-import { PALETTES, spliceGhost, type VoicePalette } from "./indicator.js";
+import {
+  FALLBACK_PALETTE,
+  spliceGhost,
+  type VoiceMode,
+  type VoicePalette,
+} from "./indicator.js";
 
 /** The text to insert so a segment reads naturally between what is before and after the cursor. */
 export function spacedSegment(
@@ -37,8 +42,7 @@ export interface VoiceDecor {
   ghost: string;
   firm: { chars: number; at: number } | null;
   live: boolean;
-  /** TERM=dumb and friends: the ghost and coloured rules are decoration the terminal can't show. */
-  ascii?: boolean;
+  mode?: VoiceMode;
 }
 
 export interface VoiceEditorLike {
@@ -68,7 +72,7 @@ export function createVoiceEditorClass(
       live: false,
     };
     /** The palette for this render, re-read every frame so /theme reaches ghost and firm colours. */
-    palette: () => VoicePalette = () => PALETTES.dark;
+    palette: () => VoicePalette = () => FALLBACK_PALETTE;
     keyHook?: (data: string, keys: KeybindingsManager) => boolean;
     private readonly keys: KeybindingsManager;
     private pending: string[] = [];
@@ -99,7 +103,7 @@ export function createVoiceEditorClass(
 
     override render(width: number): string[] {
       const base = super.render(width);
-      const { ghost, firm, live, ascii } = this.decor;
+      const { ghost, firm, live, mode } = this.decor;
       if (!ghost && !firm && !live) return base;
       // this editor is permanent: a throw here would take the input bar down with it
       try {
@@ -110,12 +114,12 @@ export function createVoiceEditorClass(
           ghost,
           firm: firm ? { chars: firm.chars, age } : null,
           live,
-          ascii,
+          mode,
           // private in pi-tui's types, but it is what tells the bottom rule from the autocomplete rows
           below:
             (this as unknown as { renderedAutocompleteHeight?: number })
               .renderedAutocompleteHeight ?? 0,
-          theme: this.palette(),
+          palette: this.palette(),
         });
       } catch {
         return base;

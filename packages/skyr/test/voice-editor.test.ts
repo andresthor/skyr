@@ -7,6 +7,7 @@ import type {
   CustomEditor,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { parseColor } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import {
   createVoiceEditorClass,
@@ -17,7 +18,7 @@ import {
 import {
   CURSOR_CELL,
   DRY_MS,
-  PALETTES,
+  FALLBACK_PALETTE,
   type VoicePalette,
 } from "../src/voice/indicator.js";
 
@@ -197,11 +198,14 @@ describe("render", () => {
   test("the palette is read per frame, so a mid-session theme switch reaches ghost and firm colours", () => {
     const editor = fresh("hello", { paddingX: 2 });
     editor.decor.ghost = "world";
-    editor.palette = () => PALETTES.light;
+    editor.palette = () => ({
+      ...FALLBACK_PALETTE,
+      colors: { ...FALLBACK_PALETTE.colors, dim: parseColor("#767676") },
+    });
     const row = editor.render(40)[1] ?? "";
-    // the ghost's dim colour is the live palette's dim, not the PALETTES.dark default
+    // the ghost's dim colour is the live palette's dim, not the fallback's
     expect(row).toContain("\x1b[38;2;118;118;118m");
-    editor.palette = () => PALETTES.dark;
+    editor.palette = () => FALLBACK_PALETTE;
     expect(editor.render(40)[1] ?? "").toContain("\x1b[38;2;102;102;102m");
   });
 

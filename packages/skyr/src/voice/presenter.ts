@@ -5,7 +5,11 @@
  * interface without touching the core, the config or this file's callers.
  */
 import type { VoiceState } from "./dictation.js";
-import { renderStatus, type VoicePalette } from "./indicator.js";
+import {
+  renderStatus,
+  type VoiceMode,
+  type VoicePalette,
+} from "./indicator.js";
 
 /** The status key the presenter claims in pi's footer; unrelated extensions stay unnamed. */
 export const VOICE_STATUS_KEY = "voice";
@@ -31,8 +35,7 @@ export interface VoicePresenter {
 }
 
 export interface StatusPresenterOptions {
-  /** TERM=dumb and friends: the plain `[mic]` / `x voice` forms, no blocks, no colour. */
-  ascii?: boolean;
+  mode?: VoiceMode;
   /** Reads theme colours afresh per frame, so the row follows theme switches. */
   palette?: () => VoicePalette;
 }
@@ -40,7 +43,7 @@ export interface StatusPresenterOptions {
 /** v1: driving pi's footer status line with one compact row. */
 export function statusPresenter(
   ui: StatusUI,
-  { ascii = false, palette }: StatusPresenterOptions = {},
+  { mode = "color", palette }: StatusPresenterOptions = {},
 ): VoicePresenter {
   const bars: number[] = [];
   return {
@@ -56,8 +59,8 @@ export function statusPresenter(
           levels: bars,
           t,
           message,
-          theme: palette?.(),
-          ascii,
+          palette: palette?.(),
+          mode,
         }),
       );
     },

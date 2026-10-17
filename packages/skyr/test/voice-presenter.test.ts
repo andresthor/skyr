@@ -3,10 +3,9 @@
  * screen, and to the footer status row only when it is not. The footer row is cleared, never
  * left as a permanent line, and it is set only when it changes.
  */
-import { parseColor } from "@earendil-works/pi-tui";
+import { parseColor, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import {
-  cellWidth,
   FALLBACK_PALETTE,
   meterUnit,
   renderStatus,
@@ -117,7 +116,7 @@ test("the error row names the cause, truncated by whole columns", () => {
     "voice ✗ microphone blocked · System Settings › Privacy",
   );
   const long = renderStatus(snap({ state: "error", message: "x".repeat(90) }))!;
-  expect(cellWidth(long)).toBeLessThanOrEqual(60);
+  expect(visibleWidth(long)).toBeLessThanOrEqual(60);
 });
 
 test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {

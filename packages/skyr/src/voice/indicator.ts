@@ -17,7 +17,9 @@ import {
   mixColors,
   oklchColor,
   parseColor,
+  sliceByColumn,
   type TerminalColorMode,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { SPEECH_DBFS, type VoiceState } from "./dictation.js";
 
@@ -113,33 +115,7 @@ const ANSI =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape bytes are exactly what the pattern must name
   /\x1b\[[\d;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b_[^\x07]*\x07/g;
 export const stripAnsi = (s: string) => s.replace(ANSI, "");
-
-/**
- * Terminal columns, erring wide: pi-tui aborts the whole render when a line exceeds
- * the terminal, so anything outside the known narrow ranges counts as two.
- */
-export function cellWidth(s: string): number {
-  let w = 0;
-  for (const ch of stripAnsi(s)) {
-    const c = ch.codePointAt(0) ?? 0;
-    if (
-      c < 0x20 ||
-      (c >= 0x300 && c < 0x370) ||
-      c === 0x200b ||
-      (c >= 0xfe00 && c <= 0xfe0f)
-    )
-      continue;
-    const narrow =
-      c < 0x1100 ||
-      (c >= 0x2000 && c <= 0x206f) ||
-      (c >= 0x2190 && c <= 0x21ff) ||
-      (c >= 0x2500 && c <= 0x25ff) ||
-      c === 0x2713 ||
-      c === 0x2717;
-    w += narrow ? 1 : 2;
-  }
-  return w;
-}
+const graphemes = new Intl.Segmenter();
 
 export interface LevelHistory {
   push(level: number): void;
@@ -192,19 +168,6 @@ const pad = (n: number) => " ".repeat(Math.max(0, n));
 /** A status row with a message needs room; pi truncates further to the terminal's width. */
 const ERROR_COLS = 60;
 
-/** Truncates to whole visible columns, erring wide exactly like `cellWidth`. */
-function truncate(text: string, max: number): string {
-  let w = 0;
-  let out = "";
-  for (const ch of text) {
-    const cw = cellWidth(ch);
-    if (w + cw > max) return out;
-    out += ch;
-    w += cw;
-  }
-  return out;
-}
-
 /**
  * The footer row, for when the editor's rule can't carry voice: another extension owns the
  * editor, or a card hides it. Same marks as the rule, led by `voice` so a neighbouring status
@@ -222,7 +185,7 @@ export function renderStatus(
   const ascii = mode === "ascii";
   const label = fg(T.muted, "voice");
   if (s.state === "error") {
-    const text = truncate(s.message, ERROR_COLS - 8);
+    const text = sliceByColumn(s.message, 0, ERROR_COLS - 8, true);
     return `${label} ${fg(T.error, ascii ? "x" : "✗")}${fg(T.muted, ` ${text}`)}`;
   }
   const phase = phaseOf(s);
@@ -269,15 +232,16 @@ function wrapWords(text: string, first: number, rest: number): string[] {
   }
   for (const word of text.split(/(\s+)/)) {
     if (!word) continue;
-    if (cellWidth(line + word) > cap && line.trim()) {
+    if (visibleWidth(line + word) > cap && line.trim()) {
       out.push(line);
       line = word.trimStart();
       cap = rest;
     } else line += word;
-    while (cellWidth(line) > cap && cap > 0) {
-      const chars = [...line];
+    while (visibleWidth(line) > cap && cap > 0) {
+      // whole graphemes, so an emoji is never split from its variation selector
+      const chars = Array.from(graphemes.segment(line), (g) => g.segment);
       let head = "";
-      while (chars.length && cellWidth(head + chars[0]) <= cap)
+      while (chars.length && visibleWidth(head + chars[0]) <= cap)
         head += chars.shift();
       if (!head) head = chars.shift() ?? "";
       out.push(head);
@@ -398,11 +362,11 @@ export function spliceGhost(
       const row = out[i];
       if (row === undefined) break;
       const text = stripAnsi(row).replace(/ +$/, "");
-      out[i] = paintTail(text, d) + pad(width - cellWidth(text));
+      out[i] = paintTail(text, d) + pad(width - visibleWidth(text));
       d += Math.max(0, text.length - paddingX) + 1;
     }
   }
-  const used = cellWidth(beforeText) + 1;
+  const used = visibleWidth(beforeText) + 1;
   if (!ghost) {
     out[ci] = before + CURSOR_CELL + pad(width - used);
     return out;
@@ -414,7 +378,7 @@ export function spliceGhost(
   // lets the wrap cuts land between characters, never inside colour markup
   const g = stripAnsi(ghost).replace(/^\s+/, "");
   const sep =
-    cellWidth(beforeText) > paddingX && !/\s$/.test(beforeText) ? " " : "";
+    visibleWidth(beforeText) > paddingX && !/\s$/.test(beforeText) ? " " : "";
   // the editor's own layout width: with padding the cursor may overflow into it, without it one column is kept
   const layout = Math.max(1, width - 2 * paddingX - (paddingX ? 0 : 1));
   const parts = wrapWords(
@@ -424,10 +388,13 @@ export function spliceGhost(
   );
   const first = parts[0] ?? "";
   out[ci] =
-    before + CURSOR_CELL + style(first) + pad(width - used - cellWidth(first));
+    before +
+    CURSOR_CELL +
+    style(first) +
+    pad(width - used - visibleWidth(first));
   const extra = parts.slice(1).map((p) => {
     const q = p.replace(/^\s+/, "");
-    return pad(paddingX) + style(q) + pad(width - paddingX - cellWidth(q));
+    return pad(paddingX) + style(q) + pad(width - paddingX - visibleWidth(q));
   });
   out.splice(ci + 1, 0, ...extra);
   return out;
@@ -535,14 +502,14 @@ export function renderRule(
       ? `${line(2)}${meter}${line(1)} ${left}`
       : `${line(2)} ${left}`;
     const tail = right ? ` ${right} ${line(2)}` : line(2);
-    const n = width - cellWidth(head) - cellWidth(tail) - 1;
+    const n = width - visibleWidth(head) - visibleWidth(tail) - 1;
     if (n < 1) return undefined;
     const more = hiddenBelow > 0 ? ` ↓ ${hiddenBelow} more ` : "";
     const fill =
-      more && n >= cellWidth(more) + 2
+      more && n >= visibleWidth(more) + 2
         ? (() => {
-            const a = Math.floor((n - cellWidth(more)) / 2);
-            return `${line(a)}${more}${line(n - a - cellWidth(more))}`;
+            const a = Math.floor((n - visibleWidth(more)) / 2);
+            return `${line(a)}${more}${line(n - a - visibleWidth(more))}`;
           })()
         : line(n);
     return `${head} ${fill}${tail}`;
@@ -555,7 +522,9 @@ export function renderRule(
     const room = Math.max(0, width - 9);
     const full = s.message;
     const text =
-      cellWidth(full) <= room ? full : `${truncate(full, room - 1)}…`;
+      visibleWidth(full) <= room
+        ? full
+        : `${sliceByColumn(full, 0, room - 1, true)}…`;
     return first([compose(`${mark}${fg(T.muted, ` ${text}`)}`, "")]);
   }
   if (!phase) {

@@ -3,17 +3,20 @@
  * cell a focused editor emits; `spliceGhost` anchors on it, keeps every row within the width,
  * and must never let an escape byte inside transcription text reach the terminal.
  */
+
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
   colorToOklch,
   parseColor,
   renderFakeCursor,
   rgbColor,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
+import { createVoiceEditorClass } from "../src/voice/editor.js";
 import {
   CURSOR_CELL,
-  cellWidth,
   DRY_MS,
   FALLBACK_PALETTE,
   paletteFromTheme,
@@ -61,7 +64,7 @@ test("the ghost lands right after the cursor cell, on the cursor's own row", () 
   // the cursor cell's own space renders as the caret's blank column right after "hello",
   // so the visible text is the buffer, the caret, then the ghost's leading space
   expect(stripAnsi(row).startsWith("  hello  world")).toBe(true);
-  expect(cellWidth(row)).toBe(40);
+  expect(visibleWidth(row)).toBe(40);
 });
 
 test("a ghost too wide for the cursor row wraps below it and never passes the bottom rule", () => {
@@ -75,7 +78,7 @@ test("a ghost too wide for the cursor row wraps below it and never passes the bo
   });
   const botRule = lines.length - 1;
   expect(botRule).toBeGreaterThan(2);
-  for (const row of lines) expect(cellWidth(row)).toBeLessThanOrEqual(width);
+  for (const row of lines) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
   // every wrapped row sits between the cursor row and the bottom rule
   const mi = lines.findIndex((l) => l.includes(CURSOR_CELL));
   expect(mi).toBe(1);
@@ -98,7 +101,7 @@ test("a cursor row with room only in the padding still keeps every row within wi
     palette: T,
   });
   for (const row of lines) {
-    expect(cellWidth(row)).toBeLessThanOrEqual(width);
+    expect(visibleWidth(row)).toBeLessThanOrEqual(width);
     // cuts land on plain text: no dangling SGR bytes at a row end
     // biome-ignore lint/suspicious/noControlCharactersInRegex: naming escape bytes is the point of this probe
     expect(row).not.toMatch(/\x1b\[[\d;]*$/);
@@ -304,4 +307,52 @@ test("under NO_COLOR a fresh commit is bold until it dries, with no colour", () 
     mode: "mono",
   });
   expect(dry[1]).not.toContain("\x1b[1m");
+});
+
+test("emoji with a variation selector never push a ghost or drying row past the width", () => {
+  // from 14 the fixture's own unwrapped row fits; Pi's editor wraps anything narrower itself
+  for (const width of [14, 20, 30, 41]) {
+    const lines = spliceGhost(
+      editorBase("see ▶️ here", width, { paddingX: 1 }),
+      {
+        width,
+        paddingX: 1,
+        ghost: "▶️ ".repeat(12) + "©️®️‼️ done",
+        drying: [{ chars: 4, lead: 1, age: 50 }],
+        palette: T,
+      },
+    );
+    for (const row of lines)
+      expect(visibleWidth(row), `@${width}`).toBeLessThanOrEqual(width);
+  }
+});
+
+test("pi's real editor calls the bottom-border hook, so the voice rule reaches the screen", () => {
+  const VoiceEditor = createVoiceEditorClass(CustomEditor);
+  const keys = {
+    getKeys: (id: string) =>
+      ({ "tui.input.submit": ["enter"], "tui.select.cancel": ["escape"] })[
+        id
+      ] ?? [],
+    matches: () => false,
+  };
+  const ed = new VoiceEditor(
+    { terminal: { rows: 40 }, requestRender: () => {} } as never,
+    { borderColor: (s: string) => s, selectList: {} } as never,
+    keys as never,
+  );
+  ed.focused = true;
+  ed.decor.rule = {
+    state: "listening",
+    t: 0,
+    sinceStart: 2000,
+    micOpen: true,
+    accepted: true,
+    heardSpeech: true,
+    bars: [],
+    message: "",
+  };
+  const bottom = ed.render(60).at(-1) ?? "";
+  expect(stripAnsi(bottom)).toContain("● listening");
+  expect(visibleWidth(bottom)).toBe(60);
 });

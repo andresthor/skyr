@@ -3,10 +3,10 @@
  * one mark per fact (the meter for speech, the light for the mic, the word for the phase, the
  * keys for what they do now), and nothing drawn when voice has nothing to say.
  */
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { SPEECH_DBFS } from "../src/voice/dictation.js";
 import {
-  cellWidth,
   FALLBACK_PALETTE,
   meterUnit,
   renderRule,
@@ -66,7 +66,7 @@ test("every row is exactly the width, at every width, in every state and mode", 
     for (const s of STATES)
       for (let width = 9; width <= 140; width++) {
         const row = draw(s, { width, mode, hiddenBelow: width % 3 });
-        expect(cellWidth(row ?? ""), `${mode} ${s.state} @${width}`).toBe(
+        expect(visibleWidth(row ?? ""), `${mode} ${s.state} @${width}`).toBe(
           width,
         );
       }

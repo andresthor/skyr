@@ -20,9 +20,12 @@ import type { DictationSink } from "./dictation.js";
 import {
   DRY_MS,
   FALLBACK_PALETTE,
+  renderRule,
   spliceGhost,
+  type VoiceKeys,
   type VoiceMode,
   type VoicePalette,
+  type VoiceSnapshot,
 } from "./indicator.js";
 
 /** The text to insert so a segment reads naturally between what is before and after the cursor. */
@@ -43,7 +46,8 @@ export interface VoiceDecor {
   ghost: string;
   /** Recent commits, newest first; `at` is when each landed. */
   drying: { chars: number; lead: number; at: number }[];
-  live: boolean;
+  /** What the bottom rule shows while voice is on; undefined leaves Pi's own rule. */
+  rule?: VoiceSnapshot;
   mode?: VoiceMode;
 }
 
@@ -71,7 +75,6 @@ export function createVoiceEditorClass(
     decor: VoiceDecor = {
       ghost: "",
       drying: [],
-      live: false,
     };
     /** The palette for this render, re-read every frame so /theme reaches the ghost and drying colours. */
     palette: () => VoicePalette = () => FALLBACK_PALETTE;
@@ -105,8 +108,8 @@ export function createVoiceEditorClass(
 
     override render(width: number): string[] {
       const base = super.render(width);
-      const { ghost, drying, live, mode } = this.decor;
-      if (!ghost && !drying.length && !live) return base;
+      const { ghost, drying, mode } = this.decor;
+      if (!ghost && !drying.length) return base;
       // this editor is permanent: a throw here would take the input bar down with it
       try {
         const t = now();
@@ -115,7 +118,6 @@ export function createVoiceEditorClass(
           paddingX: this.getPaddingX(),
           ghost,
           drying: drying.map((s) => ({ ...s, age: t - s.at })),
-          live,
           mode,
           // private in pi-tui's types, but it is what tells the bottom rule from the autocomplete rows
           below:
@@ -126,6 +128,46 @@ export function createVoiceEditorClass(
       } catch {
         return base;
       }
+    }
+
+    protected override renderBottomBorder(
+      width: number,
+      hiddenLineCount: number,
+    ): string {
+      const { rule, mode } = this.decor;
+      // pi-tui calls this from render() before the ghost's guard: a throw must fall back here too
+      try {
+        const row =
+          rule &&
+          renderRule(rule, {
+            width,
+            hiddenBelow: hiddenLineCount,
+            rule: (s) => this.borderColor(s),
+            keys: this.hintKeys(),
+            palette: this.palette(),
+            mode,
+          });
+        if (row !== undefined) return row;
+      } catch {}
+      return super.renderBottomBorder(width, hiddenLineCount);
+    }
+
+    /** The first key of each binding, named the way Pi's own hints name keys. */
+    private hintKeys(): VoiceKeys {
+      const name = (
+        id: Parameters<KeybindingsManager["getKeys"]>[0],
+        unbound: string,
+      ) => {
+        const key = this.keys.getKeys(id)[0] ?? unbound;
+        return process.platform === "darwin"
+          ? key.replace(/\balt\b/g, "option")
+          : key;
+      };
+      return {
+        submit: name("tui.input.submit", "enter"),
+        cancel: name("tui.select.cancel", "escape"),
+        undo: name("tui.editor.undo", "ctrl+-"),
+      };
     }
 
     commit(segment: string): void {
@@ -172,7 +214,7 @@ export function editorSink(
       const ed = target();
       snapshot = ed ? ed.getText() : fallback.get();
       committed = snapshot;
-      if (ed) ed.decor = { ...ed.decor, ghost: "", drying: [], live: true };
+      if (ed) ed.decor = { ...ed.decor, ghost: "", drying: [] };
       repaint();
     },
     interim(segment) {
@@ -194,14 +236,14 @@ export function editorSink(
     },
     end() {
       const ed = target();
-      if (ed) ed.decor = { ...ed.decor, ghost: "", live: false };
+      if (ed) ed.decor = { ...ed.decor, ghost: "" };
       else fallback.set(committed);
       repaint();
     },
     revert() {
       const ed = target();
       if (ed) {
-        ed.decor = { ...ed.decor, ghost: "", drying: [], live: false };
+        ed.decor = { ...ed.decor, ghost: "", drying: [] };
         ed.discardPending();
         if (ed.getText() !== snapshot) ed.setText(snapshot);
       } else fallback.set(snapshot);

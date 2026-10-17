@@ -19,10 +19,19 @@ import {
   CURSOR_CELL,
   DRY_MS,
   FALLBACK_PALETTE,
+  stripAnsi,
   type VoicePalette,
+  type VoiceSnapshot,
 } from "../src/voice/indicator.js";
 
-const KEYS = {} as KeybindingsManager;
+const BINDINGS: Record<string, string[]> = {
+  "tui.input.submit": ["enter"],
+  "tui.select.cancel": ["escape", "ctrl+c"],
+  "tui.editor.undo": ["ctrl+-"],
+};
+const KEYS = {
+  getKeys: (id: string) => BINDINGS[id] ?? [],
+} as unknown as KeybindingsManager;
 
 /** A minimal stand-in for pi-tui's Editor: [top rule, ...text rows, bottom rule], with the fake cursor at end of the cursor line. */
 class FakeEditor {
@@ -32,6 +41,8 @@ class FakeEditor {
   paddingX = 0;
   throwsOnRender = false;
   enteredKeys: string[] = [];
+  /** Pi sets this per thinking level and bash mode; the test marks it to see where it is used. */
+  borderColor = (s: string) => `<${s}>`;
 
   handleInput(data: string): void {
     this.enteredKeys.push(data);
@@ -46,8 +57,12 @@ class FakeEditor {
         `${pad}${line}${i === this.cursorLine ? CURSOR_CELL : ""}${" ".repeat(Math.max(0, width - this.paddingX - line.length))}`,
       );
     });
-    rows.push("─".repeat(width));
+    rows.push(this.renderBottomBorder(width, 0));
     return rows;
+  }
+
+  renderBottomBorder(width: number, _hiddenLineCount: number): string {
+    return this.borderColor("─".repeat(width));
   }
 
   getPaddingX(): number {
@@ -239,6 +254,45 @@ describe("render", () => {
   });
 });
 
+describe("bottom rule", () => {
+  const listening: VoiceSnapshot = {
+    state: "listening",
+    t: 0,
+    sinceStart: 2000,
+    micOpen: true,
+    accepted: true,
+    heardSpeech: true,
+    bars: [],
+    message: "",
+  };
+
+  test("while voice is on, the bottom rule is the voice rule, in Pi's rule colour and Pi's key names", () => {
+    const editor = fresh("hello");
+    editor.decor.rule = listening;
+    // the test's border marker takes visible columns, so give the hints room to stay
+    const bottom = editor.render(120).at(-1) ?? "";
+    expect(stripAnsi(bottom)).toContain("● listening");
+    expect(stripAnsi(bottom)).toContain("enter keep · escape discard");
+    // the rule cells are drawn through the editor's own border colour, never recoloured
+    expect(bottom.startsWith("<──>")).toBe(true);
+    expect(bottom.endsWith("<──>")).toBe(true);
+  });
+
+  test("with voice off, the bottom rule is Pi's own", () => {
+    const editor = fresh("hello");
+    expect(editor.render(40).at(-1)).toBe(`<${"─".repeat(40)}>`);
+  });
+
+  test("a throw while drawing the voice rule leaves Pi's rule, never a broken input bar", () => {
+    const editor = fresh("hello");
+    editor.decor.rule = listening;
+    editor.palette = () => {
+      throw new Error("theme went away");
+    };
+    expect(editor.render(40).at(-1)).toBe(`<${"─".repeat(40)}>`);
+  });
+});
+
 describe("editorSink", () => {
   function pair(editor?: EditorInstance) {
     const edits: string[] = [];
@@ -256,7 +310,6 @@ describe("editorSink", () => {
     editor.focused = true;
     const { sink } = pair(editor);
     sink.begin();
-    expect(editor.decor.live).toBe(true);
     expect(editor.text).toBe("previous words typed");
     sink.interim("more stuff");
     expect(editor.decor.ghost).toBe("more stuff");
@@ -265,7 +318,6 @@ describe("editorSink", () => {
     expect(editor.decor.ghost).toBe("");
     expect(editor.text).toBe("previous words typed more stuff");
     sink.end();
-    expect(editor.decor.live).toBe(false);
     expect(editor.text).toBe("previous words typed more stuff");
     sink.revert();
     expect(editor.text).toBe("previous words typed");

@@ -25,9 +25,9 @@ import {
 } from "./config.js";
 import { resolveSttCredentials } from "./credentials.js";
 import {
+  DEFAULT_TIMING,
   DictationController,
   type DictationControllerOptions,
-  levelFromRms,
 } from "./dictation.js";
 import {
   createVoiceEditorClass,
@@ -37,17 +37,20 @@ import {
 import {
   createLevelHistory,
   DRY_MS,
+  meterUnit,
   paletteFromTheme,
   TICK_MS,
   type VoiceMode,
-} from "./indicator.js";
-import {
-  statusPresenter,
-  type VoicePresenter,
   type VoiceSnapshot,
-} from "./presenter.js";
+} from "./indicator.js";
+import { type VoicePresenter, voicePresenter } from "./presenter.js";
 
 export const VOICE_SHORTCUT = "ctrl+space";
+
+/** How long before the hard cap the rule counts the time left. */
+const CAP_WARN_MS = 15_000;
+/** How long the rule offers the undo after Esc reverted committed words. */
+const DISCARD_NOTICE_MS = 2000;
 
 export interface VoiceOptions {
   /** What the terminal can show; read from the environment when not given. */
@@ -122,7 +125,10 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   let presenter: VoicePresenter | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   const history = createLevelHistory();
-  let levels: number[] = [];
+  let bars: number[] = [];
+  let startedAt = 0;
+  let discardedUntil = 0;
+  const maxMs = opts.controller?.timing?.maxMs ?? DEFAULT_TIMING.maxMs;
 
   // read before any session_start resolves, so /voice works even straight after reload — silent:
   // problems have no UI before a context exists, and session_start is the earliest honest surface
@@ -151,19 +157,36 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
 
   const drying = () =>
     !!editor?.decor.drying.some((s) => Date.now() - s.at < DRY_MS);
-  const pushPresenter = () =>
-    presenter?.update({
+  const discarded = () =>
+    controller.state === "idle" && Date.now() < discardedUntil;
+  const snapshot = (): VoiceSnapshot => {
+    const now = Date.now();
+    const sinceStart = now - startedAt;
+    const capLeft = maxMs - sinceStart;
+    return {
       state: controller.state,
-      level: levels[0] ?? 0,
+      t: now - controller.stateSince,
+      sinceStart,
+      micOpen: controller.micOpen,
+      accepted: controller.accepted,
+      heardSpeech: controller.heardSpeech,
+      bars,
       message: controller.message,
-      t: Date.now() - controller.stateSince,
-    } satisfies VoiceSnapshot);
+      discarded: discarded(),
+      capLeftMs:
+        controller.state === "listening" && capLeft <= CAP_WARN_MS
+          ? Math.max(0, capLeft)
+          : undefined,
+    };
+  };
+  const pushPresenter = () => presenter?.update(snapshot());
   const tick = () => {
-    if (controller.state === "idle" && !drying()) {
+    if (controller.state === "idle" && !drying() && !discarded()) {
       if (editor) editor.decor.drying = [];
       stopTimer();
     }
-    levels = history.sample(TICK_MS);
+    // committed bars only: the live one restarts every bar and beats against the mic's chunk rate
+    bars = history.sample(TICK_MS).slice(1);
     pushPresenter();
     repaint();
   };
@@ -179,11 +202,14 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   const controllerOptions: DictationControllerOptions = {
     creds,
     sink,
-    onLevel: (rms) => history.push(levelFromRms(rms)),
+    onLevel: (rms) => history.push(meterUnit(rms)),
     onChange: () => {
       if (controller.state === "arming") {
         history.reset();
-        levels = [];
+        bars = [];
+        startedAt = Date.now();
+        // a new dictation ends the previous undo offer: the undo now belongs to newer text
+        discardedUntil = 0;
       }
       if (controller.state !== "idle" || drying()) startTimer();
       pushPresenter();
@@ -194,14 +220,32 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   applyConfig(VOICE_DEFAULTS);
   const controller = new DictationController(controllerOptions);
 
+  /** Esc and `/voice off`: a reverted buffer means committed words went, so offer the undo. */
+  const cancel = () => {
+    const before = editor?.getText();
+    controller.cancel();
+    if (editor && editor.getText() !== before) {
+      discardedUntil = Date.now() + DISCARD_NOTICE_MS;
+      startTimer();
+      pushPresenter();
+      repaint();
+    }
+  };
+
   const keyHook = (data: string, keys: KeybindingsManager): boolean => {
+    // after any edit one undo would remove that edit, not the dictation, so the offer ends here
+    if (discardedUntil) {
+      discardedUntil = 0;
+      pushPresenter();
+      repaint();
+    }
     if (controller.state === "error") {
       controller.dismiss();
       return false;
     }
     if (!controller.active) return false;
     if (keys.matches(data, "tui.select.cancel")) {
-      controller.cancel();
+      cancel();
       return true;
     }
     if (keys.matches(data, "tui.input.submit")) {
@@ -256,7 +300,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     description:
       "Dictate with Corti speech-to-text (ctrl+space) · /voice off cancels",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      if (args.trim() === "off") controller.cancel();
+      if (args.trim() === "off") cancel();
       else toggle(ctx);
     },
   });
@@ -278,10 +322,12 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       ctx.ui.notify(`skyr: ${problems.join(" · ")}`, "warning");
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     await mount(ctx);
-    presenter = statusPresenter(ctx.ui, {
-      mode,
-      // re-read per frame: /theme reaches the status row without a remount
+    presenter = voicePresenter({
+      editor: () => editor,
+      status: ctx.ui,
+      // re-read per frame: /theme reaches the footer row without a remount
       palette: () => paletteFromTheme(ctxRef?.ui.theme),
+      mode,
     });
     pushPresenter();
     // the token request is the slowest step of arming; a cached one makes ctrl+space feel instant
@@ -291,12 +337,8 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   pi.on("session_shutdown", () => {
     controller.dispose();
     stopTimer();
-    presenter?.update({
-      state: "idle",
-      level: 0,
-      message: "",
-      t: 0,
-    });
+    discardedUntil = 0;
+    presenter?.update(snapshot());
     presenter = undefined;
   });
 }

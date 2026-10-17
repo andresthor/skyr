@@ -1,35 +1,35 @@
 /**
- * The presenter seam, v1 = the footer status row. Every animated row is ≤ 8 visible columns by
- * the extension's own width-erring measure, the error line truncates whole columns, and "idle"
- * exists as `setStatus(key, undefined)`, never as a permanent row.
+ * The presenter seam: voice's state goes to the editor's bottom rule while our editor is on
+ * screen, and to the footer status row only when it is not. The footer row is cleared, never
+ * left as a permanent line, and it is set only when it changes.
  */
 import { parseColor } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import {
   cellWidth,
   FALLBACK_PALETTE,
+  meterUnit,
   renderStatus,
   stripAnsi,
+  type VoiceSnapshot,
 } from "../src/voice/indicator.js";
 import {
-  statusPresenter,
+  type RuleEditor,
   VOICE_STATUS_KEY,
-  type VoiceSnapshot,
+  voicePresenter,
 } from "../src/voice/presenter.js";
 
 const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({
   state: "listening",
-  level: 0.5,
-  message: "",
   t: 0,
+  sinceStart: 2000,
+  micOpen: true,
+  accepted: true,
+  heardSpeech: true,
+  bars: [-30, -22, -40].map((db) => meterUnit(10 ** (db / 20))),
+  message: "",
   ...s,
 });
-
-/** A second palette, as a light theme would give, so a switch is visible in the escapes. */
-const LIGHT = {
-  ...FALLBACK_PALETTE,
-  colors: { ...FALLBACK_PALETTE.colors, accent: parseColor("#157937") },
-};
 
 class FakeStatusUi {
   lines: (string | undefined)[] = [];
@@ -42,100 +42,104 @@ class FakeStatusUi {
   }
 }
 
-test("animated rows stay within 8 columns; the idle state clears, never a permanent row", () => {
+function setup(editor?: RuleEditor) {
   const ui = new FakeStatusUi();
-  const present = statusPresenter(ui);
-  present.update(snap({ state: "listening", level: 1 }));
-  expect(ui.last).toContain("●");
-  for (const state of ["arming", "listening", "transcribing"] as const) {
-    present.update(snap({ state, level: 1, t: 300 }));
-    present.update(snap({ state, level: 1, t: 500 }));
-    expect(cellWidth(ui.last ?? "")).toBeLessThanOrEqual(8);
-  }
+  const present = voicePresenter({
+    editor: () => editor,
+    status: ui,
+    palette: () => FALLBACK_PALETTE,
+    mode: "color",
+  });
+  return { ui, present };
+}
+
+test("with our editor focused, voice is on the rule and the footer stays clear", () => {
+  const editor: RuleEditor = { decor: {}, focused: true };
+  const { ui, present } = setup(editor);
+  present.update(snap());
+  expect(editor.decor.rule?.state).toBe("listening");
+  expect(ui.lines).toEqual([undefined]);
+});
+
+test("when a card hides our editor, the footer carries voice and the rule lets go", () => {
+  const editor = { decor: {} as RuleEditor["decor"], focused: true };
+  const { ui, present } = setup(editor);
+  present.update(snap());
+  editor.focused = false;
+  present.update(snap());
+  expect(editor.decor.rule).toBeUndefined();
+  expect(stripAnsi(ui.last ?? "")).toMatch(/^voice ● listening /);
+  editor.focused = true;
+  present.update(snap());
+  expect(ui.last).toBeUndefined();
+});
+
+test("a foreign editor means the footer, and idle clears it rather than leaving a row", () => {
+  const { ui, present } = setup(undefined);
+  present.update(snap());
+  expect(ui.last).toBeDefined();
   present.update(snap({ state: "idle" }));
   expect(ui.last).toBeUndefined();
 });
 
-test("silent bars are hairlines, not full accent blocks", () => {
-  const row = renderStatus(snap({ state: "listening", level: 0 }))!;
-  // the dim colour leaves as SGR, not raw hex
-  expect(row).toContain("\x1b[38;2;102;102;102m");
-  expect(row).not.toContain("\x1b[38;2;184;248;24m▁");
+test("the footer is set only when its row changes", () => {
+  const { ui, present } = setup(undefined);
+  present.update(snap({ state: "idle" }));
+  present.update(snap({ state: "idle" }));
+  expect(ui.lines).toEqual([undefined]);
+  present.update(snap());
+  present.update(snap());
+  expect(ui.lines).toHaveLength(2);
 });
 
-test("the error line names the state and the reason, truncated by whole columns", () => {
-  const row = renderStatus({
-    state: "error",
-    level: 0,
-    message: "microphone blocked · System Settings › Privacy",
-  })!;
+test("the footer row names voice first, so a neighbouring status can't claim its marks", () => {
+  expect(
+    stripAnsi(renderStatus(snap({ state: "arming", micOpen: false }))!),
+  ).toBe("voice ○ starting ────────");
+  expect(
+    stripAnsi(renderStatus(snap({ state: "transcribing", micOpen: false }))!),
+  ).toBe("voice ○ finishing ────────");
+  expect(
+    stripAnsi(renderStatus(snap({ state: "idle", discarded: true }))!),
+  ).toBe("voice discarded");
+  // the footer collapses runs of spaces, so the row never relies on them
+  expect(renderStatus(snap())!).not.toMatch(/ {2}/);
+});
+
+test("the error row names the cause, truncated by whole columns", () => {
+  const row = renderStatus(
+    snap({
+      state: "error",
+      message: "microphone blocked · System Settings › Privacy",
+    }),
+  )!;
   expect(stripAnsi(row)).toBe(
-    "✗ voice · microphone blocked · System Settings › Privacy",
+    "voice ✗ microphone blocked · System Settings › Privacy",
   );
-  expect(cellWidth(row)).toBeLessThanOrEqual(60);
-  expect(row.startsWith(`\x1b[38;2;204;102;102m✗`)).toBe(true);
-  const long = renderStatus({
-    state: "error",
-    level: 0,
-    message: "x".repeat(90),
-  })!;
+  const long = renderStatus(snap({ state: "error", message: "x".repeat(90) }))!;
   expect(cellWidth(long)).toBeLessThanOrEqual(60);
 });
 
-test("TERM=dumb forms are plain: `[mic]` live, `x voice` for the error", () => {
-  expect(renderStatus({ state: "listening", level: 1, mode: "ascii" })).toBe(
-    "[mic]",
+test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {
+  expect(stripAnsi(renderStatus(snap(), { mode: "ascii" })!)).toMatch(
+    /^voice \[rec\] listening [-=#]{8}$/,
   );
-  expect(renderStatus({ state: "arming", level: 0, mode: "ascii" })).toBe(
-    "[mic]",
-  );
-  expect(
-    renderStatus({
-      state: "error",
-      level: 0,
-      message: "needs sox",
-      mode: "ascii",
-    }),
-  ).toBe("x voice · needs sox");
-});
-
-test("the status row reads the palette afresh each frame, so it follows theme switches", () => {
-  const ui = new FakeStatusUi();
-  const present = statusPresenter(ui, {
-    palette: () => (ui.lines.length % 2 ? LIGHT : FALLBACK_PALETTE),
-  });
-  present.update(snap({ state: "listening", level: 1 }));
-  expect(ui.last!.startsWith("\x1b[38;2;184;248;24m●")).toBe(true);
-  present.update(snap({ state: "listening", level: 1 }));
-  expect(ui.last!.startsWith("\x1b[38;2;21;121;55m●")).toBe(true);
-});
-
-test("arming pulses on a ~600 ms cycle; transcribing drains the bars", () => {
-  const filled = renderStatus(snap({ state: "arming", level: 0, t: 0 }))!;
-  const hollow = renderStatus(snap({ state: "arming", level: 0, t: 400 }))!;
-  expect(filled).toContain("●");
-  expect(hollow).toContain("·");
-  const full = renderStatus(snap({ state: "transcribing", level: 1, t: 0 }))!;
-  const drained = renderStatus(
-    snap({ state: "transcribing", level: 1, t: 2000 }),
-  )!;
-  expect(cellWidth(full)).toBe(7);
-  expect(cellWidth(drained)).toBe(7);
-  // after the drain no accent bar remains: everything dried to the dim colour
-  expect(drained).toBe(
-    renderStatus(snap({ state: "transcribing", level: 0, t: 2000 }))!,
-  );
-});
-
-test("NO_COLOR draws the same glyphs uncoloured; a 256-colour theme never gets 24-bit escapes", () => {
-  const mono = renderStatus({ state: "listening", level: 1, mode: "mono" })!;
+  const mono = renderStatus(snap(), { mode: "mono" })!;
   expect(mono).not.toContain("\x1b[");
   expect(mono).toContain("●");
-  const indexed = renderStatus({
-    state: "listening",
-    level: 1,
-    palette: { ...FALLBACK_PALETTE, mode: "256color" },
-  })!;
-  expect(indexed).not.toContain("\x1b[38;2;");
-  expect(indexed).toContain("\x1b[38;5;");
+});
+
+test("the footer row reads the palette it is given, so it follows theme switches", () => {
+  const light = {
+    ...FALLBACK_PALETTE,
+    colors: { ...FALLBACK_PALETTE.colors, accent: parseColor("#157937") },
+  };
+  expect(renderStatus(snap(), { palette: light })).toContain(
+    "\x1b[38;2;21;121;55m●",
+  );
+  expect(
+    renderStatus(snap(), {
+      palette: { ...FALLBACK_PALETTE, mode: "256color" },
+    }),
+  ).not.toContain("\x1b[38;2;");
 });

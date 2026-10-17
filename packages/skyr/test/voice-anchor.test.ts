@@ -136,16 +136,20 @@ test("an editor without the cursor cell draws no ghost and no wet colouring", ()
   ).toEqual(base);
 });
 
-test("an idle buffer is returned exactly; only the rules turn brand-green while live", () => {
+test("an idle buffer is returned exactly, and the rules stay Pi's: the ghost never recolours them", () => {
   const base = editorBase("hello", 20);
   expect(spliceGhost(base, { width: 20, palette: T })).toEqual(base);
-  const live = spliceGhost(base, { width: 20, live: true, palette: T });
-  expect(live[0]).toBe(`\x1b[38;2;63;92;18m${"─".repeat(20)}\x1b[39m`);
-  expect(live[1]).toBe(base[1]);
-  // a firm span past its drying window colours nothing, even while live
+  const decorated = spliceGhost(base, {
+    width: 20,
+    ghost: "more",
+    drying: [{ chars: 3, lead: 0, age: 10 }],
+    palette: T,
+  });
+  expect(decorated[0]).toBe(base[0]);
+  expect(decorated.at(-1)).toBe(base.at(-1));
+  // a span past its drying window colours nothing
   const dried = spliceGhost(base, {
     width: 20,
-    live: true,
     drying: [{ chars: 3, lead: 0, age: DRY_MS }],
     palette: T,
   });
@@ -179,7 +183,6 @@ test("a 256-colour terminal gets 256-colour escapes from the theme, never 24-bit
     paddingX: 2,
     ghost: "world",
     drying: [{ chars: 5, lead: 0, age: 50 }],
-    live: true,
     palette,
   });
   const all = lines.join("\n");
@@ -193,7 +196,6 @@ test("NO_COLOR keeps the ghost as italic and faint text, with no colour anywhere
     paddingX: 2,
     ghost: "world",
     drying: [{ chars: 5, lead: 0, age: 50 }],
-    live: true,
     palette: T,
     mode: "mono",
   });
@@ -220,7 +222,6 @@ test("the palette is the theme's own colours and colour mode", () => {
       text: c("#9a9aa7"),
       muted: c("#898a96"),
       dim: c("#72727d"),
-      border: c("#679dc0"),
       error: c("#cc6666"),
       warning: c("#d7af5f"),
     },

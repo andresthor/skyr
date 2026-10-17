@@ -81,7 +81,6 @@ const theme = (hex: string): ThemeStub & Record<string, unknown> => {
       text: c,
       muted: c,
       dim: c,
-      border: c,
       error: c,
       warning: c,
     },
@@ -332,4 +331,46 @@ test("TERM=dumb is ascii; NO_COLOR is mono, keeping glyphs; FORCE_COLOR wins ove
   expect(voiceMode({ NO_COLOR: "1", FORCE_COLOR: "1" })).toBe("color");
   expect(voiceMode({ NO_COLOR: "" })).toBe("color");
   expect(voiceMode({})).toBe("color");
+});
+
+test("during dictation the rule rides our focused editor, and discarding committed words offers the undo", async () => {
+  await withCreds(async () => {
+    ownAgentDir();
+    const pi = fakePi();
+    const starts: SessionOptions[] = [];
+    registerVoice(pi as never, {
+      mode: "color",
+      controller: {
+        start: (o) => {
+          starts.push(o);
+          return { stop: () => Promise.resolve(""), cancel: () => {} };
+        },
+      },
+    });
+    const { ui, ctx } = fakeCtx("tui");
+    await pi.handlers.get("session_start")!(null, ctx);
+    const factory = ui.setEditorComponent.mock.calls[0]?.[0] as (
+      t: unknown,
+      theme: unknown,
+      keys: unknown,
+    ) => VoiceEditorLike & { focused: boolean };
+    const ed = factory({ requestRender: () => {} }, {}, {});
+    ed.focused = true;
+    pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+    expect(ed.decor.rule?.state).toBe("arming");
+    // the footer stays clear while the rule carries voice
+    expect(ui.setStatus.mock.calls.every(([, row]) => row === undefined)).toBe(
+      true,
+    );
+    starts[0]!.onReady?.();
+    starts[0]!.onFinal?.("hello there");
+    expect(ed.getText()).toBe("hello there");
+    await pi.commands.get("voice")!.handler("off", ctx);
+    expect(ed.getText()).toBe("");
+    expect(ed.decor.rule?.discarded).toBe(true);
+    // with nothing committed, a cancel offers no undo: it would undo the user's own edit
+    pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+    await pi.commands.get("voice")!.handler("off", ctx);
+    expect(ed.decor.rule?.discarded).toBe(false);
+  });
 });

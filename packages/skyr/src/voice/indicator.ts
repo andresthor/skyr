@@ -2,10 +2,10 @@
  * Voice dictation visuals. Pure: state in, ANSI rows out; no I/O, no timers.
  *
  *   renderRule()          the editor's bottom rule while voice is on: meter, mic light, state, keys
- *   renderStatus()        the one-row footer status artist: state glyph + level bars, SGR allowed
+ *   renderStatus()        the same marks as a footer row, for when the editor can't carry them
  *   createLevelHistory()  levels in at whatever rate the mic delivers, one smoothed bar per BAR_MS
  *   spliceGhost()         decorates Pi's Editor.render(): dim italic interim after the cursor, freshly
- *                         committed words born in the accent and drying to text, live rules recoloured
+ *                         committed words born in the accent and drying to text
  *
  * Every glyph is in U+2580–259F or is a width-1 symbol. Never braille.
  */
@@ -30,14 +30,7 @@ const BAR_MS = 100;
 /** What the terminal can show: `mono` is NO_COLOR (glyphs and attributes, no colour), `ascii` is TERM=dumb. */
 export type VoiceMode = "color" | "mono" | "ascii";
 
-type VoiceToken =
-  | "accent"
-  | "text"
-  | "muted"
-  | "dim"
-  | "border"
-  | "error"
-  | "warning";
+type VoiceToken = "accent" | "text" | "muted" | "dim" | "error" | "warning";
 
 /** Theme colours plus the terminal's colour mode, so 256-colour terminals get 256-colour escapes. */
 export interface VoicePalette {
@@ -52,7 +45,6 @@ export const FALLBACK_PALETTE: VoicePalette = {
     text: parseColor("#d4d4d4"),
     muted: parseColor("#808080"),
     dim: parseColor("#666666"),
-    border: parseColor("#3f5c12"),
     error: parseColor("#cc6666"),
     warning: parseColor("#d7af5f"),
   },
@@ -68,9 +60,9 @@ interface ThemeLike {
 /** Reads the live theme's token colours so the indicator follows theme switches. */
 export function paletteFromTheme(theme: ThemeLike | undefined): VoicePalette {
   if (!theme) return FALLBACK_PALETTE;
-  const { accent, text, muted, dim, border, error, warning } = theme.colors;
+  const { accent, text, muted, dim, error, warning } = theme.colors;
   return {
-    colors: { accent, text, muted, dim, border, error, warning },
+    colors: { accent, text, muted, dim, error, warning },
     mode: theme.getColorMode(),
   };
 }
@@ -85,7 +77,6 @@ const painter =
   (P: VoicePalette, mode: VoiceMode) =>
   (c: Color, s: string): string =>
     mode === "color" ? `${foregroundAnsi(c, P.mode)}${s}\x1b[39m` : s;
-const RESET = "\x1b[0m";
 
 /** The least perceptual distance (OKLab ΔE) between the wet start colour and the text it dries into. */
 const WET_CONTRAST = 0.15;
@@ -118,9 +109,6 @@ function wetStart(accent: Color, text: Color): Color {
   return lifted;
 }
 
-const LOWER = "▁▂▃▄▅▆▇";
-/** Bottom k/8 of a cell. */
-const lo = (k: number) => (k >= 8 ? "█" : k <= 0 ? " " : LOWER.charAt(k - 1));
 const ANSI =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape bytes are exactly what the pattern must name
   /\x1b\[[\d;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b_[^\x07]*\x07/g;
@@ -203,20 +191,6 @@ const pad = (n: number) => " ".repeat(Math.max(0, n));
 
 /** A status row with a message needs room; pi truncates further to the terminal's width. */
 const ERROR_COLS = 60;
-const MAX_BARS = 6;
-
-export interface StatusInput {
-  state: VoiceState;
-  /** Smoothed 0..1 level, newest sample. */
-  level: number;
-  /** Previously smoothed levels, newest first (up to 6 shown). */
-  levels?: readonly number[];
-  /** ms since this state began — the arming pulse and the transcribing drain run on it. */
-  t?: number;
-  message?: string;
-  palette?: VoicePalette;
-  mode?: VoiceMode;
-}
 
 /** Truncates to whole visible columns, erring wide exactly like `cellWidth`. */
 function truncate(text: string, max: number): string {
@@ -232,51 +206,50 @@ function truncate(text: string, max: number): string {
 }
 
 /**
- * One row for the footer status line ("idle" → undefined, a `setStatus(key, undefined)`
- * clear). pi's footer passes SGR and truncates by width, so the row is coloured here and
- * bounded by `cellWidth` here; mono draws the same glyphs uncoloured, ascii one plain form.
+ * The footer row, for when the editor's rule can't carry voice: another extension owns the
+ * editor, or a card hides it. Same marks as the rule, led by `voice` so a neighbouring status
+ * can't claim them; undefined clears the row.
  */
-export function renderStatus({
-  state,
-  level,
-  levels = [],
-  t = 0,
-  message = "",
-  palette = FALLBACK_PALETTE,
-  mode = "color",
-}: StatusInput): string | undefined {
+export function renderStatus(
+  s: VoiceSnapshot,
+  {
+    palette = FALLBACK_PALETTE,
+    mode = "color",
+  }: { palette?: VoicePalette; mode?: VoiceMode } = {},
+): string | undefined {
   const T = palette.colors;
   const fg = painter(palette, mode);
   const ascii = mode === "ascii";
-  if (state === "idle") return undefined;
-  if (state === "error") {
-    const text = truncate(
-      `${ascii ? "x" : "✗"} voice · ${message}`,
-      ERROR_COLS,
-    );
-    return mode === "color"
-      ? `${fg(T.error, text.slice(0, 1))}${fg(T.muted, text.slice(1))}${RESET}`
-      : text;
+  const label = fg(T.muted, "voice");
+  if (s.state === "error") {
+    const text = truncate(s.message, ERROR_COLS - 8);
+    return `${label} ${fg(T.error, ascii ? "x" : "✗")}${fg(T.muted, ` ${text}`)}`;
   }
-  if (ascii) return "[mic]";
-  const glyph =
-    state === "listening"
-      ? fg(T.accent, "●")
-      : state === "arming"
-        ? // filled for the first 300 ms of each 600 ms cycle
-          t % 600 < 300
-          ? fg(T.accent, "●")
-          : fg(T.muted, "·")
-        : fg(T.muted, "…");
-  if (state === "arming") return `${glyph}${fg(T.muted, " voice")}`;
-  const drain = state === "transcribing" ? clamp01(t / 600) : 0;
-  let crest = "";
-  for (let i = 0; i < MAX_BARS; i++) {
-    const v = clamp01(levels[i] ?? level) * (1 - drain);
-    const k = 1 + Math.round(clamp01(v * 1.3) ** 1.25 * 7);
-    crest += fg(k <= 1 ? T.dim : T.accent, lo(k));
-  }
-  return `${glyph}${crest}`;
+  const phase = phaseOf(s);
+  if (!phase)
+    return s.discarded ? `${label} ${fg(T.muted, "discarded")}` : undefined;
+  const on = phase === "listening" || phase === "tail";
+  const light = on
+    ? ascii
+      ? "[rec]"
+      : fg(T.accent, "●")
+    : ascii
+      ? "[...]"
+      : fg(T.muted, "○");
+  const word = fg(
+    T.muted,
+    phase === "starting"
+      ? "starting"
+      : phase === "listening"
+        ? "listening"
+        : "finishing",
+  );
+  // the footer collapses runs of spaces, so silence is dim rule cells rather than padding
+  const silence = (x: string) => fg(T.dim, ascii ? x.replaceAll("─", "-") : x);
+  const meter = on
+    ? meterCells(s.bars, silence, palette, mode)
+    : silence("─".repeat(METER_CELLS));
+  return `${label} ${light} ${word} ${meter}`;
 }
 
 // pi-tui's fake-cursor cell exactly as a focused editor emits it at end of line:
@@ -316,7 +289,7 @@ function wrapWords(text: string, first: number, rest: number): string[] {
   return out;
 }
 
-export interface DryingSpan {
+interface DryingSpan {
   chars: number;
   lead: number;
   age: number;
@@ -333,8 +306,6 @@ export interface GhostInput {
    * long, `lead` characters separate it from the older one before it, and it landed `age` ms ago.
    */
   drying?: readonly DryingSpan[];
-  /** Mic open: rules drawn in the theme's border colour. */
-  live?: boolean;
   /** Rows the editor drew under its bottom rule (the autocomplete list). */
   below?: number;
   palette?: VoicePalette;
@@ -355,7 +326,6 @@ export function spliceGhost(
     paddingX = 0,
     ghost = "",
     drying = [],
-    live = false,
     below = 0,
     palette = FALLBACK_PALETTE,
     mode = "color",
@@ -368,14 +338,6 @@ export function spliceGhost(
   const topRule = 0;
   const botRule = out.length - 1 - below;
   if (botRule <= topRule) return out;
-  const top = out[topRule];
-  const bottom = out[botRule];
-  // both rows exist: topRule is 0 and the early return bounds botRule inside
-  if (top === undefined || bottom === undefined) return out;
-  if (live && mode === "color") {
-    out[topRule] = fg(T.border, stripAnsi(top));
-    out[botRule] = fg(T.border, stripAnsi(bottom));
-  }
   const ci = out.findIndex(
     (l, i) => i > topRule && i < botRule && l.includes(CURSOR_CELL),
   );
@@ -531,7 +493,7 @@ export interface VoiceKeys {
   undo: string;
 }
 
-export interface RuleOptions {
+interface RuleOptions {
   width: number;
   /** Text rows scrolled out below the editor; Pi's own `↓ N more` label. */
   hiddenBelow?: number;

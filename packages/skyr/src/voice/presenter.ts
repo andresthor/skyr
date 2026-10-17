@@ -1,14 +1,14 @@
 /**
  * The seam between the dictation core (client/mic/transcript/dictation — which render nothing)
- * and any display. A presenter swallows snapshots of state and produces presentation; v1 is the
- * compact one-row footer status (`setStatus`), and a widget variant would implement the same
- * interface without touching the core, the config or this file's callers.
+ * and any display. A presenter swallows snapshots of state and produces presentation: the
+ * editor's bottom rule while our editor is on screen, and the footer status row only when it
+ * is not (another extension owns the editor, or a card hides it).
  */
-import type { VoiceState } from "./dictation.js";
 import {
   renderStatus,
   type VoiceMode,
   type VoicePalette,
+  type VoiceSnapshot,
 } from "./indicator.js";
 
 /** The status key the presenter claims in pi's footer; unrelated extensions stay unnamed. */
@@ -19,14 +19,10 @@ export interface StatusUI {
   setStatus(key: string, text: string | undefined): void;
 }
 
-export interface VoiceSnapshot {
-  state: VoiceState;
-  /** Smoothed 0..1 level; 0 until the microphone has delivered. */
-  level: number;
-  /** The current error line; empty otherwise. */
-  message: string;
-  /** ms since the state began — the arming pulse and the transcribing drain run on it. */
-  t: number;
+/** The narrowest shape of the voice editor the presenter needs. */
+export interface RuleEditor {
+  decor: { rule?: VoiceSnapshot };
+  readonly focused: boolean;
 }
 
 export interface VoicePresenter {
@@ -34,35 +30,34 @@ export interface VoicePresenter {
   update(snapshot: VoiceSnapshot): void;
 }
 
-export interface StatusPresenterOptions {
-  mode?: VoiceMode;
-  /** Reads theme colours afresh per frame, so the row follows theme switches. */
-  palette?: () => VoicePalette;
+interface VoicePresenterOptions {
+  /** Our editor when it is the one installed, else undefined. */
+  editor: () => RuleEditor | undefined;
+  status: StatusUI;
+  /** Reads theme colours afresh per frame, so the footer row follows theme switches. */
+  palette: () => VoicePalette;
+  mode: VoiceMode;
 }
 
-/** v1: driving pi's footer status line with one compact row. */
-export function statusPresenter(
-  ui: StatusUI,
-  { mode = "color", palette }: StatusPresenterOptions = {},
-): VoicePresenter {
-  const bars: number[] = [];
+export function voicePresenter({
+  editor,
+  status,
+  palette,
+  mode,
+}: VoicePresenterOptions): VoicePresenter {
+  // null, not undefined: the first update always reaches the footer, clearing anything left there
+  let shown: string | undefined | null = null;
   return {
-    update({ state, level, message, t }) {
-      bars.unshift(level);
-      // the shift register feeds `levels`, which renderStatus reads newest-first
-      if (bars.length > 6) bars.length = 6;
-      ui.setStatus(
-        VOICE_STATUS_KEY,
-        renderStatus({
-          state,
-          level,
-          levels: bars,
-          t,
-          message,
-          palette: palette?.(),
-          mode,
-        }),
-      );
+    update(snapshot) {
+      const ed = editor();
+      const onRule = ed?.focused === true;
+      if (ed) ed.decor.rule = onRule ? snapshot : undefined;
+      const row = onRule
+        ? undefined
+        : renderStatus(snapshot, { palette: palette(), mode });
+      if (row === shown) return;
+      shown = row;
+      status.setStatus(VOICE_STATUS_KEY, row);
     },
   };
 }

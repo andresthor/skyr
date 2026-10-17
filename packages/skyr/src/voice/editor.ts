@@ -18,6 +18,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { DictationSink } from "./dictation.js";
 import {
+  DRY_MS,
   FALLBACK_PALETTE,
   spliceGhost,
   type VoiceMode,
@@ -40,7 +41,8 @@ export function spacedSegment(
 /** What a VoiceEditor draws on top of Pi's editor. */
 export interface VoiceDecor {
   ghost: string;
-  firm: { chars: number; at: number } | null;
+  /** Recent commits, newest first; `at` is when each landed. */
+  drying: { chars: number; lead: number; at: number }[];
   live: boolean;
   mode?: VoiceMode;
 }
@@ -68,10 +70,10 @@ export function createVoiceEditorClass(
   return class VoiceEditor extends Base implements VoiceEditorLike {
     decor: VoiceDecor = {
       ghost: "",
-      firm: null,
+      drying: [],
       live: false,
     };
-    /** The palette for this render, re-read every frame so /theme reaches ghost and firm colours. */
+    /** The palette for this render, re-read every frame so /theme reaches the ghost and drying colours. */
     palette: () => VoicePalette = () => FALLBACK_PALETTE;
     keyHook?: (data: string, keys: KeybindingsManager) => boolean;
     private readonly keys: KeybindingsManager;
@@ -103,16 +105,16 @@ export function createVoiceEditorClass(
 
     override render(width: number): string[] {
       const base = super.render(width);
-      const { ghost, firm, live, mode } = this.decor;
-      if (!ghost && !firm && !live) return base;
+      const { ghost, drying, live, mode } = this.decor;
+      if (!ghost && !drying.length && !live) return base;
       // this editor is permanent: a throw here would take the input bar down with it
       try {
-        const age = firm ? now() - firm.at : 0;
+        const t = now();
         return spliceGhost(base, {
           width,
           paddingX: this.getPaddingX(),
           ghost,
-          firm: firm ? { chars: firm.chars, age } : null,
+          drying: drying.map((s) => ({ ...s, age: t - s.at })),
           live,
           mode,
           // private in pi-tui's types, but it is what tells the bottom rule from the autocomplete rows
@@ -137,7 +139,15 @@ export function createVoiceEditorClass(
       const insert = spacedSegment(before, row.slice(col), segment);
       if (!insert) return;
       this.insertTextAtCursor(insert);
-      this.decor.firm = { chars: insert.trim().length, at: now() };
+      const t = now();
+      this.decor.drying = [
+        {
+          chars: insert.trim().length,
+          lead: insert.length - insert.trimStart().length,
+          at: t,
+        },
+        ...this.decor.drying.filter((s) => t - s.at < DRY_MS),
+      ];
     }
 
     discardPending(): void {
@@ -162,7 +172,7 @@ export function editorSink(
       const ed = target();
       snapshot = ed ? ed.getText() : fallback.get();
       committed = snapshot;
-      if (ed) ed.decor = { ...ed.decor, ghost: "", firm: null, live: true };
+      if (ed) ed.decor = { ...ed.decor, ghost: "", drying: [], live: true };
       repaint();
     },
     interim(segment) {
@@ -191,7 +201,7 @@ export function editorSink(
     revert() {
       const ed = target();
       if (ed) {
-        ed.decor = { ...ed.decor, ghost: "", firm: null, live: false };
+        ed.decor = { ...ed.decor, ghost: "", drying: [], live: false };
         ed.discardPending();
         if (ed.getText() !== snapshot) ed.setText(snapshot);
       } else fallback.set(snapshot);

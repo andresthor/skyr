@@ -142,16 +142,20 @@ describe("commit", () => {
     const editor = fresh("hello ", { cursorCol: 6 });
     editor.commit("world");
     expect(editor.text).toBe("hello world");
-    expect(editor.decor.firm).toEqual({ chars: 5, at: nowAt });
+    expect(editor.decor.drying).toEqual([{ chars: 5, lead: 0, at: nowAt }]);
     editor.commit("more");
-    expect(editor.decor.firm).toEqual({ chars: 4, at: nowAt });
+    // a second final keeps the first drying on its own clock, newest first
+    expect(editor.decor.drying).toEqual([
+      { chars: 4, lead: 1, at: nowAt },
+      { chars: 5, lead: 0, at: nowAt },
+    ]);
   });
 
   test("a blank segment inserts nothing and leaves the wet span alone", () => {
     const editor = fresh("hello ", { cursorCol: 6 });
     editor.commit("   ");
     expect(editor.text).toBe("hello ");
-    expect(editor.decor.firm).toBeNull();
+    expect(editor.decor.drying).toEqual([]);
   });
 
   test("a commit at the start of a line joins across the newline", () => {
@@ -164,11 +168,11 @@ describe("commit", () => {
     const editor = fresh("start", { cursorCol: 5, focused: false });
     editor.commit("one");
     expect(editor.text).toBe("start");
-    expect(editor.decor.firm).toBeNull();
+    expect(editor.decor.drying).toEqual([]);
     editor.commit("two");
     editor.focused = true;
     expect(editor.text).toBe("start one two");
-    expect(editor.decor.firm).toEqual({ chars: 3, at: nowAt });
+    expect(editor.decor.drying[0]).toEqual({ chars: 3, lead: 1, at: nowAt });
   });
 });
 
@@ -181,7 +185,7 @@ describe("render", () => {
   test("the ghost draws beside the cursor cell, a fresh span is wet, and a dried span is colourless again", () => {
     const editor = fresh("hello", { paddingX: 2 });
     editor.decor.ghost = "world";
-    editor.decor.firm = { chars: 5, at: nowAt - 100 };
+    editor.decor.drying = [{ chars: 5, lead: 0, at: nowAt - 100 }];
     const rows = editor.render(40);
     expect(rows).toHaveLength(3);
     const row = rows[1] ?? "";
@@ -189,7 +193,7 @@ describe("render", () => {
     expect(row.includes("\x1b[3m")).toBe(true); // dim italic ghost
     expect(row.includes("\x1b[38;2;")).toBe(true); // the wet foreground
     // once the span is past its drying window the render equals the ghost-only form
-    editor.decor.firm = { chars: 5, at: nowAt - DRY_MS };
+    editor.decor.drying = [{ chars: 5, lead: 0, at: nowAt - DRY_MS }];
     const ghostOnly = fresh("hello", { paddingX: 2 });
     ghostOnly.decor.ghost = "world";
     expect(editor.render(40)).toEqual(ghostOnly.render(40));
@@ -265,7 +269,7 @@ describe("editorSink", () => {
     expect(editor.text).toBe("previous words typed more stuff");
     sink.revert();
     expect(editor.text).toBe("previous words typed");
-    expect(editor.decor.firm).toBeNull();
+    expect(editor.decor.drying).toEqual([]);
   });
 
   test("an editor's finals held while hidden die with the revert: refocus commits nothing", () => {

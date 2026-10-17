@@ -148,8 +148,8 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     repaint,
   );
 
-  const firmWet = () =>
-    !!editor?.decor.firm && Date.now() - editor.decor.firm.at < DRY_MS;
+  const drying = () =>
+    !!editor?.decor.drying.some((s) => Date.now() - s.at < DRY_MS);
   const pushPresenter = () =>
     presenter?.update({
       state: controller.state,
@@ -158,8 +158,8 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       t: Date.now() - controller.stateSince,
     } satisfies VoiceSnapshot);
   const tick = () => {
-    if (controller.state === "idle" && !firmWet()) {
-      if (editor) editor.decor.firm = null;
+    if (controller.state === "idle" && !drying()) {
+      if (editor) editor.decor.drying = [];
       stopTimer();
     }
     levels = history.sample(TICK_MS);
@@ -184,7 +184,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
         history.reset();
         levels = [];
       }
-      if (controller.state !== "idle" || firmWet()) startTimer();
+      if (controller.state !== "idle" || drying()) startTimer();
       pushPresenter();
       repaint();
     },
@@ -241,7 +241,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
         { embedWorkingStatus: true },
       );
       ed.keyHook = keyHook;
-      // read per frame: /theme must reach the ghost/firm colours without a remount
+      // read per frame: /theme must reach the ghost and drying colours without a remount
       ed.palette = () => paletteFromTheme(ctxRef?.ui.theme);
       ed.decor.mode = mode;
       editor = ed;

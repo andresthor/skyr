@@ -5,8 +5,10 @@
  */
 import {
   CURSOR_MARKER,
+  colorToOklch,
   parseColor,
   renderFakeCursor,
+  rgbColor,
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import {
@@ -128,7 +130,7 @@ test("an editor without the cursor cell draws no ghost and no wet colouring", ()
     spliceGhost(base, {
       width: 20,
       ghost: "ghost",
-      firm: { chars: 2, age: 10 },
+      drying: [{ chars: 2, lead: 0, age: 10 }],
       palette: T,
     }),
   ).toEqual(base);
@@ -144,7 +146,7 @@ test("an idle buffer is returned exactly; only the rules turn brand-green while 
   const dried = spliceGhost(base, {
     width: 20,
     live: true,
-    firm: { chars: 3, age: DRY_MS },
+    drying: [{ chars: 3, lead: 0, age: DRY_MS }],
     palette: T,
   });
   expect(dried[1]).toBe(base[1]);
@@ -154,7 +156,7 @@ test("a committed span is born brand-lime at the cursor and dries colourless aft
   const wet = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
     width: 40,
     paddingX: 2,
-    firm: { chars: 5, age: 0 },
+    drying: [{ chars: 5, lead: 0, age: 0 }],
     palette: T,
   });
   const row = wet[1] ?? "";
@@ -164,7 +166,7 @@ test("a committed span is born brand-lime at the cursor and dries colourless aft
   const dried = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
     width: 40,
     paddingX: 2,
-    firm: { chars: 5, age: DRY_MS },
+    drying: [{ chars: 5, lead: 0, age: DRY_MS }],
     palette: T,
   });
   expect(dried[1]).toBe(`  hello${CURSOR_CELL}${" ".repeat(32)}`);
@@ -176,7 +178,7 @@ test("a 256-colour terminal gets 256-colour escapes from the theme, never 24-bit
     width: 40,
     paddingX: 2,
     ghost: "world",
-    firm: { chars: 5, age: 50 },
+    drying: [{ chars: 5, lead: 0, age: 50 }],
     live: true,
     palette,
   });
@@ -190,7 +192,7 @@ test("NO_COLOR keeps the ghost as italic and faint text, with no colour anywhere
     width: 40,
     paddingX: 2,
     ghost: "world",
-    firm: { chars: 5, age: 50 },
+    drying: [{ chars: 5, lead: 0, age: 50 }],
     live: true,
     palette: T,
     mode: "mono",
@@ -226,4 +228,78 @@ test("the palette is the theme's own colours and colour mode", () => {
   expect(palette.colors.accent).toEqual(c("#88acb5"));
   expect(palette.mode).toBe("256color");
   expect(paletteFromTheme(undefined)).toBe(FALLBACK_PALETTE);
+});
+
+/** The 24-bit colour each SGR run opens with, in order. */
+const runColours = (row: string) =>
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: a run ends at the next escape byte
+  [...row.matchAll(/\[38;2;(\d+);(\d+);(\d+)m([^\x1b]*)/g)].map((m) => ({
+    rgb: `${m[1]};${m[2]};${m[3]}`,
+    text: m[4],
+  }));
+
+test("two finals landing 100 ms apart dry on their own clocks, and the space between them stays plain", () => {
+  const row =
+    spliceGhost(editorBase("one two", 40), {
+      width: 40,
+      drying: [
+        { chars: 3, lead: 1, age: 50 },
+        { chars: 3, lead: 0, age: 150 },
+      ],
+      palette: T,
+    })[1] ?? "";
+  const runs = runColours(row);
+  expect(runs.map((r) => r.text)).toEqual(["one", "two"]);
+  // the older span is further along its dry than the newer one, not snapped to either end
+  expect(runs[0]?.rgb).not.toBe(runs[1]?.rgb);
+  expect(stripAnsi(row).startsWith("one two")).toBe(true);
+  expect(row).toContain("\x1b[39m \x1b[38;2;");
+});
+
+test("a theme whose accent is close to its text still gets a visible flash, in the accent's hue", () => {
+  const sequoia = {
+    ...T,
+    colors: {
+      ...T.colors,
+      accent: parseColor("#88acb5"),
+      text: parseColor("#9a9aa7"),
+    },
+  };
+  const row =
+    spliceGhost(editorBase("hello", 40), {
+      width: 40,
+      drying: [{ chars: 5, lead: 0, age: 0 }],
+      palette: sequoia,
+    })[1] ?? "";
+  const [r, g, b] = (runColours(row)[0]?.rgb ?? "").split(";").map(Number);
+  const start = colorToOklch(rgbColor(r ?? 0, g ?? 0, b ?? 0));
+  const accent = colorToOklch(sequoia.colors.accent);
+  const text = colorToOklch(sequoia.colors.text);
+  const lab = (c: typeof start) => [
+    c.l,
+    c.c * Math.cos((c.h * Math.PI) / 180),
+    c.c * Math.sin((c.h * Math.PI) / 180),
+  ];
+  const [l1 = 0, a1 = 0, b1 = 0] = lab(start);
+  const [l2 = 0, a2 = 0, b2 = 0] = lab(text);
+  expect(Math.hypot(l1 - l2, a1 - a2, b1 - b2)).toBeGreaterThanOrEqual(0.15);
+  expect(Math.abs(start.h - accent.h)).toBeLessThan(5);
+});
+
+test("under NO_COLOR a fresh commit is bold until it dries, with no colour", () => {
+  const wet = spliceGhost(editorBase("hello", 40), {
+    width: 40,
+    drying: [{ chars: 5, lead: 0, age: 100 }],
+    palette: T,
+    mode: "mono",
+  });
+  expect(wet[1]).toContain("\x1b[1mhello\x1b[22m");
+  expect(wet.join("")).not.toContain("\x1b[38;");
+  const dry = spliceGhost(editorBase("hello", 40), {
+    width: 40,
+    drying: [{ chars: 5, lead: 0, age: DRY_MS }],
+    palette: T,
+    mode: "mono",
+  });
+  expect(dry[1]).not.toContain("\x1b[1m");
 });

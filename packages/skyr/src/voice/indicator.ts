@@ -10,8 +10,11 @@
  */
 import {
   type Color,
+  colorToHex,
+  colorToOklch,
   foregroundAnsi,
   mixColors,
+  oklchColor,
   parseColor,
   type TerminalColorMode,
 } from "@earendil-works/pi-tui";
@@ -74,6 +77,37 @@ const painter =
   (c: Color, s: string): string =>
     mode === "color" ? `${foregroundAnsi(c, P.mode)}${s}\x1b[39m` : s;
 const RESET = "\x1b[0m";
+
+/** The least perceptual distance (OKLab ΔE) between the wet start colour and the text it dries into. */
+const WET_CONTRAST = 0.15;
+
+const oklab = (c: Color): [number, number, number] => {
+  const { l, c: chroma, h } = colorToOklch(c);
+  const r = (h * Math.PI) / 180;
+  return [l, chroma * Math.cos(r), chroma * Math.sin(r)];
+};
+const deltaE = (a: Color, b: Color) => {
+  const [l1, a1, b1] = oklab(a);
+  const [l2, a2, b2] = oklab(b);
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
+};
+
+/**
+ * The accent a commit is born in. Themes whose accent sits close to their text colour get the
+ * same hue pushed brighter and more saturated until the flash can be seen.
+ */
+function wetStart(accent: Color, text: Color): Color {
+  if (deltaE(accent, text) >= WET_CONTRAST) return accent;
+  const { l, c, h } = colorToOklch(accent);
+  const away = l >= colorToOklch(text).l ? 1 : -1;
+  let lifted = accent;
+  for (let k = 1; k <= 40 && deltaE(lifted, text) < WET_CONTRAST; k++)
+    // round-trip through hex so the distance is measured on the colour a terminal can show
+    lifted = parseColor(
+      colorToHex(oklchColor(clamp01(l + away * 0.01 * k), c + 0.006 * k, h)),
+    );
+  return lifted;
+}
 
 const LOWER = "▁▂▃▄▅▆▇";
 /** Bottom k/8 of a cell. */
@@ -273,14 +307,23 @@ function wrapWords(text: string, first: number, rest: number): string[] {
   return out;
 }
 
+export interface DryingSpan {
+  chars: number;
+  lead: number;
+  age: number;
+}
+
 export interface GhostInput {
   width: number;
   /** The editor's horizontal padding (`editorPaddingX`). */
   paddingX?: number;
   /** Interim text, drawn after the cursor. */
   ghost?: string;
-  /** The last `chars` characters before the cursor were committed `age` ms ago. */
-  firm?: { chars: number; age: number } | null;
+  /**
+   * Freshly committed spans, newest first. The newest ends at the cursor; each span is `chars`
+   * long, `lead` characters separate it from the older one before it, and it landed `age` ms ago.
+   */
+  drying?: readonly DryingSpan[];
   /** Mic open: rules drawn in the theme's border colour. */
   live?: boolean;
   /** Rows the editor drew under its bottom rule (the autocomplete list). */
@@ -302,7 +345,7 @@ export function spliceGhost(
     width,
     paddingX = 0,
     ghost = "",
-    firm = null,
+    drying = [],
     live = false,
     below = 0,
     palette = FALLBACK_PALETTE,
@@ -333,27 +376,59 @@ export function spliceGhost(
   // findIndex found the row, so it is present; `split` always yields a first element
   let before = cursorRow?.split(CURSOR_CELL)[0] ?? "";
   const beforeText = stripAnsi(before);
-  if (firm && firm.chars > 0 && firm.age < DRY_MS) {
-    const wet = mixColors(T.accent, T.text, smooth(firm.age / DRY_MS), "oklch");
+  const wet = drying.filter((s) => s.chars > 0 && s.age < DRY_MS);
+  if (wet.length) {
+    const start = wetStart(T.accent, T.text);
+    // each span dries on its own clock, so a final landing mid-dry never snaps the one before it
+    const colours = wet.map((s) =>
+      mixColors(start, T.text, smooth(s.age / DRY_MS), "oklch"),
+    );
+    /** The span covering distance `d` back from the cursor, or -1 for the separators between spans. */
+    const spanAt = (d: number): number => {
+      let from = 0;
+      for (const [i, s] of wet.entries()) {
+        if (d >= from && d < from + s.chars) return i;
+        from += s.chars + s.lead;
+      }
+      return -1;
+    };
+    const reach = wet.reduce((n, s) => n + s.chars + s.lead, 0);
+    // NO_COLOR has no colour to fade, so the span is bold until it dries
+    const style = (c: Color, s: string) =>
+      mode === "color" ? fg(c, s) : `\x1b[1m${s}\x1b[22m`;
+    /** Paints `text` from its end leftwards, `d0` being the distance of its last character from the cursor. */
+    const paintTail = (text: string, d0: number): string => {
+      let tail = "";
+      let run = "";
+      let runSpan = -1;
+      const flush = () => {
+        const c = colours[runSpan];
+        if (run) tail = (c ? style(c, run) : run) + tail;
+        run = "";
+      };
+      let i = text.length - 1;
+      for (let d = d0; i >= paddingX && d < reach; i--, d++) {
+        const span = spanAt(d);
+        if (span !== runSpan) {
+          flush();
+          runSpan = span;
+        }
+        run = text.charAt(i) + run;
+      }
+      flush();
+      return text.slice(0, i + 1) + tail;
+    };
     const hasMarker = before.includes(CURSOR_MARKER);
     const plain = stripAnsi(before);
-    const k = Math.min(firm.chars, Math.max(0, plain.length - paddingX));
-    before =
-      plain.slice(0, plain.length - k) +
-      fg(wet, plain.slice(plain.length - k)) +
-      (hasMarker ? CURSOR_MARKER : "");
-    // the rest of the span sits on the wrapped rows above; the space eaten at each wrap counts as one
-    let left = firm.chars - k - 1;
-    for (let i = ci - 1; i > topRule && left > 0; i--) {
+    before = paintTail(plain, 0) + (hasMarker ? CURSOR_MARKER : "");
+    // older spans sit on the wrapped rows above; the space eaten at each wrap counts as one
+    let d = Math.max(0, plain.length - paddingX) + 1;
+    for (let i = ci - 1; i > topRule && d < reach; i--) {
       const row = out[i];
       if (row === undefined) break;
       const text = stripAnsi(row).replace(/ +$/, "");
-      const n = Math.min(left, Math.max(0, text.length - paddingX));
-      out[i] =
-        text.slice(0, text.length - n) +
-        fg(wet, text.slice(text.length - n)) +
-        pad(width - cellWidth(text));
-      left -= n + 1;
+      out[i] = paintTail(text, d) + pad(width - cellWidth(text));
+      d += Math.max(0, text.length - paddingX) + 1;
     }
   }
   const used = cellWidth(beforeText) + 1;

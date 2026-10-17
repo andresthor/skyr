@@ -306,7 +306,7 @@ test("a mid-session theme switch reaches the status row and the editor's ghost/f
       expect(row.startsWith("\x1b[38;2;10;20;30m")).toBe(true);
       // the switch: the same row is rendered from the other theme on the next render
       ui.theme = light;
-      pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+      starts[0]!.onReady?.();
       const switched = ui.setStatus.mock.calls.at(-1)?.[1] as string;
       expect(switched.includes("\x1b[38;2;200;190;180m")).toBe(true);
       // and the editor reads the palette through the same live theme ref

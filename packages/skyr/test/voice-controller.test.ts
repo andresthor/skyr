@@ -13,6 +13,7 @@ import {
   levelFromRms,
   SPEECH_DBFS,
 } from "../src/voice/dictation.js";
+import { VoiceError } from "../src/voice/errors.js";
 
 const CREDS: SttCredentials = {
   environment: "dev",
@@ -134,17 +135,62 @@ test("a stop while nothing was committed commits the pending interim instead of 
   expect(h.controller.state).toBe("idle");
 });
 
-test("stopping after zero finals fails with nothing heard, and the error auto-dismisses", async () => {
+test("a stop before any speech or text ends quietly: changing your mind is not an error", () => {
+  const h = harness();
+  h.controller.toggle();
+  h.controller.toggle();
+  expect(h.controller.state).toBe("idle");
+  expect(h.states).not.toContain("error");
+  expect(h.sessions[0]?.canceled).toBe(true);
+  // the same after the session was accepted, from Enter's stop
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.controller.finish();
+  expect(h.controller.state).toBe("idle");
+  expect(h.states).not.toContain("error");
+});
+
+test("speech heard but nothing transcribed still fails with nothing heard, and the error auto-dismisses", async () => {
   const h = harness();
   h.controller.toggle();
   h.opts().onReady?.();
+  h.opts().onLevel?.(0.05);
   h.controller.toggle();
   await vi.waitFor(() => expect(h.controller.state).toBe("error"), {
     interval: 5,
   });
   expect(h.controller.message).toBe("nothing heard");
-  expect(h.events).toContainEqual({ op: "end" }); // the provisional text goes, finals stay
   await vi.waitFor(() => expect(h.controller.state).toBe("idle"));
+});
+
+test("a failure keeps the words on screen and says so", () => {
+  const h = harness();
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.opts().onFinal?.("first sentence");
+  h.opts().onInterim?.("and the second");
+  h.opts().onError?.(new VoiceError("network", "connection lost"));
+  expect(h.controller.state).toBe("error");
+  expect(h.controller.message).toBe("connection lost · words kept");
+  // the interim the user watched appear is committed, not dropped
+  expect(h.events).toContainEqual({ op: "final", arg: "and the second" });
+  // a failure before any words says only what went wrong
+  h.controller.dismiss();
+  h.controller.toggle();
+  h.opts().onError?.(new VoiceError("network", "connection lost"));
+  expect(h.controller.message).toBe("connection lost");
+});
+
+test("the hard cap stops like Enter does, keeping the tail so the last word isn't clipped", async () => {
+  const h = harness({ ...TIMING, maxMs: 20, tailMs: 40 });
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.opts().onLevel?.(0.05);
+  await vi.waitFor(() => expect(h.controller.state).toBe("transcribing"));
+  // the tail is still recording
+  expect(h.sessions[0]?.stopCalls).toBe(0);
+  expect(h.controller.micOpen).toBe(true);
+  await vi.waitFor(() => expect(h.sessions[0]?.stopCalls).toBe(1));
 });
 
 test("Enter's stop through finish() drains the tail the same way as the toggle", async () => {
@@ -213,12 +259,8 @@ test("a session that never accepts fails with didn't answer", async () => {
 test("any keypress clears an error early, the hold timer gone", async () => {
   const h = harness();
   h.controller.toggle();
-  h.controller.cancel();
-  // no audio, no finals: the immediate stop fails with nothing heard again
-  h.controller.toggle();
-  await vi.waitFor(() => expect(h.controller.state).toBe("error"), {
-    timeout: 1000,
-  });
+  h.opts().onError?.(new VoiceError("network", "connection lost"));
+  expect(h.controller.state).toBe("error");
   h.controller.dismiss();
   expect(h.controller.state).toBe("idle");
   // and now a key-less wait stays idle: the hold timer was cleared
@@ -251,6 +293,7 @@ test("the mic counts as open from its first chunk until the tail ends, whatever 
   expect(h.controller.accepted).toBe(false);
   h.opts().onReady?.();
   expect(h.controller.accepted).toBe(true);
+  h.opts().onLevel?.(0.05);
   h.controller.finish();
   // Enter moved the state on, but the tail is still recording
   expect(h.controller.state).toBe("transcribing");

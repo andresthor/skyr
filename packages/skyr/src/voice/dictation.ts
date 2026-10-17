@@ -179,7 +179,7 @@ export class DictationController {
     });
     this.later(
       this.timing.maxMs,
-      () => live() && this.state === "listening" && this.finish(0),
+      () => live() && this.state === "listening" && this.finish(),
     );
     this.session = (this.o.start ?? startSession)({
       creds: this.o.creds,
@@ -212,14 +212,20 @@ export class DictationController {
   }
 
   /** Stop and keep: capture a short tail, then drain the finals. */
-  finish(tailMs = this.timing.tailMs): void {
+  finish(): void {
     if (this.state !== "arming" && this.state !== "listening") return;
+    // nothing said and nothing shown: changing your mind is not an error
+    if (!this.heard && !this.finals && !this.pendingInterim) {
+      this.session?.cancel();
+      this.done();
+      return;
+    }
     const gen = this.generation;
     const session = this.session;
     const wasArming = this.state === "arming";
     if (this.flushTimer) this.cancelTimer(this.flushTimer);
     this.setState("transcribing");
-    this.later(wasArming ? 0 : tailMs, () => {
+    this.later(wasArming ? 0 : this.timing.tailMs, () => {
       if (gen !== this.generation || !session) return;
       this.mic = "closed";
       session.stop().then(() => {
@@ -274,9 +280,13 @@ export class DictationController {
     this.session?.cancel();
     this.session = undefined;
     this.clearTimers();
-    // finals already committed stay; only the provisional text goes
+    // words the user watched appear are kept, as a stop would keep them, and the line says so
+    const kept = this.finals > 0 || this.pendingInterim !== "";
+    if (this.pendingInterim) this.o.sink.final(this.pendingInterim);
     this.o.sink.end();
-    this.message = voiceErrorLine(err);
+    this.message = kept
+      ? `${voiceErrorLine(err)} · words kept`
+      : voiceErrorLine(err);
     this.setState("error");
     const gen = this.generation;
     this.later(this.timing.errorHoldMs, () => {

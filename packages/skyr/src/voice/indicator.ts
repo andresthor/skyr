@@ -59,7 +59,7 @@ interface ThemeLike {
   getColorMode(): TerminalColorMode;
 }
 
-/** Reads the live theme's token colours so the indicator follows theme switches. */
+/** The theme's token colours and the terminal colour mode it renders in. */
 export function paletteFromTheme(theme: ThemeLike | undefined): VoicePalette {
   if (!theme) return FALLBACK_PALETTE;
   const { accent, text, muted, dim, error, warning } = theme.colors;
@@ -119,8 +119,8 @@ const graphemes = new Intl.Segmenter();
 
 export interface LevelHistory {
   push(level: number): void;
-  /** Advance one frame; returns [live, ...committed], newest first. */
-  sample(dt?: number): number[];
+  /** Advance `dt` ms; returns the committed bars, newest first. */
+  sample(dt: number): number[];
   reset(): void;
 }
 
@@ -140,7 +140,7 @@ export function createLevelHistory({
     push(level) {
       pending = Math.max(pending, clamp01(level));
     },
-    sample(dt = TICK_MS) {
+    sample(dt) {
       cur += (pending - cur) * (pending > cur ? attack : decay);
       pending = 0;
       held = Math.max(held, cur);
@@ -151,7 +151,7 @@ export function createLevelHistory({
         if (bars.length > size) bars.length = size;
         held = cur;
       }
-      return [held, ...bars];
+      return bars.slice();
     },
     reset() {
       bars.length = 0;
@@ -318,7 +318,7 @@ export function spliceGhost(
     const colours = wet.map((s) =>
       mixColors(start, T.text, smooth(s.age / DRY_MS), "oklch"),
     );
-    /** The span covering distance `d` back from the cursor, or -1 for the separators between spans. */
+    // the span covering distance `d` back from the cursor, or -1 for the separators between spans
     const spanAt = (d: number): number => {
       let from = 0;
       for (const [i, s] of wet.entries()) {
@@ -331,7 +331,7 @@ export function spliceGhost(
     // NO_COLOR has no colour to fade, so the span is bold until it dries
     const style = (c: Color, s: string) =>
       mode === "color" ? fg(c, s) : `\x1b[1m${s}\x1b[22m`;
-    /** Paints `text` from its end leftwards, `d0` being the distance of its last character from the cursor. */
+    // paints `text` from its end leftwards; `d0` is its last character's distance from the cursor
     const paintTail = (text: string, d0: number): string => {
       let tail = "";
       let run = "";
@@ -496,7 +496,7 @@ export function renderRule(
     `${fg(T.dim, k)}${fg(T.muted, ` ${what}`)}`;
   const sep = ascii ? ", " : fg(T.dim, " · ");
 
-  /** `── left ──…── right ──`, or undefined when it can't fit. */
+  // `── left ──…── right ──`, or undefined when it can't fit
   const compose = (left: string, right: string, meter = "") => {
     const head = meter
       ? `${line(2)}${meter}${line(1)} ${left}`

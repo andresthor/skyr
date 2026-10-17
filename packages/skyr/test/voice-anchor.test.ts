@@ -317,7 +317,7 @@ test("emoji with a variation selector never push a ghost or drying row past the 
       {
         width,
         paddingX: 1,
-        ghost: "▶️ ".repeat(12) + "©️®️‼️ done",
+        ghost: `${"▶️ ".repeat(12)}©️®️‼️ done`,
         drying: [{ chars: 4, lead: 1, age: 50 }],
         palette: T,
       },

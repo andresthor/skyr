@@ -2,6 +2,7 @@
  * The dictation state machine, free of any TUI:
  *
  *   idle ─toggle→ arming ─CONFIG_ACCEPTED→ listening ─toggle / enter→ transcribing ─finals drained→ idle
+ *                   ├─ toggle / enter before any speech or text → idle (quietly)
  *                   └──────────── any failure ───────────→ error ─(hold)→ idle
  *
  * Quiet never stops a dictation: people pause to think. It only asks the server for

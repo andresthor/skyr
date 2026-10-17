@@ -185,8 +185,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       if (editor) editor.decor.drying = [];
       stopTimer();
     }
-    // committed bars only: the live one restarts every bar and beats against the mic's chunk rate
-    bars = history.sample(TICK_MS).slice(1);
+    bars = history.sample(TICK_MS);
     pushPresenter();
     repaint();
   };
@@ -220,7 +219,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   applyConfig(VOICE_DEFAULTS);
   const controller = new DictationController(controllerOptions);
 
-  /** Esc and `/voice off`: a reverted buffer means committed words went, so offer the undo. */
+  // Esc and `/voice off`: a reverted buffer means committed words went, so offer the undo
   const cancel = () => {
     const before = editor?.getText();
     controller.cancel();
@@ -286,7 +285,6 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
         { embedWorkingStatus: true },
       );
       ed.keyHook = keyHook;
-      // read per frame: /theme must reach the ghost and drying colours without a remount
       ed.palette = () => paletteFromTheme(ctxRef?.ui.theme);
       ed.decor.mode = mode;
       editor = ed;
@@ -325,7 +323,6 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     presenter = voicePresenter({
       editor: () => editor,
       status: ctx.ui,
-      // re-read per frame: /theme reaches the footer row without a remount
       palette: () => paletteFromTheme(ctxRef?.ui.theme),
       mode,
     });

@@ -39,8 +39,8 @@ dictation. Without `CORTI_*` credentials, `/voice` says so in one line and does 
 While voice is on, the editor's bottom rule shows it: a level meter that rises only for speech,
 `●` while the mic records (`○` before the first audio and after it closes), the state
 (`starting`, `listening`, `finishing`), and the keys that apply right now. Esc and ctrl+c both
-discard; if they reverted words already committed, the rule offers `ctrl+-` to undo that until the
-next key. The footer shows the same marks only while a card or another extension's editor hides
+discard; if they reverted words already committed, the rule offers `ctrl+-` to undo that for two
+seconds or until the next key. The footer shows the same marks only while a card or another extension's editor hides
 the voice editor. Under `NO_COLOR` the marks stay and lose their colour; `TERM=dumb` gets ASCII.
 
 Credentials, like every other secret here, come from the environment:

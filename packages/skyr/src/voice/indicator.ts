@@ -170,8 +170,8 @@ const ERROR_COLS = 60;
 
 /**
  * The footer row, for when the editor's rule can't carry voice: another extension owns the
- * editor, or a card hides it. Same marks as the rule, led by `voice` so a neighbouring status
- * can't claim them; undefined clears the row.
+ * editor, or a card hides it. The rule's marks without its key hints, led by `voice` so a
+ * neighbouring status can't claim them; undefined clears the row.
  */
 export function renderStatus(
   s: VoiceSnapshot,
@@ -191,15 +191,40 @@ export function renderStatus(
   const phase = phaseOf(s);
   if (!phase)
     return s.discarded ? `${label} ${fg(T.muted, "discarded")}` : undefined;
-  const on = phase === "listening" || phase === "tail";
-  const light = on
-    ? ascii
-      ? "[rec]"
-      : fg(T.accent, "●")
-    : ascii
-      ? "[...]"
-      : fg(T.muted, "○");
-  const word = fg(
+  const { light, word, advisories } = marks(s, phase, palette, mode, false);
+  const sep = ascii ? ", " : fg(T.dim, " · ");
+  // the footer collapses runs of spaces, so silence is dim rule cells rather than padding
+  const silence = (x: string) => fg(T.dim, ascii ? x.replaceAll("─", "-") : x);
+  const meter =
+    phase === "listening" || phase === "tail"
+      ? meterCells(s.bars, silence, palette, mode)
+      : silence("─".repeat(METER_CELLS));
+  return `${[`${label} ${light} ${word}`, ...advisories].join(sep)} ${meter}`;
+}
+
+/**
+ * The marks both surfaces draw: the mic light, the state word and the advisories. `steady` keeps
+ * the finishing ellipsis in a fixed three cells, for the rule; the footer collapses that padding.
+ */
+function marks(
+  s: VoiceSnapshot,
+  phase: Phase,
+  palette: VoicePalette,
+  mode: VoiceMode,
+  steady: boolean,
+): { light: string; word: string; advisories: string[] } {
+  const T = palette.colors;
+  const fg = painter(palette, mode);
+  const ascii = mode === "ascii";
+  const light =
+    phase === "listening" || phase === "tail"
+      ? ascii
+        ? "[rec]"
+        : fg(T.accent, "●")
+      : ascii
+        ? "[...]"
+        : fg(T.muted, "○");
+  let word = fg(
     T.muted,
     phase === "starting"
       ? "starting"
@@ -207,12 +232,22 @@ export function renderStatus(
         ? "listening"
         : "finishing",
   );
-  // the footer collapses runs of spaces, so silence is dim rule cells rather than padding
-  const silence = (x: string) => fg(T.dim, ascii ? x.replaceAll("─", "-") : x);
-  const meter = on
-    ? meterCells(s.bars, silence, palette, mode)
-    : silence("─".repeat(METER_CELLS));
-  return `${label} ${light} ${word} ${meter}`;
+  if (phase === "tail" || phase === "finishing") {
+    // server work is a slow textual ellipsis, never motion in the meter
+    const n = (Math.floor(s.t / 300) % 3) + 1;
+    word += fg(T.dim, (ascii ? "." : "·").repeat(n));
+    if (steady) word += " ".repeat(3 - n);
+  }
+  const advisories: string[] = [];
+  if (phase === "starting" && s.sinceStart > 1500)
+    advisories.push(fg(T.warning, "no audio yet"));
+  if (s.state === "arming" && s.micOpen && s.sinceStart > 1500)
+    advisories.push(fg(T.muted, "connecting"));
+  if (phase === "listening" && !s.heardSpeech && s.sinceStart > 4000)
+    advisories.push(fg(T.warning, "no voice yet"));
+  if (phase === "listening" && s.capLeftMs !== undefined)
+    advisories.push(fg(T.warning, `${Math.ceil(s.capLeftMs / 1000)}s left`));
+  return { light, word, advisories };
 }
 
 // pi-tui's fake-cursor cell exactly as a focused editor emits it at end of line:
@@ -536,37 +571,7 @@ export function renderRule(
       : undefined;
   }
 
-  const light =
-    phase === "listening" || phase === "tail"
-      ? ascii
-        ? "[rec]"
-        : fg(T.accent, "●")
-      : ascii
-        ? "[...]"
-        : fg(T.muted, "○");
-  let word = fg(
-    T.muted,
-    phase === "starting"
-      ? "starting"
-      : phase === "listening"
-        ? "listening"
-        : "finishing",
-  );
-  if (phase === "tail" || phase === "finishing") {
-    // server work is a slow textual ellipsis, never motion in the meter; three cells kept so nothing shifts
-    const n = (Math.floor(s.t / 300) % 3) + 1;
-    word += `${fg(T.dim, (ascii ? "." : "·").repeat(n))}${" ".repeat(3 - n)}`;
-  }
-
-  const advisories: string[] = [];
-  if (phase === "starting" && s.sinceStart > 1500)
-    advisories.push(fg(T.warning, "no audio yet"));
-  if (s.state === "arming" && s.micOpen && s.sinceStart > 1500)
-    advisories.push(fg(T.muted, "connecting"));
-  if (phase === "listening" && !s.heardSpeech && s.sinceStart > 4000)
-    advisories.push(fg(T.warning, "no voice yet"));
-  if (phase === "listening" && s.capLeftMs !== undefined)
-    advisories.push(fg(T.warning, `${Math.ceil(s.capLeftMs / 1000)}s left`));
+  const { light, word, advisories } = marks(s, phase, palette, mode, true);
 
   // Enter keeps only what the server will transcribe: speech, on an accepted session
   const canKeep = s.heardSpeech && s.accepted;

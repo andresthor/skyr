@@ -106,6 +106,8 @@ export class DictationController {
   state: VoiceState = "idle";
   /** When the current state began, for the indicator's state-relative animation. */
   stateSince = 0;
+  /** When the current dictation started: its advisories and its hard cap count from here. */
+  startedAt = 0;
   message = "";
 
   private session: SttSession | undefined;
@@ -138,6 +140,11 @@ export class DictationController {
     return this.sessionAccepted;
   }
 
+  /** ms before the hard cap stops this dictation, as the controller enforces it. */
+  get capLeftMs(): number {
+    return this.timing.maxMs - (this.now() - this.startedAt);
+  }
+
   /** Something above SPEECH_LEVEL arrived in this dictation. */
   get heardSpeech(): boolean {
     return this.heard;
@@ -161,6 +168,7 @@ export class DictationController {
   start(): void {
     this.clearTimers();
     const gen = ++this.generation;
+    this.startedAt = this.now();
     this.heard = false;
     this.mic = "waiting";
     this.sessionAccepted = false;

@@ -93,11 +93,13 @@ test("the footer is set only when its row changes", () => {
 
 test("the footer row names voice first, so a neighbouring status can't claim its marks", () => {
   expect(
-    stripAnsi(renderStatus(snap({ state: "arming", micOpen: false }))!),
+    stripAnsi(
+      renderStatus(snap({ state: "arming", micOpen: false, sinceStart: 300 }))!,
+    ),
   ).toBe("voice ○ starting ────────");
   expect(
     stripAnsi(renderStatus(snap({ state: "transcribing", micOpen: false }))!),
-  ).toBe("voice ○ finishing ────────");
+  ).toBe("voice ○ finishing· ────────");
   expect(
     stripAnsi(renderStatus(snap({ state: "idle", discarded: true }))!),
   ).toBe("voice discarded");
@@ -141,4 +143,17 @@ test("the footer row reads the palette it is given, so it follows theme switches
       palette: { ...FALLBACK_PALETTE, mode: "256color" },
     }),
   ).not.toContain("\x1b[38;2;");
+});
+
+test("the footer carries the rule's advisories, so a hidden editor still hears about the cap", () => {
+  expect(stripAnsi(renderStatus(snap({ capLeftMs: 9_500 }))!)).toMatch(
+    /^voice ● listening · 10s left /,
+  );
+  expect(
+    stripAnsi(
+      renderStatus(
+        snap({ state: "arming", micOpen: false, sinceStart: 2000 }),
+      )!,
+    ),
+  ).toBe("voice ○ starting · no audio yet ────────");
 });

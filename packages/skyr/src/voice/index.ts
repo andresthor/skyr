@@ -25,7 +25,6 @@ import {
 } from "./config.js";
 import { resolveSttCredentials } from "./credentials.js";
 import {
-  DEFAULT_TIMING,
   DictationController,
   type DictationControllerOptions,
 } from "./dictation.js";
@@ -126,9 +125,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   let timer: ReturnType<typeof setInterval> | undefined;
   const history = createLevelHistory();
   let bars: number[] = [];
-  let startedAt = 0;
   let discardedUntil = 0;
-  const maxMs = opts.controller?.timing?.maxMs ?? DEFAULT_TIMING.maxMs;
 
   // read before any session_start resolves, so /voice works even straight after reload — silent:
   // problems have no UI before a context exists, and session_start is the earliest honest surface
@@ -161,12 +158,11 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     controller.state === "idle" && Date.now() < discardedUntil;
   const snapshot = (): VoiceSnapshot => {
     const now = Date.now();
-    const sinceStart = now - startedAt;
-    const capLeft = maxMs - sinceStart;
+    const capLeft = controller.capLeftMs;
     return {
       state: controller.state,
       t: now - controller.stateSince,
-      sinceStart,
+      sinceStart: now - controller.startedAt,
       micOpen: controller.micOpen,
       accepted: controller.accepted,
       heardSpeech: controller.heardSpeech,
@@ -206,7 +202,6 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       if (controller.state === "arming") {
         history.reset();
         bars = [];
-        startedAt = Date.now();
         // a new dictation ends the previous undo offer: the undo now belongs to newer text
         discardedUntil = 0;
       }

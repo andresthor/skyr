@@ -353,3 +353,14 @@ test("the stall watchdog stands down once the mic closes after Enter", async () 
   await new Promise((r) => setTimeout(r, 60));
   expect(h.states).not.toContain("error");
 });
+
+test("the time left before the cap counts from this dictation's start, by the controller's own clock", async () => {
+  const h = harness({ ...TIMING, maxMs: 1000 });
+  h.controller.toggle();
+  expect(h.controller.capLeftMs).toBeGreaterThan(950);
+  await new Promise((r) => setTimeout(r, 60));
+  expect(h.controller.capLeftMs).toBeLessThanOrEqual(940);
+  h.controller.cancel();
+  h.controller.toggle();
+  expect(h.controller.capLeftMs).toBeGreaterThan(950);
+});

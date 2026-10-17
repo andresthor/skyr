@@ -75,10 +75,6 @@ function openResumable(pi: Awaited<ReturnType<typeof loadPi>>, file: string) {
     throw new Error(
       `the saved session ${file} is gone; start a fresh subagent instead`,
     );
-  if (typeof pi.SessionManager.open !== "function")
-    throw new Error(
-      "this runtime cannot resume subagent sessions (SessionManager.open is missing); update the host Pi, or start a fresh subagent instead",
-    );
   return pi.SessionManager.open(file);
 }
 

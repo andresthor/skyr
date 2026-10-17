@@ -70,6 +70,7 @@ function registered(): ToolDefinition & { message: MessageRenderer } {
   registerSkyr({
     registerTool: (tool: ToolDefinition) => tools.push(tool),
     registerCommand: () => {},
+    registerShortcut: () => {},
     registerMessageRenderer: (type: string, renderer: MessageRenderer) =>
       renderers.set(type, renderer),
     on: () => {},

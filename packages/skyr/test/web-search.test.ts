@@ -683,6 +683,7 @@ function registered(): Captured {
   const pi = {
     registerTool: (tool: Captured) => tools.push(tool),
     registerCommand: () => {},
+    registerShortcut: () => {},
     registerMessageRenderer: () => {},
     on: () => {},
   } as unknown as ExtensionAPI;

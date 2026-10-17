@@ -257,8 +257,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     },
   });
 
-  // a host without the shortcut API still gets /voice (older runtimes)
-  pi.registerShortcut?.(VOICE_SHORTCUT, {
+  pi.registerShortcut(VOICE_SHORTCUT, {
     description: "Voice dictation",
     handler: async (ctx: ExtensionContext) => toggle(ctx),
   });

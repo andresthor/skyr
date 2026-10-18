@@ -69,8 +69,8 @@ export function createLevelHistory(): LevelHistory {
   };
 }
 
-/** A status row with a message needs room; pi truncates further to the terminal's width. */
-const ERROR_COLS = 60;
+/** The widest row an error message may build in the footer; pi truncates further to the terminal's width. */
+export const ERROR_COLS = 60;
 
 /** Warn this long before the hard cap, so the cap is first advisory, then fact. */
 const CAP_WARN_MS = 15_000;

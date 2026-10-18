@@ -9,12 +9,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createVoiceDisplay } from "../src/voice/display.js";
 import { DRY_MS } from "../src/voice/ghost.js";
 import type { VoiceSnapshot } from "../src/voice/indicator.js";
-import {
-  FALLBACK_PALETTE,
-  paintFor,
-  type VoiceMode,
-} from "../src/voice/palette.js";
-import { realEditor, snap } from "./voice.js";
+import type { VoiceMode } from "../src/voice/palette.js";
+import { realEditor, snap, testPaint } from "./voice.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -44,7 +40,7 @@ function setup(editor?: Editor, mode: VoiceMode = "color") {
   const display = createVoiceDisplay({
     facts: () => facts.now,
     editor: () => editor,
-    paint: () => paintFor(FALLBACK_PALETTE, mode),
+    paint: () => testPaint(mode),
     repaint,
   });
   display.start(ui);

@@ -18,19 +18,12 @@ import {
   renderStatus,
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
-import {
-  FALLBACK_PALETTE,
-  paintFor,
-  type VoiceMode,
-} from "../src/voice/palette.js";
-import { HINT_KEYS, snap } from "./voice.js";
+import type { VoiceMode } from "../src/voice/palette.js";
+import { HINT_KEYS, snap, styledRuns, testPaint, testTheme } from "./voice.js";
 
 const rule = (s: string) => s;
 const atDb = (db: number) => meterUnit(10 ** (db / 20));
 const SILENCE = Array.from({ length: 8 }, () => atDb(-58));
-/** The fallback paint in a given mode, as the old `palette`/`mode` pair read. */
-const paint = (mode: VoiceMode = "color", palette = FALLBACK_PALETTE) =>
-  paintFor(palette, mode);
 const draw = (
   s: Partial<VoiceSnapshot>,
   o: { width?: number; mode?: VoiceMode; hiddenBelow?: number } = {},
@@ -39,11 +32,17 @@ const draw = (
     width: o.width ?? 72,
     rule,
     keys: HINT_KEYS,
-    paint: paint(o.mode),
+    paint: testPaint(o.mode),
     hiddenBelow: o.hiddenBelow,
   });
 const plain = (s: Partial<VoiceSnapshot>, o = {}) =>
   stripTerminalSequences(draw(s, o) ?? "");
+/** A 256-colour terminal gets indexed colour only, never a 24-bit one, and some colour at all. */
+const expectIndexed = (row: string) => {
+  const coloured = styledRuns(row).filter((r) => r.fg);
+  expect(coloured.length).toBeGreaterThan(0);
+  for (const run of coloured) expect(run.fg?.kind).toBe("indexed");
+};
 
 const STATES: Partial<VoiceSnapshot>[] = [
   { state: "arming", micOpen: false, sinceStartMs: 300 },
@@ -122,15 +121,10 @@ test("silence is the rule itself: no meter cell rises for anything below the spe
 /** The rendered meter's glyph colours: glyph → OKLCH lightness of the colour it drew in. */
 function meterLightness(row: string): Record<string, number> {
   const light: Record<string, number> = {};
-  for (const m of row.matchAll(
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape bytes are exactly what the pattern must name
-    /\x1b\[38;2;(\d+);(\d+);(\d+)m([\u2582-\u2588])/g,
-  )) {
-    const [r, g, b, glyph] = m.slice(1) as [string, string, string, string];
-    const hex = (n: string) =>
-      Number(n).toString(16).padStart(2, "0").toUpperCase();
-    light[glyph] = colorToOklch(parseColor(`#${hex(r)}${hex(g)}${hex(b)}`)).l;
-  }
+  for (const { text, fg } of styledRuns(row))
+    for (const glyph of text)
+      if (fg && /[\u2582-\u2588]/.test(glyph))
+        light[glyph] = colorToOklch(fg).l;
   return light;
 }
 
@@ -143,7 +137,7 @@ test("short bars recede toward the background on a light theme, as on a dark one
       width: 72,
       rule,
       keys: HINT_KEYS,
-      paint: paint("color", { ...FALLBACK_PALETTE, appearance: "light" }),
+      paint: testPaint("color", testTheme({ appearance: "light" })),
     })!,
   );
   expect(dark["█"]!).toBeGreaterThan(dark["▂"]!);
@@ -188,6 +182,7 @@ test("the rule keeps Pi's colour: every rule cell goes through the editor's own 
     width: 40,
     rule: (s) => `<${s}>`,
     keys: HINT_KEYS,
+    paint: testPaint(),
   })!;
   expect(row.startsWith("<──>")).toBe(true);
   expect(row.endsWith("<──>")).toBe(true);
@@ -246,7 +241,7 @@ test("an unbound key draws no hint at all, so nothing pretends to name a key tha
     width: 72,
     rule,
     keys: { submit: "", cancel: "escape", undo: "ctrl+-" },
-    paint: paint(),
+    paint: testPaint(),
   })!;
   expect(stripTerminalSequences(half)).toContain("escape discard");
   expect(stripTerminalSequences(half)).not.toContain("keep");
@@ -255,7 +250,7 @@ test("an unbound key draws no hint at all, so nothing pretends to name a key tha
     width: 72,
     rule,
     keys: { submit: "", cancel: "", undo: "" },
-    paint: paint(),
+    paint: testPaint(),
   })!;
   expect(stripTerminalSequences(none)).not.toContain("keep");
   expect(stripTerminalSequences(none)).not.toContain("cancel");
@@ -278,7 +273,8 @@ test("an error names its cause on the rule, truncated by whole columns", () => {
 });
 
 test("TERM=dumb marks are ASCII; NO_COLOR keeps the glyphs without colour; 256-colour stays indexed", () => {
-  const dumb = plain({}, { mode: "ascii" });
+  const dumb = draw({}, { mode: "ascii" })!;
+  expect(dumb).not.toContain("\x1b");
   expect(dumb).toContain("[rec] listening");
   expect(dumb).toMatch(/[=#]{3}/);
   const mono = draw({}, { mode: "mono" })!;
@@ -288,9 +284,9 @@ test("TERM=dumb marks are ASCII; NO_COLOR keeps the glyphs without colour; 256-c
     width: 72,
     rule,
     keys: HINT_KEYS,
-    paint: paint("color", { ...FALLBACK_PALETTE, mode: "256color" }),
+    paint: testPaint("color", testTheme({ colorMode: "256color" })),
   })!;
-  expect(indexed).not.toContain("\x1b[38;2;");
+  expectIndexed(indexed);
 });
 
 test("the footer row names voice first, so a neighbouring status can't claim its marks", () => {
@@ -298,19 +294,24 @@ test("the footer row names voice first, so a neighbouring status can't claim its
     stripTerminalSequences(
       renderStatus(
         snap({ state: "arming", micOpen: false, sinceStartMs: 300 }),
+        { paint: testPaint() },
       )!,
     ),
   ).toBe("voice ○ starting ────────");
   expect(
     stripTerminalSequences(
-      renderStatus(snap({ state: "transcribing", micOpen: false }))!,
+      renderStatus(snap({ state: "transcribing", micOpen: false }), {
+        paint: testPaint(),
+      })!,
     ),
   ).toBe("voice ○ finishing· ────────");
   expect(
-    stripTerminalSequences(renderStatus(snap({ state: "discarded" }))!),
+    stripTerminalSequences(
+      renderStatus(snap({ state: "discarded" }), { paint: testPaint() })!,
+    ),
   ).toBe("voice discarded");
   // the footer collapses runs of spaces, so the row never relies on them
-  expect(renderStatus(snap())!).not.toMatch(/ {2}/);
+  expect(renderStatus(snap(), { paint: testPaint() })!).not.toMatch(/ {2}/);
 });
 
 test("the error row names the cause, truncated by whole columns", () => {
@@ -319,6 +320,7 @@ test("the error row names the cause, truncated by whole columns", () => {
       state: "error",
       message: "microphone blocked · allow it in System Settings › Privacy",
     }),
+    { paint: testPaint() },
   )!;
   // the footer caps the message at its own width before the terminal does; the cause stays whole
   expect(stripTerminalSequences(row)).toMatch(
@@ -326,45 +328,50 @@ test("the error row names the cause, truncated by whole columns", () => {
   );
   const short = renderStatus(
     snap({ state: "error", message: "microphone blocked" }),
+    { paint: testPaint() },
   )!;
   expect(stripTerminalSequences(short)).toBe("voice ✗ microphone blocked");
-  const long = renderStatus(snap({ state: "error", message: "x".repeat(90) }))!;
+  const long = renderStatus(snap({ state: "error", message: "x".repeat(90) }), {
+    paint: testPaint(),
+  })!;
   // the footer's error row is 60 columns whole, prefix included
   expect(visibleWidth(long)).toBe(60);
 });
 
 test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {
-  expect(
-    stripTerminalSequences(renderStatus(snap(), { paint: paint("ascii") })!),
-  ).toMatch(/^voice \[rec\] listening [-=#]{8}$/);
-  const mono = renderStatus(snap(), { paint: paint("mono") })!;
+  const dumb = renderStatus(snap(), { paint: testPaint("ascii") })!;
+  expect(dumb).toMatch(/^voice \[rec\] listening [-=#]{8}$/);
+  const mono = renderStatus(snap(), { paint: testPaint("mono") })!;
   expect(mono).not.toContain("\x1b[");
   expect(mono).toContain("●");
 });
 
-test("the footer row reads the palette it is given, so it follows theme switches", () => {
-  const light = {
-    ...FALLBACK_PALETTE,
-    colors: { ...FALLBACK_PALETTE.colors, accent: parseColor("#157937") },
-  };
-  expect(renderStatus(snap(), { paint: paint("color", light) })).toContain(
-    "\x1b[38;2;21;121;55m●",
+test("the footer row reads the theme it is given, so it follows theme switches", () => {
+  const accent = parseColor("#157937");
+  const row = renderStatus(snap(), {
+    paint: testPaint("color", testTheme({ colors: { accent } })),
+  })!;
+  expect(styledRuns(row)).toContainEqual(
+    expect.objectContaining({ text: "●", fg: accent }),
   );
-  expect(
+  expectIndexed(
     renderStatus(snap(), {
-      paint: paint("color", { ...FALLBACK_PALETTE, mode: "256color" }),
-    }),
-  ).not.toContain("\x1b[38;2;");
+      paint: testPaint("color", testTheme({ colorMode: "256color" })),
+    })!,
+  );
 });
 
 test("the footer carries the rule's advisories, so a hidden editor still hears about the cap", () => {
   expect(
-    stripTerminalSequences(renderStatus(snap({ capLeftMs: 9_500 }))!),
+    stripTerminalSequences(
+      renderStatus(snap({ capLeftMs: 9_500 }), { paint: testPaint() })!,
+    ),
   ).toMatch(/^voice ● listening · 10s left /);
   expect(
     stripTerminalSequences(
       renderStatus(
         snap({ state: "arming", micOpen: false, sinceStartMs: 2000 }),
+        { paint: testPaint() },
       )!,
     ),
   ).toBe("voice ○ starting · no audio yet ────────");

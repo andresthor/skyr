@@ -18,13 +18,15 @@ import {
   type VoiceEditorOptions,
 } from "../src/voice/editor.js";
 import { DRY_MS } from "../src/voice/ghost.js";
-import { FALLBACK_PALETTE, paintFor } from "../src/voice/palette.js";
 import {
   CURSOR_CELL,
   editorRows,
   keybindings,
   realEditor,
   snap,
+  styledRuns,
+  testPaint,
+  testTheme,
 } from "./voice.js";
 
 /** A minimal stand-in for pi-tui's Editor: [top rule, ...text rows, bottom rule], with the fake cursor at end of the cursor line. */
@@ -132,7 +134,10 @@ function fresh(
 ): EditorInstance {
   const VoiceEditor = createVoiceEditorClass(
     FakeBase,
-    { paint: opts.paint, keyHook: opts.keyHook },
+    {
+      paint: opts.paint ?? (() => testPaint()),
+      keyHook: opts.keyHook ?? (() => false),
+    },
     opts.clock?.now,
   );
   const ed = new VoiceEditor(
@@ -239,8 +244,13 @@ describe("render", () => {
     expect(rows).toHaveLength(3);
     const row = rows[1] ?? "";
     expect(row.includes(CURSOR_CELL)).toBe(true);
-    expect(row.includes("\x1b[3m")).toBe(true); // dim italic ghost
-    expect(row.includes("\x1b[38;2;")).toBe(true); // the wet foreground
+    const runs = styledRuns(row);
+    expect(runs).toContainEqual(
+      expect.objectContaining({ text: " again", italic: true, dim: true }),
+    );
+    expect(runs).toContainEqual(
+      expect.objectContaining({ text: "world", fg: expect.anything() }),
+    );
     // once the span is past its drying window the render equals the ghost-only form
     c.advance(DRY_MS);
     const ghostOnly = fresh("hello world", {
@@ -253,21 +263,18 @@ describe("render", () => {
   });
 
   test("the paint is read per frame, so a mid-session theme switch reaches ghost and firm colours", () => {
-    let theme = {
-      ...FALLBACK_PALETTE,
-      colors: { ...FALLBACK_PALETTE.colors, dim: parseColor("#767676") },
-    };
+    let theme = testTheme({ colors: { dim: parseColor("#767676") } });
     const editor = fresh("hello", {
       paddingX: 2,
       clock: clock(),
-      paint: () => paintFor(theme, "color"),
+      paint: () => testPaint("color", theme),
     });
     editor.ghost("world");
-    const row = editor.render(40)[1] ?? "";
-    // the ghost's dim colour is the live theme's dim, not the fallback's
-    expect(row).toContain("\x1b[38;2;118;118;118m");
-    theme = FALLBACK_PALETTE;
-    expect(editor.render(40)[1] ?? "").toContain("\x1b[38;2;102;102;102m");
+    const ghostColour = () =>
+      styledRuns(editor.render(40)[1] ?? "").find((r) => r.italic)?.fg;
+    expect(ghostColour()).toEqual(parseColor("#767676"));
+    theme = testTheme({ colors: { dim: parseColor("#666666") } });
+    expect(ghostColour()).toEqual(parseColor("#666666"));
   });
 
   test("a broken base editor still fails loudly; voice hides only its own drawing errors", () => {
@@ -385,7 +392,9 @@ describe("editorSink", () => {
 
   /** Whether the editor's own render currently draws the italic ghost. */
   const ghostDrawn = (editor: EditorInstance) =>
-    editor.render(editor.text.length + 21).some((l) => l.includes("\x1b[3m"));
+    editor
+      .render(editor.text.length + 21)
+      .some((l) => styledRuns(l).some((r) => r.italic));
 
   test("with an editor: interims are decor only, finals commit, and Esc puts the buffer back", () => {
     const editor = fresh("previous words typed", {

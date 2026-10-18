@@ -1,18 +1,24 @@
 /**
- * Fixtures shared by the voice tests: a snapshot builder, editor rows as Pi draws them, Pi's
- * own key bindings, credentials, and a fake Pi that captures what voice registers through
- * narrow local types, so a test that passes the wrong shape fails to compile.
+ * Fixtures shared by the voice tests: a snapshot builder, editor rows as Pi draws them, a theme
+ * to draw them in and a reader for the styles they come out in, Pi's own key bindings,
+ * credentials, and a fake Pi that captures what voice registers through narrow local types, so
+ * a test that passes the wrong shape fails to compile.
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CustomEditor,
   type ExtensionAPI,
+  type ThemeAppearance,
 } from "@earendil-works/pi-coding-agent";
 import {
   type Color,
   CURSOR_MARKER,
+  indexedColor,
+  parseColor,
   renderFakeCursor,
+  rgbColor,
+  stripTerminalSequences,
   type TerminalColorMode,
 } from "@earendil-works/pi-tui";
 import { type Mock, onTestFinished, vi } from "vitest";
@@ -30,11 +36,16 @@ import {
   type VoiceKeys,
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
+import { type Paint, paintFor, type VoiceMode } from "../src/voice/palette.js";
 import { scratchDir } from "./session.js";
 
 /** A real Pi editor, focused, with voice's subclass on top. */
-export function realEditor(options?: VoiceEditorOptions) {
-  const VoiceEditor = createVoiceEditorClass(CustomEditor, options);
+export function realEditor(options: VoiceEditorOptions = {}) {
+  const VoiceEditor = createVoiceEditorClass(CustomEditor, {
+    keyHook: () => false,
+    paint: () => testPaint(),
+    ...options,
+  });
   const ed = new VoiceEditor(
     { terminal: { rows: 40 }, requestRender: () => {} } as never,
     { borderColor: (s: string) => s, selectList: {} } as never,
@@ -146,9 +157,107 @@ type EditorFactory = (
   keys: KeybindingsManager,
 ) => VoiceEditor;
 
-export interface ThemeStub {
-  colors: Record<string, Color>;
+/** Corti's dark token colours: what a test draws in unless it names its own. */
+const CORTI_DARK = {
+  accent: parseColor("#B8F818"),
+  text: parseColor("#d4d4d4"),
+  muted: parseColor("#808080"),
+  dim: parseColor("#666666"),
+  error: parseColor("#cc6666"),
+  warning: parseColor("#d7af5f"),
+};
+
+interface ThemeStub {
+  colors: Record<keyof typeof CORTI_DARK, Color>;
+  appearance: ThemeAppearance;
   getColorMode(): TerminalColorMode;
+}
+
+/** A theme as voice reads Pi's: the Corti dark colours, a dark background and truecolour, unless overridden. */
+export function testTheme(
+  o: {
+    colors?: Partial<ThemeStub["colors"]>;
+    appearance?: ThemeAppearance;
+    colorMode?: TerminalColorMode;
+  } = {},
+): ThemeStub {
+  return {
+    colors: { ...CORTI_DARK, ...o.colors },
+    appearance: o.appearance ?? "dark",
+    getColorMode: () => o.colorMode ?? "truecolor",
+  };
+}
+
+/** What voice draws with: `theme` on a terminal that shows `mode`. */
+export const testPaint = (
+  mode: VoiceMode = "color",
+  theme: ThemeStub = testTheme(),
+): Paint => paintFor(theme, mode);
+
+/** A stretch of rendered text and the SGR state a terminal draws it in. */
+export interface StyledRun {
+  text: string;
+  fg?: Color;
+  bold: boolean;
+  dim: boolean;
+  italic: boolean;
+}
+
+const PLAIN = { bold: false, dim: false, italic: false };
+
+/**
+ * `row` as a terminal shows it: its text in runs of one SGR state, in order, whatever bytes set
+ * that state. Other sequences (cursor markers) carry no text and are dropped; an SGR code
+ * outside fg, bold, faint and italic throws, so a new attribute can't pass unseen.
+ */
+export function styledRuns(row: string): StyledRun[] {
+  const runs: StyledRun[] = [];
+  let state: Omit<StyledRun, "text"> = PLAIN;
+  const push = (raw: string) => {
+    const text = stripTerminalSequences(raw);
+    if (!text) return;
+    const last = runs.at(-1);
+    const same =
+      last &&
+      last.bold === state.bold &&
+      last.dim === state.dim &&
+      last.italic === state.italic &&
+      JSON.stringify(last.fg) === JSON.stringify(state.fg);
+    if (same) last.text += text;
+    else runs.push({ text, ...state });
+  };
+  let at = 0;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: SGR sequences are what this reads
+  for (const m of row.matchAll(/\x1b\[([\d;]*)m/g)) {
+    push(row.slice(at, m.index));
+    at = m.index + m[0].length;
+    const p = (m[1] || "0").split(";").map(Number);
+    for (let i = 0; i < p.length; i++) {
+      const code = p[i];
+      if (code === 0) state = PLAIN;
+      else if (code === 1) state = { ...state, bold: true };
+      else if (code === 2) state = { ...state, dim: true };
+      else if (code === 3) state = { ...state, italic: true };
+      else if (code === 22) state = { ...state, bold: false, dim: false };
+      else if (code === 23) state = { ...state, italic: false };
+      else if (code === 39) state = { ...state, fg: undefined };
+      else if (code === 38 && p[i + 1] === 2) {
+        state = {
+          ...state,
+          fg: rgbColor(p[i + 2] ?? 0, p[i + 3] ?? 0, p[i + 4] ?? 0),
+        };
+        i += 4;
+      } else if (code === 38 && p[i + 1] === 5) {
+        state = { ...state, fg: indexedColor(p[i + 2] ?? 0) };
+        i += 2;
+      } else
+        throw new Error(
+          `unexpected SGR code ${code} in ${JSON.stringify(row)}`,
+        );
+    }
+  }
+  push(row.slice(at));
+  return runs;
 }
 
 /** The UI surface voice uses, recorded. `theme` is mutable so a test can switch it as /theme does. */
@@ -159,7 +268,7 @@ interface VoiceUi {
   getEditorComponent: Mock<() => unknown>;
   getEditorText: Mock<() => string>;
   setEditorText: Mock<(text: string) => void>;
-  theme?: ThemeStub;
+  theme: ThemeStub;
 }
 
 interface VoiceCtx {
@@ -192,7 +301,7 @@ export function voiceCtx(
       getEditorComponent: vi.fn(() => installed),
       getEditorText: vi.fn(() => ""),
       setEditorText: vi.fn(),
-      theme: o.theme,
+      theme: o.theme ?? testTheme(),
     },
   };
 }

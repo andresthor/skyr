@@ -19,7 +19,8 @@ import {
   mountedEditor,
   registeredSkyr,
   registeredVoice,
-  type ThemeStub,
+  styledRuns,
+  testTheme,
   voiceCtx,
   withCreds,
 } from "./voice.js";
@@ -28,20 +29,12 @@ import {
 const VOICE_SHORTCUT = "ctrl+space";
 const VOICE_STATUS_KEY = "skyr.voice";
 
-/** A theme stub where every token is one colour, so any glyph names the theme. */
-const theme = (hex: string): ThemeStub => {
+/** A theme where every token is one colour, so any glyph names the theme. */
+const theme = (hex: string) => {
   const c = parseColor(hex);
-  return {
-    colors: {
-      accent: c,
-      text: c,
-      muted: c,
-      dim: c,
-      error: c,
-      warning: c,
-    },
-    getColorMode: () => "truecolor",
-  };
+  return testTheme({
+    colors: { accent: c, text: c, muted: c, dim: c, error: c, warning: c },
+  });
 };
 
 /** A fake session that records what each dictation was started with, and how it ended. */
@@ -237,17 +230,19 @@ test("a mid-session theme switch reaches the status row and the editor's ghost/f
   await pi.handlers.get("session_start")!(null, ctx);
   await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
   const row = ctx.ui.setStatus.mock.calls.at(-1)?.[1] as string;
-  expect(row.startsWith("\x1b[38;2;10;20;30m")).toBe(true);
+  expect(styledRuns(row)[0]?.fg).toEqual(parseColor("#0a141e"));
   // the switch: the same row is rendered from the other theme on the next render
   ctx.ui.theme = theme("#c8beb4");
   starts[0]!.onReady?.();
   const switched = ctx.ui.setStatus.mock.calls.at(-1)?.[1] as string;
-  expect(switched.includes("\x1b[38;2;200;190;180m")).toBe(true);
+  expect(styledRuns(switched)[0]?.fg).toEqual(parseColor("#c8beb4"));
   // and the editor reads the same live theme per frame, so its ghost follows the switch
   const ed = mountedEditor(ctx.ui);
   ed.ghost("theme words");
   const ghostRow = ed.render(60)[1] ?? "";
-  expect(ghostRow).toContain("\x1b[38;2;200;190;180mtheme words");
+  expect(styledRuns(ghostRow)).toContainEqual(
+    expect.objectContaining({ text: "theme words", fg: parseColor("#c8beb4") }),
+  );
 });
 
 test.each([

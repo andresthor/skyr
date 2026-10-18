@@ -84,7 +84,6 @@ export const BINDINGS = {
 export function createVoiceEditorClass(
   Base: CustomEditorClass,
   { keyHook, paint }: VoiceEditorOptions,
-  now: () => number = Date.now,
 ) {
   return class VoiceEditor extends Base implements VoiceEditorLike {
     private ghostText = "";
@@ -123,7 +122,7 @@ export function createVoiceEditorClass(
 
     override render(width: number): string[] {
       const base = super.render(width);
-      const t = now();
+      const t = Date.now();
       this.drying = this.drying.filter((s) => t - s.at < DRY_MS);
       if (!this.ghostText && !this.drying.length) return base;
       // this editor is permanent: a throw here would take the input bar down with it
@@ -186,7 +185,7 @@ export function createVoiceEditorClass(
     }
 
     get animating(): boolean {
-      const t = now();
+      const t = Date.now();
       return this.drying.some((s) => t - s.at < DRY_MS);
     }
 
@@ -216,7 +215,7 @@ export function createVoiceEditorClass(
       const insert = spacedSegment(before, row.slice(col), segment);
       if (!insert) return;
       this.insertTextAtCursor(insert);
-      const t = now();
+      const t = Date.now();
       this.drying = [
         {
           chars: insert.trim().length,

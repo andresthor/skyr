@@ -10,7 +10,7 @@ import type {
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   createVoiceEditorClass,
   editorSink,
@@ -101,16 +101,12 @@ class FakeEditor {
   }
 }
 
-/** One test's clock: `advance` moves it, and the editor's spans dry on it. */
-function clock() {
-  let t = 1_000_000;
-  return {
-    now: () => t,
-    advance(ms: number) {
-      t += ms;
-    },
-  };
-}
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 // the fake satisfies the base class only structurally; the editor's own surface is what these tests use
 const FakeBase = FakeEditor as unknown as typeof CustomEditor;
@@ -127,20 +123,15 @@ function fresh(
     paddingX?: number;
     throwsOnRender?: boolean;
     focused?: boolean;
-    clock?: ReturnType<typeof clock>;
     paint?: VoiceEditorOptions["paint"];
     keyHook?: VoiceEditorOptions["keyHook"];
     keys?: KeybindingsManager;
   } = {},
 ): EditorInstance {
-  const VoiceEditor = createVoiceEditorClass(
-    FakeBase,
-    {
-      paint: opts.paint ?? testPaint(),
-      keyHook: opts.keyHook ?? (() => false),
-    },
-    opts.clock?.now,
-  );
+  const VoiceEditor = createVoiceEditorClass(FakeBase, {
+    paint: opts.paint ?? testPaint(),
+    keyHook: opts.keyHook ?? (() => false),
+  });
   const ed = new VoiceEditor(
     {} as never,
     {} as never,
@@ -175,29 +166,27 @@ describe("commit", () => {
   );
 
   test("a final commits at the cursor and stays on the clock until DRY_MS passes", () => {
-    const c = clock();
-    const editor = fresh("hello ", { cursorCol: 6, clock: c });
+    const editor = fresh("hello ", { cursorCol: 6 });
     editor.commit("world");
     expect(editor.text).toBe("hello world");
     expect(editor.animating).toBe(true);
-    c.advance(DRY_MS - 1);
+    vi.advanceTimersByTime(DRY_MS - 1);
     expect(editor.animating).toBe(true);
-    c.advance(1);
+    vi.advanceTimersByTime(1);
     expect(editor.animating).toBe(false);
   });
 
   test("a second final dries on its own clock, so the first never resets it", () => {
-    const c = clock();
-    const editor = fresh("hello ", { cursorCol: 6, clock: c });
+    const editor = fresh("hello ", { cursorCol: 6 });
     editor.commit("world");
-    c.advance(DRY_MS);
+    vi.advanceTimersByTime(DRY_MS);
     expect(editor.animating).toBe(false);
     editor.commit("more");
     expect(editor.animating).toBe(true);
   });
 
   test("a blank segment inserts nothing and leaves nothing drying", () => {
-    const editor = fresh("hello ", { cursorCol: 6, clock: clock() });
+    const editor = fresh("hello ", { cursorCol: 6 });
     editor.commit("   ");
     expect(editor.text).toBe("hello ");
     expect(editor.animating).toBe(false);
@@ -213,7 +202,6 @@ describe("commit", () => {
     const editor = fresh("start", {
       cursorCol: 5,
       focused: false,
-      clock: clock(),
     });
     editor.commit("one");
     expect(editor.text).toBe("start");
@@ -233,14 +221,13 @@ describe("render", () => {
   });
 
   test("a committed span fades over its drying window, rather than staying wet and then vanishing", () => {
-    const c = clock();
-    const editor = fresh("hello", { paddingX: 2, cursorCol: 5, clock: c });
+    const editor = fresh("hello", { paddingX: 2, cursorCol: 5 });
     editor.commit("world");
     const colour = () =>
       styledRuns(editor.render(40)[1] ?? "").find((r) => r.text.includes("w"))
         ?.fg;
     const wet = colour();
-    c.advance(DRY_MS / 2);
+    vi.advanceTimersByTime(DRY_MS / 2);
     const drying = colour();
     expect(wet).toBeDefined();
     expect(drying).toBeDefined();
@@ -248,11 +235,9 @@ describe("render", () => {
   });
 
   test("the ghost draws beside the cursor cell, a fresh span is wet, and a dried span is colourless again", () => {
-    const c = clock();
     const editor = fresh("hello", {
       paddingX: 2,
       cursorCol: 5,
-      clock: c,
     });
     editor.commit("world");
     editor.ghost("again");
@@ -268,11 +253,10 @@ describe("render", () => {
       expect.objectContaining({ text: "world", fg: expect.anything() }),
     );
     // once the span is past its drying window the render equals the ghost-only form
-    c.advance(DRY_MS);
+    vi.advanceTimersByTime(DRY_MS);
     const ghostOnly = fresh("hello world", {
       paddingX: 2,
       cursorCol: 11,
-      clock: c,
     });
     ghostOnly.ghost("again");
     expect(editor.render(40)).toEqual(ghostOnly.render(40));
@@ -292,7 +276,6 @@ describe("render", () => {
     };
     const editor = fresh("hello", {
       paddingX: 2,
-      clock: clock(),
       paint: testPaint("color", live),
     });
     editor.ghost("world");
@@ -306,7 +289,6 @@ describe("render", () => {
   test("a broken base editor still fails loudly; voice hides only its own drawing errors", () => {
     const editor = fresh("hello", {
       throwsOnRender: true,
-      clock: clock(),
     });
     editor.ghost("world");
     expect(() => editor.render(40)).toThrow("base render blew up");
@@ -316,7 +298,6 @@ describe("render", () => {
     let swallow = true;
     let seen = "";
     const editor = fresh("", {
-      clock: clock(),
       keyHook: (data) => {
         seen = data;
         return swallow;
@@ -336,7 +317,7 @@ describe("bottom rule", () => {
   const listening = snap();
 
   test("while voice is on, the bottom rule is the voice rule, in Pi's rule colour and Pi's key names", () => {
-    const editor = fresh("hello", { clock: clock() });
+    const editor = fresh("hello");
     expect(editor.showRule(listening)).toBe(true);
     // the test's border marker takes visible columns, so give the hints room to stay
     const bottom = editor.render(120).at(-1) ?? "";
@@ -350,7 +331,7 @@ describe("bottom rule", () => {
   });
 
   test("showRule clears the rule and says so when the editor is hidden behind a card", () => {
-    const editor = fresh("hello", { clock: clock() });
+    const editor = fresh("hello");
     expect(editor.showRule(listening)).toBe(true);
     editor.focused = false;
     expect(editor.showRule(listening)).toBe(false);
@@ -361,7 +342,7 @@ describe("bottom rule", () => {
   test("an unbound binding draws no hint, rather than naming a key that isn't there", () => {
     const keys = keybindings();
     keys.setUserBindings({ "app.interrupt": [] });
-    const editor = fresh("hello", { keys, clock: clock() });
+    const editor = fresh("hello", { keys });
     editor.showRule(listening);
     const bottom = stripTerminalSequences(editor.render(120).at(-1) ?? "");
     expect(bottom).toContain("enter keep");
@@ -370,13 +351,12 @@ describe("bottom rule", () => {
   });
 
   test("with voice off, the bottom rule is Pi's own", () => {
-    const editor = fresh("hello", { clock: clock() });
+    const editor = fresh("hello");
     expect(editor.render(40).at(-1)).toBe(`<${"─".repeat(40)}>`);
   });
 
   test("a throw while drawing the voice rule leaves Pi's rule, never a broken input bar", () => {
     const editor = fresh("hello", {
-      clock: clock(),
       paint: testPaint("color", {
         ...testTheme(),
         style: () => {
@@ -396,7 +376,6 @@ describe("reset", () => {
     const editor = fresh("start", {
       cursorCol: 5,
       focused: false,
-      clock: clock(),
     });
     editor.commit("held");
     editor.ghost("ghost");
@@ -428,7 +407,6 @@ describe("editorSink", () => {
   test("with an editor: interims are decor only, finals commit, and Esc puts the buffer back", () => {
     const editor = fresh("previous words typed", {
       cursorCol: 20,
-      clock: clock(),
     });
     editor.focused = true;
     const { sink } = pair(editor);
@@ -467,7 +445,6 @@ describe("editorSink", () => {
     const editor = fresh("start", {
       cursorCol: 5,
       focused: false,
-      clock: clock(),
     });
     const { sink } = pair(editor);
     sink.begin();

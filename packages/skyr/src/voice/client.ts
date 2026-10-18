@@ -12,8 +12,8 @@ import { micFailed, VoiceError } from "./errors.js";
 import { pcmDbfs, SAMPLE_RATE_HZ } from "./mic.js";
 
 const PCM = `audio/pcm; rate=${SAMPLE_RATE_HZ}; channels=1; bits=16; endian=little; encoding=sint`;
-/** 250 ms at 16 kHz s16le, Corti's recommended chunk; the hard cap is 64 000 B. */
-const CHUNK_BYTES = 8_000;
+/** Corti's recommended 250 ms chunk of s16le mono, two bytes a sample; the hard cap is 64 000 B. */
+const CHUNK_BYTES = (SAMPLE_RATE_HZ / 1000) * 250 * 2;
 /** Past this after `end` the caller keeps the last interim; flushing on quiet usually has the final in already. */
 const END_TIMEOUT_MS = 2_500;
 /** How much of Corti's own reason an error line carries. */

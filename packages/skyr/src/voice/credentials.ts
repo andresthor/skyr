@@ -19,7 +19,10 @@ export interface SttCredentials {
 export type CredentialResult =
   | { creds: SttCredentials }
   | { missing: string[] }
-  | { invalid: string };
+  | { invalid: CheckedVariable };
+
+/** The variables that must match a pattern as well as be set. */
+type CheckedVariable = "CORTI_ENVIRONMENT" | "CORTI_TENANT_NAME";
 
 export function resolveSttCredentials(
   env: NodeJS.ProcessEnv = process.env,
@@ -45,7 +48,7 @@ export function resolveSttCredentials(
 }
 
 /** What each checkable variable must look like, for the notice that names an invalid one. */
-const CRED_FORMS: Record<string, string> = {
+const CRED_FORMS: Record<CheckedVariable, string> = {
   CORTI_ENVIRONMENT: 'letters, digits or "-"',
   CORTI_TENANT_NAME: 'letters, digits, "_", "." or "-"',
 };

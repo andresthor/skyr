@@ -10,7 +10,7 @@ import { PassThrough, type Readable } from "node:stream";
 import { errnoOf } from "../tools/render.js";
 import { micFailed, VoiceError } from "./errors.js";
 
-/** The capture rate: the recorder arguments and the PCM format string derive from it. */
+/** The capture rate: the recorder arguments, the PCM format string and the chunk size derive from it. */
 export const SAMPLE_RATE_HZ = 16_000;
 /** s16le full scale: 0 dBFS. */
 const FULL_SCALE = 32_768;

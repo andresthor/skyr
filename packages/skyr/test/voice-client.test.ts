@@ -251,9 +251,12 @@ test("no audio leaves before Corti accepts the config; after, it goes in 8,000 B
   h.sock.onopen?.();
   expect(h.sock.audio()).toEqual([]);
   h.sock.server({ type: "CONFIG_ACCEPTED" });
-  expect(h.sock.audio()).toHaveLength(1); // 8,000 out of 12,000
+  // 8,000 out of 12,000; the rest waits for a whole chunk
+  expect(h.sock.audio().map((f) => f.length)).toEqual([8_000]);
   writePcm(h.source, 4_000);
-  await vi.waitFor(() => expect(h.sock.audio()).toHaveLength(2)); // 16,000 total = two chunks
+  await vi.waitFor(() =>
+    expect(h.sock.audio().map((f) => f.length)).toEqual([8_000, 8_000]),
+  );
   h.session.cancel();
 });
 

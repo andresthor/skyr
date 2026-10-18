@@ -135,7 +135,7 @@ test("the refused start names the fix, only when a focused editor could have dic
   ).toMatch(/a card or selector has the keyboard/);
 });
 
-test("a second session_start reinstates the voice editor, and a foreign factory keeps the fallback", async () => {
+test("a second session_start reinstates the voice editor while ours is the one installed", async () => {
   withCreds();
   agentDirWith();
   const { starts, start } = recording();
@@ -143,17 +143,43 @@ test("a second session_start reinstates the voice editor, and a foreign factory 
   const ctx = voiceCtx();
   await pi.handlers.get("session_start")!(null, ctx);
   expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(1);
-  // second session: ours is still the installed factory, so it is reinstated, not skipped
+  ctx.ui.getEditorComponent.mockReturnValue(
+    ctx.ui.setEditorComponent.mock.calls[0]?.[0],
+  );
   await pi.handlers.get("session_start")!(null, ctx);
   expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(2);
   // and dictation still goes through the controller afterwards
   await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
   expect(starts).toHaveLength(1);
+});
 
-  // a foreign editor wins: nothing of ours is installed, dictation rides setEditorText
-  const foreign = voiceCtx({ installed: () => ({}) });
-  await pi.handlers.get("session_start")!(null, foreign);
-  expect(foreign.ui.setEditorComponent).not.toHaveBeenCalled();
+test("a foreign editor keeps its place, and dictation still reaches the buffer through setEditorText", async () => {
+  withCreds();
+  agentDirWith();
+  const { starts, start } = recording();
+  const pi = registeredVoice({ mode: "ascii", controller: { start } });
+  const ctx = voiceCtx({ installed: () => ({}) });
+  ctx.ui.getEditorText.mockReturnValue("draft");
+  await pi.handlers.get("session_start")!(null, ctx);
+  expect(ctx.ui.setEditorComponent).not.toHaveBeenCalled();
+  await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+  starts[0]!.onReady?.();
+  starts[0]!.onFinal("hello there");
+  expect(ctx.ui.setEditorText).toHaveBeenLastCalledWith("draft hello there");
+});
+
+test("skyr.json problems are told once in the TUI too, and voice still mounts", async () => {
+  withCreds();
+  agentDirWith('{"voice": {"language": "english"}}');
+  const pi = registeredVoice({ mode: "ascii" });
+  const ctx = voiceCtx();
+  await pi.handlers.get("session_start")!(null, ctx);
+  expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
+  expect(ctx.ui.notify).toHaveBeenCalledWith(
+    expect.stringContaining("language"),
+    "warning",
+  );
+  expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(1);
 });
 
 test("a mid-session theme switch reaches the status row and the editor's ghost/firm palette", async () => {

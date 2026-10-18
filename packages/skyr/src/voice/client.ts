@@ -135,6 +135,7 @@ export function startSession(o: SessionOptions): SttSession {
   };
   const fail = (err: VoiceError) => {
     if (closed) return;
+    // torn down first, so a listener that throws below still leaves no socket or mic running
     teardown();
     if (!stopping) o.onError(err);
   };
@@ -147,7 +148,7 @@ export function startSession(o: SessionOptions): SttSession {
       } catch {
         try {
           fail(new VoiceError("network", "internal error"));
-        } catch {} // the session is already torn down; one report is all a broken listener gets
+        } catch {} // onError itself threw: the session is already torn down, and a throw here would exit Pi
       }
     };
   const pump = () => {
@@ -166,11 +167,13 @@ export function startSession(o: SessionOptions): SttSession {
   try {
     audio = o.source();
   } catch (e) {
-    queueMicrotask(() =>
-      fail(
-        e instanceof VoiceError
-          ? e
-          : new VoiceError("mic", "no microphone found"),
+    queueMicrotask(
+      guard(() =>
+        fail(
+          e instanceof VoiceError
+            ? e
+            : new VoiceError("mic", "no microphone found"),
+        ),
       ),
     );
     return { stop: () => done, cancel: () => {} };

@@ -361,6 +361,51 @@ test("a listener that throws ends the session with an error instead of escaping 
   );
 });
 
+test("a listener and onError that both throw still tear the session down, and stop resolves", async () => {
+  const h = await drive({
+    onFinal: () => {
+      throw new Error("editor broke");
+    },
+    onError: () => {
+      throw new Error("controller broke");
+    },
+  });
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  expect(() =>
+    h.sock.server({
+      type: "transcript",
+      data: { text: "boom", start: 0, isFinal: true },
+    }),
+  ).not.toThrow();
+  expect(h.sock.readyState).toBe(3);
+  expect(h.source.destroyed).toBe(true);
+  await expect(h.session.stop()).resolves.toBe("boom");
+});
+
+test("a recorder that fails to start, reported to an onError that throws, never escapes to Pi", async () => {
+  const escaped: unknown[] = [];
+  const record = (e: unknown) => escaped.push(e);
+  process.on("uncaughtException", record);
+  onTestFinished(() => void process.off("uncaughtException", record));
+  const session = startSession({
+    creds: creds(),
+    source: () => {
+      throw new Error("spawn failed");
+    },
+    onInterim: () => {},
+    onFinal: () => {},
+    onError: () => {
+      throw new Error("controller broke");
+    },
+    fetch: tokenFetch([], "tok", 3600),
+    WebSocket: SocketMaker,
+  });
+  await tick();
+  expect(escaped).toEqual([]);
+  await expect(session.stop()).resolves.toBe("");
+});
+
 test("a sign-in answer without a usable token fails as unreadable, never as a socket with no token", async () => {
   for (const body of ["{}", '{"access_token":7}', "not json"])
     await expect(

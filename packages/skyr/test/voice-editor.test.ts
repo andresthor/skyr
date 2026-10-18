@@ -5,7 +5,10 @@
  * surface — ghost, commit, reset, showRule, animating — because nothing else may see its
  * decoration state.
  */
-import type { CustomEditor } from "@earendil-works/pi-coding-agent";
+import type {
+  CustomEditor,
+  KeybindingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { parseColor } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import {
@@ -114,6 +117,7 @@ function fresh(
     clock?: ReturnType<typeof clock>;
     paint?: VoiceEditorOptions["paint"];
     keyHook?: VoiceEditorOptions["keyHook"];
+    keys?: KeybindingsManager;
   } = {},
 ): EditorInstance {
   const VoiceEditor = createVoiceEditorClass(
@@ -124,7 +128,7 @@ function fresh(
   const ed = new VoiceEditor(
     {} as never,
     {} as never,
-    keybindings(),
+    opts.keys ?? keybindings(),
   ) as unknown as EditorInstance;
   ed.text = text;
   ed.cursorCol = opts.cursorCol ?? 0;
@@ -307,6 +311,17 @@ describe("bottom rule", () => {
     expect(editor.showRule(listening)).toBe(false);
     const bottom = editor.render(120).at(-1) ?? "";
     expect(stripAnsi(bottom)).not.toContain("listening");
+  });
+
+  test("an unbound binding draws no hint, rather than naming a key that isn't there", () => {
+    const keys = keybindings();
+    keys.setUserBindings({ "tui.select.cancel": [] });
+    const editor = fresh("hello", { keys, clock: clock() });
+    editor.showRule(listening);
+    const bottom = stripAnsi(editor.render(120).at(-1) ?? "");
+    expect(bottom).toContain("enter keep");
+    expect(bottom).not.toContain("escape");
+    expect(bottom).not.toContain("discard");
   });
 
   test("with voice off, the bottom rule is Pi's own", () => {

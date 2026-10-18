@@ -67,6 +67,16 @@ export interface VoiceEditorOptions {
 
 type CustomEditorClass = typeof CustomEditor;
 
+/**
+ * The binding ids voice acts on and names in its hints. One table for both, so a hint always
+ * names the key the hook swallows; an unbound id draws no hint at all.
+ */
+export const BINDINGS = {
+  submit: "tui.input.submit",
+  cancel: "tui.select.cancel",
+  undo: "tui.editor.undo",
+} as const;
+
 export function createVoiceEditorClass(
   Base: CustomEditorClass,
   { keyHook, paint }: VoiceEditorOptions = {},
@@ -153,21 +163,18 @@ export function createVoiceEditorClass(
       return super.renderBottomBorder(width, hiddenLineCount);
     }
 
-    /** The first key of each binding, named the way Pi's own hints name keys. */
+    /** The first key of each binding, named the way Pi's own hints name keys; empty when unbound. */
     private hintKeys(): VoiceKeys {
-      const name = (
-        id: Parameters<KeybindingsManager["getKeys"]>[0],
-        unbound: string,
-      ) => {
-        const key = this.keys.getKeys(id)[0] ?? unbound;
+      const name = (id: Parameters<KeybindingsManager["getKeys"]>[0]) => {
+        const key = this.keys.getKeys(id)[0] ?? "";
         return process.platform === "darwin"
           ? key.replace(/\balt\b/g, "option")
           : key;
       };
       return {
-        submit: name("tui.input.submit", "enter"),
-        cancel: name("tui.select.cancel", "escape"),
-        undo: name("tui.editor.undo", "ctrl+-"),
+        submit: name(BINDINGS.submit),
+        cancel: name(BINDINGS.cancel),
+        undo: name(BINDINGS.undo),
       };
     }
 

@@ -197,7 +197,7 @@ function phaseOf(s: VoiceSnapshot): Phase | undefined {
   return undefined;
 }
 
-/** Key names as Pi prints them in its own hints. */
+/** Key names as Pi prints them in its own hints; an empty name means the binding is unbound, and its hint is dropped. */
 export interface VoiceKeys {
   submit: string;
   cancel: string;
@@ -234,7 +234,7 @@ export function renderRule(
   const phase = phaseOf(s);
   const line = (n: number) => rule("─".repeat(Math.max(0, n)));
   const key = (k: string, what: string) =>
-    `${fg(T.dim, k)}${fg(T.muted, ` ${what}`)}`;
+    k ? `${fg(T.dim, k)}${fg(T.muted, ` ${what}`)}` : "";
   const sep = ascii ? ", " : fg(T.dim, " · ");
 
   // `── left ──…── right ──`, or undefined when it can't fit
@@ -275,9 +275,12 @@ export function renderRule(
 
   // Enter keeps only what the server will transcribe: speech, on an accepted session
   const canKeep = s.heardSpeech && s.accepted;
+  // an unbound id draws no hint at all: the rule never names a key that isn't there
   const hints =
     phase === "listening" && canKeep
-      ? `${key(keys.submit, "keep")}${sep}${key(keys.cancel, "discard")}`
+      ? [key(keys.submit, "keep"), key(keys.cancel, "discard")]
+          .filter(Boolean)
+          .join(sep)
       : phase === "listening" || phase === "starting"
         ? key(keys.cancel, "cancel")
         : key(keys.cancel, "discard");

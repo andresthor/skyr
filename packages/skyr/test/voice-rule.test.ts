@@ -192,6 +192,27 @@ test("when not even the mic light fits, voice draws nothing and Pi's own rule, s
   expect(draw({}, { width: 10, mode: "ascii" })).toBeUndefined();
 });
 
+test("an unbound key draws no hint at all, so nothing pretends to name a key that isn't there", () => {
+  const half = renderRule(snap(), {
+    width: 72,
+    rule,
+    keys: { submit: "", cancel: "escape", undo: "ctrl+-" },
+    paint: paint(),
+  })!;
+  expect(stripAnsi(half)).toContain("escape discard");
+  expect(stripAnsi(half)).not.toContain("keep");
+  expect(stripAnsi(half)).not.toMatch(/· ·/);
+  const none = renderRule(snap(), {
+    width: 72,
+    rule,
+    keys: { submit: "", cancel: "", undo: "" },
+    paint: paint(),
+  })!;
+  expect(stripAnsi(none)).not.toContain("keep");
+  expect(stripAnsi(none)).not.toContain("cancel");
+  expect(stripAnsi(none)).not.toContain("discard");
+});
+
 test("after Esc reverted committed words, the rule says so and names the undo", () => {
   expect(plain({ state: "discarded" })).toMatch(
     /^── discarded ─+ ctrl\+- undo ──$/,

@@ -30,7 +30,7 @@ test("the ghost's anchor is pi-tui's cursor marker followed by its fake-cursor s
 
 test("pi's editor draws its bottom rule through renderBottomBorder, so the voice rule reaches the screen", () => {
   const ed = realEditor();
-  ed.decor.rule = snap();
+  ed.showRule(snap());
   const bottom = ed.render(60).at(-1) ?? "";
   expect(stripAnsi(bottom)).toContain("● listening");
   expect(visibleWidth(bottom)).toBe(60);

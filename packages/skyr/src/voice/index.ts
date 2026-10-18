@@ -32,7 +32,6 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
-import { DRY_MS } from "./ghost.js";
 import {
   createLevelHistory,
   meterUnit,
@@ -88,7 +87,7 @@ async function readVoiceConfig(): Promise<{
  */
 export function startRefusal(
   active: boolean,
-  editor: VoiceEditorLike | undefined,
+  editor: { focused: boolean } | undefined,
 ): string | undefined {
   if (active) return undefined;
   if (!editor || editor.focused) return undefined;
@@ -130,18 +129,14 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     repaint,
   );
 
-  const drying = () =>
-    !!editor?.decor.drying.some((s) => Date.now() - s.at < DRY_MS);
+  // the editor's own spans drive the tick while they dry; reading animating prunes what dried
   const snapshot = (): VoiceSnapshot => ({
     ...controller.facts(),
     bars,
   });
   const pushPresenter = () => presenter?.update(snapshot());
   const tick = () => {
-    if (controller.state === "idle" && !drying()) {
-      if (editor) editor.decor.drying = [];
-      stopTimer();
-    }
+    if (controller.state === "idle" && !editor?.animating) stopTimer();
     bars = history.sample(TICK_MS);
     pushPresenter();
     repaint();
@@ -164,7 +159,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
         history.reset();
         bars = [];
       }
-      if (controller.state !== "idle" || drying()) startTimer();
+      if (controller.state !== "idle" || editor?.animating) startTimer();
       pushPresenter();
       repaint();
     },
@@ -213,17 +208,17 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     // a foreign editor wins, existing fallback via setEditorText unchanged; ours or none gets (re)installed
     if (installed && installed !== editorFactory) return;
     const { CustomEditor } = await loadPi();
+    // one class per session mount, not per editor: the hook and paint live for the session's life
+    const VoiceEditor = createVoiceEditorClass(CustomEditor, {
+      keyHook,
+      paint: () => paintFor(ctxRef?.ui.theme, mode),
+    });
     editorFactory = (t, theme, keybindings) => {
       // Pi copies padding and autocomplete into a custom editor, but not this constructor-only flag;
       // without it the working spinner leaves the top rule for a separate row
-      const ed = new (createVoiceEditorClass(CustomEditor))(
-        t,
-        theme,
-        keybindings,
-        { embedWorkingStatus: true },
-      );
-      ed.keyHook = keyHook;
-      ed.paint = () => paintFor(ctxRef?.ui.theme, mode);
+      const ed = new VoiceEditor(t, theme, keybindings, {
+        embedWorkingStatus: true,
+      });
       editor = ed;
       tui = t;
       return ed;

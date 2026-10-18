@@ -9,8 +9,13 @@
  * Enter, undo and history only ever see firm text, and interim jitter can't clobber
  * the buffer. `setEditorText` would lose the cursor and the undo stack.
  *
- * The base class is passed in because the package may not import pi-coding-agent
- * statically (src/pi.ts is the one value seam).
+ * Everything the editor draws — ghost, drying commits, the bottom rule — lives here
+ * and nowhere else: the sink, the presenter and `index.ts` go through this surface
+ * and never read or write decoration state directly.
+ *
+ * The base class and the per-session options (key hook, paint) are passed in because
+ * the package may not import pi-coding-agent statically (src/pi.ts is the one value
+ * seam), and both exist only once the host is mounted.
  */
 import type {
   CustomEditor,
@@ -30,49 +35,59 @@ function spacedSegment(before: string, after: string, segment: string): string {
   return lead + text + trail;
 }
 
-/** What a VoiceEditor draws on top of Pi's editor. */
-interface VoiceDecor {
-  ghost: string;
-  /** Recent commits, newest first; `at` is when each landed. */
-  drying: { chars: number; lead: number; at: number }[];
-  /** What the bottom rule shows while voice is on; undefined leaves Pi's own rule. */
-  rule?: VoiceSnapshot;
-  /** Drawing the rule threw once: for this editor's life, voice shows in the footer instead. */
-  ruleFailed?: boolean;
-}
-
+/** A voice editor: edited text plus the dictation decoration only voice knows how to draw. */
 export interface VoiceEditorLike {
-  decor: VoiceDecor;
-  commit(segment: string): void;
-  /** Drop finals held back while the editor was hidden. */
-  discardPending(): void;
   /** Whether the editor has keyboard focus; false while a `ctx.ui.custom()` card replaces it. */
   readonly focused: boolean;
   getText(): string;
   setText(text: string): void;
+  /** The interim segment, drawn after the cursor; "" clears it. */
+  ghost(text: string): void;
+  /** A finished segment, inserted at the cursor as one undo step. */
+  commit(segment: string): void;
+  /** Clears everything dictating ever drew: ghost, drying spans, finals held while hidden. */
+  reset(): void;
+  /**
+   * Carries `s` on the bottom rule, or clears it when undefined. False when this editor can't
+   * carry it — hidden behind a card, or its rule drawing failed once — and the caller must show
+   * voice somewhere else.
+   */
+  showRule(s: VoiceSnapshot | undefined): boolean;
+  /** True while a committed span is still drying; reading prunes the spans that finished. */
+  readonly animating: boolean;
+}
+
+/** What a mount builds the voice editor class with; both live for the session's life. */
+export interface VoiceEditorOptions {
+  /** Consulted before Pi sees a key; return true to swallow it. */
+  keyHook?: (data: string, keys: KeybindingsManager) => boolean;
+  /** The colours for each render, read every frame so /theme reaches the ghost and the rule. */
+  paint?: () => Paint;
 }
 
 type CustomEditorClass = typeof CustomEditor;
 
 export function createVoiceEditorClass(
   Base: CustomEditorClass,
+  { keyHook, paint }: VoiceEditorOptions = {},
   now: () => number = Date.now,
 ) {
   return class VoiceEditor extends Base implements VoiceEditorLike {
-    decor: VoiceDecor = {
-      ghost: "",
-      drying: [],
-    };
-    /** The colours for this render, rebuilt every frame so /theme reaches the ghost and drying spans. */
-    paint: () => Paint = () => paintFor(FALLBACK_PALETTE, "color");
-    /** Consulted before Pi sees a key; return true to swallow it. */
-    keyHook?: (data: string, keys: KeybindingsManager) => boolean;
+    private ghostText = "";
+    /** Recent commits, newest first; `at` is when each landed. */
+    private drying: { chars: number; lead: number; at: number }[] = [];
+    /** What the bottom rule carries while voice is on; undefined leaves Pi's own rule. */
+    private rule: VoiceSnapshot | undefined;
+    /** Drawing the rule threw once: for this editor's life, voice shows in the footer instead. */
+    private ruleFailed = false;
+    private readonly paint: () => Paint;
     private readonly keys: KeybindingsManager;
     private pending: string[] = [];
 
     constructor(...args: ConstructorParameters<CustomEditorClass>) {
       super(...args);
       this.keys = args[2];
+      this.paint = paint ?? (() => paintFor(FALLBACK_PALETTE, "color"));
       // `focused` is a class field on pi-tui's Editor, so an accessor has to be defined per instance.
       // Pi restores a `ctx.ui.custom()` card's editor with setText(saved) and then focuses it, so
       // finals that arrived meanwhile are held here and land once focus is back.
@@ -90,22 +105,21 @@ export function createVoiceEditorClass(
     }
 
     override handleInput(data: string): void {
-      if (this.keyHook?.(data, this.keys)) return;
+      if (keyHook?.(data, this.keys)) return;
       super.handleInput(data);
     }
 
     override render(width: number): string[] {
       const base = super.render(width);
-      const { ghost, drying } = this.decor;
-      if (!ghost && !drying.length) return base;
+      if (!this.ghostText && !this.drying.length) return base;
       // this editor is permanent: a throw here would take the input bar down with it
       try {
         const t = now();
         return spliceGhost(base, {
           width,
           paddingX: this.getPaddingX(),
-          ghost,
-          drying: drying.map((s) => ({ ...s, age: t - s.at })),
+          ghost: this.ghostText,
+          drying: this.drying.map((s) => ({ ...s, age: t - s.at })),
           paint: this.paint(),
           // private in pi-tui's types, but it is what tells the bottom rule from the autocomplete rows
           below:
@@ -121,12 +135,11 @@ export function createVoiceEditorClass(
       width: number,
       hiddenLineCount: number,
     ): string {
-      const { rule } = this.decor;
       // pi-tui calls this from render() before the ghost's guard: a throw must fall back here too
       try {
         const row =
-          rule &&
-          renderRule(rule, {
+          this.rule &&
+          renderRule(this.rule, {
             width,
             hiddenBelow: hiddenLineCount,
             rule: (s) => this.borderColor(s),
@@ -135,7 +148,7 @@ export function createVoiceEditorClass(
           });
         if (row !== undefined) return row;
       } catch {
-        this.decor.ruleFailed = true;
+        this.ruleFailed = true;
       }
       return super.renderBottomBorder(width, hiddenLineCount);
     }
@@ -158,6 +171,31 @@ export function createVoiceEditorClass(
       };
     }
 
+    ghost(text: string): void {
+      this.ghostText = text;
+    }
+
+    get animating(): boolean {
+      const t = now();
+      this.drying = this.drying.filter((s) => t - s.at < DRY_MS);
+      return this.drying.length > 0;
+    }
+
+    reset(): void {
+      this.ghostText = "";
+      this.drying = [];
+      this.pending = [];
+    }
+
+    showRule(s: VoiceSnapshot | undefined): boolean {
+      if (!this.focused || this.ruleFailed) {
+        this.rule = undefined;
+        return false;
+      }
+      this.rule = s;
+      return true;
+    }
+
     commit(segment: string): void {
       if (!this.focused) {
         this.pending.push(segment);
@@ -170,18 +208,14 @@ export function createVoiceEditorClass(
       if (!insert) return;
       this.insertTextAtCursor(insert);
       const t = now();
-      this.decor.drying = [
+      this.drying = [
         {
           chars: insert.trim().length,
           lead: insert.length - insert.trimStart().length,
           at: t,
         },
-        ...this.decor.drying.filter((s) => t - s.at < DRY_MS),
+        ...this.drying.filter((s) => t - s.at < DRY_MS),
       ];
-    }
-
-    discardPending(): void {
-      this.pending = [];
     }
   };
 }
@@ -198,23 +232,24 @@ export function editorSink(
   let snapshot = "";
   let committed = "";
   return {
+    // a dictation can only start while our editor is focused, so nothing is held pending now
     begin() {
       const ed = target();
       snapshot = ed ? ed.getText() : fallback.get();
       committed = snapshot;
-      if (ed) ed.decor = { ...ed.decor, ghost: "", drying: [] };
+      ed?.reset();
       repaint();
     },
     interim(segment) {
       const ed = target();
-      if (ed) ed.decor.ghost = segment;
+      if (ed) ed.ghost(segment);
       else fallback.set(committed + spacedSegment(committed, "", segment));
       repaint();
     },
     final(segment) {
       const ed = target();
       if (ed) {
-        ed.decor.ghost = "";
+        ed.ghost("");
         ed.commit(segment);
       } else {
         committed += spacedSegment(committed, "", segment);
@@ -223,16 +258,13 @@ export function editorSink(
       repaint();
     },
     end() {
-      const ed = target();
-      if (ed) ed.decor = { ...ed.decor, ghost: "" };
-      else fallback.set(committed);
+      target()?.ghost("");
       repaint();
     },
     revert(): boolean {
       const ed = target();
       if (ed) {
-        ed.decor = { ...ed.decor, ghost: "", drying: [] };
-        ed.discardPending();
+        ed.reset();
         const changed = ed.getText() !== snapshot;
         if (changed) ed.setText(snapshot);
         repaint();

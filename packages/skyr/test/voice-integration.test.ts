@@ -9,8 +9,8 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { parseColor } from "@earendil-works/pi-tui";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
 import type { SessionOptions } from "../src/voice/client.js";
-import type { VoiceEditorLike } from "../src/voice/editor.js";
 import { VoiceError } from "../src/voice/errors.js";
+import { stripAnsi } from "../src/voice/ghost.js";
 import { startRefusal, VOICE_SHORTCUT, voiceMode } from "../src/voice/index.js";
 import { parentSession } from "./session.js";
 import {
@@ -127,16 +127,12 @@ test("the voice editor keeps Pi's working status in its top rule, as Pi's own ed
 });
 
 test("the refused start names the fix, only when a focused editor could have dictated", () => {
-  expect(
-    startRefusal(true, { focused: false } as unknown as VoiceEditorLike),
-  ).toBeUndefined();
+  expect(startRefusal(true, { focused: false })).toBeUndefined();
   expect(startRefusal(false, undefined)).toBeUndefined();
-  expect(
-    startRefusal(false, { focused: true } as unknown as VoiceEditorLike),
-  ).toBeUndefined();
-  expect(
-    startRefusal(false, { focused: false } as unknown as VoiceEditorLike),
-  ).toMatch(/a card or selector has the keyboard/);
+  expect(startRefusal(false, { focused: true })).toBeUndefined();
+  expect(startRefusal(false, { focused: false })).toMatch(
+    /a card or selector has the keyboard/,
+  );
 });
 
 test("a second session_start reinstates the voice editor while ours is the one installed", async () => {
@@ -201,9 +197,11 @@ test("a mid-session theme switch reaches the status row and the editor's ghost/f
   starts[0]!.onReady?.();
   const switched = ctx.ui.setStatus.mock.calls.at(-1)?.[1] as string;
   expect(switched.includes("\x1b[38;2;200;190;180m")).toBe(true);
-  // and the editor reads the palette through the same live theme ref
+  // and the editor reads the same live theme per frame, so its ghost follows the switch
   const ed = mountedEditor(ctx.ui);
-  expect(ed.paint().colors.accent).toEqual(parseColor("#c8beb4"));
+  ed.ghost("theme words");
+  const ghostRow = ed.render(60)[1] ?? "";
+  expect(ghostRow).toContain("\x1b[38;2;200;190;180mtheme words");
 });
 
 test("TERM=dumb is ascii; NO_COLOR is mono, keeping glyphs; FORCE_COLOR wins over NO_COLOR", () => {
@@ -223,7 +221,7 @@ test("during dictation the rule rides our focused editor, and discarding committ
   await pi.handlers.get("session_start")!(null, ctx);
   const ed = mountedEditor(ctx.ui);
   await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
-  expect(ed.decor.rule?.state).toBe("arming");
+  expect(bottomRow(ed)).toContain("starting");
   // the footer stays clear while the rule carries voice
   expect(
     ctx.ui.setStatus.mock.calls.every(([, row]) => row === undefined),
@@ -233,14 +231,18 @@ test("during dictation the rule rides our focused editor, and discarding committ
   expect(ed.getText()).toBe("hello there");
   await pi.commands.get("voice")!.handler("off", ctx);
   expect(ed.getText()).toBe("");
-  expect(ed.decor.rule?.state).toBe("discarded");
+  expect(bottomRow(ed)).toContain("discarded");
   // with nothing committed, a cancel offers no undo: it would undo the user's own edit
   await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
   await pi.commands.get("voice")!.handler("off", ctx);
-  expect(ed.decor.rule?.state).toBe("idle");
+  expect(bottomRow(ed)).toBe("─".repeat(72));
 });
 
 const TAIL_MS = 400;
+
+/** The mounted editor's bottom row, as plain text: voice's own render when it carries the rule. */
+const bottomRow = (ed: ReturnType<typeof mountedEditor>, width = 72) =>
+  stripAnsi(ed.render(width).at(-1) ?? "");
 
 /** A TUI session with our editor mounted and focused, on fake timers. */
 async function mounted() {
@@ -273,10 +275,10 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
     h.ed.handleInput("\r");
     expect(h.submitted).not.toHaveBeenCalled();
     expect(h.ed.getText()).toBe("hello there");
-    expect(h.ed.decor.rule?.state).toBe("transcribing");
+    expect(bottomRow(h.ed)).toContain("finishing");
     await vi.advanceTimersByTimeAsync(TAIL_MS);
     expect(h.ends[0]).toEqual({ stopped: 1, cancelled: 0 });
-    expect(h.ed.decor.rule?.state).toBe("idle");
+    expect(bottomRow(h.ed)).toBe("─".repeat(72));
     // with no dictation running, Enter is Pi's again
     h.ed.handleInput("\r");
     expect(h.submitted).toHaveBeenCalledWith("hello there");
@@ -293,10 +295,10 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
     expect(h.ed.getText()).toBe("draft");
     expect(h.ends[0]).toEqual({ stopped: 0, cancelled: 1 });
     expect(h.escaped).not.toHaveBeenCalled();
-    expect(h.ed.decor.rule?.state).toBe("discarded");
+    expect(bottomRow(h.ed)).toContain("discarded");
     // any key ends the undo offer and still reaches the editor
     h.ed.handleInput("a");
-    expect(h.ed.decor.rule?.state).toBe("idle");
+    expect(bottomRow(h.ed)).toBe("─".repeat(72));
     expect(h.ed.getText()).toBe("drafta");
   });
 
@@ -304,9 +306,9 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
     const h = await mounted();
     await h.toggle();
     h.starts[0]!.onError(new VoiceError("connection lost"));
-    expect(h.ed.decor.rule?.state).toBe("error");
+    expect(bottomRow(h.ed)).toContain("connection lost");
     h.ed.handleInput("a");
-    expect(h.ed.decor.rule?.state).toBe("idle");
+    expect(bottomRow(h.ed)).toBe("─".repeat(72));
     expect(h.ed.getText()).toBe("a");
   });
 

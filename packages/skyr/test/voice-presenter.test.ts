@@ -6,6 +6,7 @@
 import { parseColor, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { stripAnsi } from "../src/voice/ghost.js";
+import type { VoiceSnapshot } from "../src/voice/indicator.js";
 import { renderStatus } from "../src/voice/indicator.js";
 import {
   FALLBACK_PALETTE,
@@ -30,6 +31,29 @@ class FakeStatusUi {
   }
 }
 
+/**
+ * A rule editor as these tests drive one: `showRule` carries only while focused and never
+ * after a failure, and `carried` records what the rule holds for the assertions to read.
+ */
+function ruleEditor(
+  o: { focused?: boolean; failed?: boolean } = {},
+): RuleEditor & {
+  focused: boolean;
+  failed: boolean;
+  carried: VoiceSnapshot | undefined;
+} {
+  return {
+    focused: o.focused ?? true,
+    failed: o.failed ?? false,
+    carried: undefined,
+    showRule(s) {
+      const can = this.focused && !this.failed;
+      this.carried = can ? s : undefined;
+      return can;
+    },
+  };
+}
+
 function setup(editor?: RuleEditor) {
   const ui = new FakeStatusUi();
   const present = voicePresenter({
@@ -41,20 +65,21 @@ function setup(editor?: RuleEditor) {
 }
 
 test("with our editor focused, voice is on the rule and the footer stays clear", () => {
-  const editor: RuleEditor = { decor: {}, focused: true };
+  const editor = ruleEditor();
   const { ui, present } = setup(editor);
   present.update(snap());
-  expect(editor.decor.rule?.state).toBe("listening");
+  expect(editor.carried?.state).toBe("listening");
   expect(ui.lines).toEqual([undefined]);
 });
 
 test("when a card hides our editor, the footer carries voice and the rule lets go", () => {
-  const editor = { decor: {} as RuleEditor["decor"], focused: true };
+  const editor = ruleEditor({ focused: true });
   const { ui, present } = setup(editor);
   present.update(snap());
+  expect(ui.last).toBeUndefined();
   editor.focused = false;
   present.update(snap());
-  expect(editor.decor.rule).toBeUndefined();
+  expect(editor.carried).toBeUndefined();
   expect(stripAnsi(ui.last ?? "")).toMatch(/^voice ● listening /);
   editor.focused = true;
   present.update(snap());
@@ -153,9 +178,9 @@ test("the footer carries the rule's advisories, so a hidden editor still hears a
 });
 
 test("if the rule ever fails to draw, voice moves to the footer instead of vanishing", () => {
-  const editor: RuleEditor = { decor: { ruleFailed: true }, focused: true };
+  const editor = ruleEditor({ failed: true });
   const { ui, present } = setup(editor);
   present.update(snap());
-  expect(editor.decor.rule).toBeUndefined();
+  expect(editor.carried).toBeUndefined();
   expect(stripAnsi(ui.last ?? "")).toMatch(/^voice ● listening /);
 });

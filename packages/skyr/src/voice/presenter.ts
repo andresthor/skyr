@@ -2,7 +2,7 @@
  * The seam between the dictation core (client/mic/transcript/dictation — which render nothing)
  * and any display. A presenter swallows snapshots of state and produces presentation: the
  * editor's bottom rule while our editor is on screen, and the footer status row only when it
- * is not (another extension owns the editor, or a card hides it).
+ * is not (another extension owns the editor, a card hides it, or its rule drawing failed).
  */
 import { renderStatus, type VoiceSnapshot } from "./indicator.js";
 import type { Paint } from "./palette.js";
@@ -17,8 +17,7 @@ interface StatusUI {
 
 /** The narrowest shape of the voice editor the presenter needs. */
 export interface RuleEditor {
-  decor: { rule?: VoiceSnapshot; ruleFailed?: boolean };
-  readonly focused: boolean;
+  showRule(s: VoiceSnapshot | undefined): boolean;
 }
 
 export interface VoicePresenter {
@@ -43,10 +42,9 @@ export function voicePresenter({
   let shown: string | undefined | null = null;
   return {
     update(snapshot) {
-      const ed = editor();
-      // a rule that failed to draw would leave voice invisible, so the footer takes over
-      const onRule = ed?.focused === true && !ed.decor.ruleFailed;
-      if (ed) ed.decor.rule = onRule ? snapshot : undefined;
+      // the editor owns its rule: it says whether it can carry voice, and the footer takes over
+      // exactly when it can't
+      const onRule = editor()?.showRule(snapshot) ?? false;
       const row = onRule
         ? undefined
         : renderStatus(snapshot, { paint: paint() });

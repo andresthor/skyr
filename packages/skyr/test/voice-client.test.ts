@@ -384,3 +384,22 @@ test("a sign-in answer without a usable token fails as unreadable, never as a so
       ),
     ).rejects.toThrow("Corti sign-in sent an unreadable answer");
 });
+
+test("the interim Corti re-sends after a final is dropped, so a stop never commits the words twice", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  const transcript = (text: string, start: number, isFinal: boolean) =>
+    h.sock.server({ type: "transcript", data: { text, start, isFinal } });
+  transcript("hello there", 0, false);
+  transcript("hello there", 0, true);
+  transcript("hello there", 0, false);
+  expect(h.interim).toHaveBeenCalledTimes(1);
+  // the next segment starts past the final, so its interim still shows
+  transcript("and more", 1.2, false);
+  expect(h.interim).toHaveBeenLastCalledWith("and more");
+  expect(h.interim).toHaveBeenCalledTimes(2);
+  const stop = h.session.stop();
+  h.sock.server({ type: "ended" });
+  await expect(stop).resolves.toBe("hello there");
+});

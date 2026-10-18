@@ -91,6 +91,14 @@ describe("parseVoiceSection", () => {
     ]);
   });
 
+  test("names inherited from Object are not settings either", () => {
+    const { problems } = parseVoiceSection({ toString: 1, constructor: 2 });
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toMatch(
+      /^skyr\.json: voice\.toString is not a setting/,
+    );
+  });
+
   test.each(["en", "da", "gsw-CH", "en-US"])(
     "language %s matches Corti's locale forms, so it is kept",
     (value) => {
@@ -140,8 +148,8 @@ describe("parseVoiceSection", () => {
     ]);
     expect(problems).toEqual([
       'skyr.json: voice.replacements[1] needs a non-empty "find" and "replace"; dropped',
-      'skyr.json: voice.replacements[2] "a b c d e f g h i j k" is over 10 words; dropped',
-      'skyr.json: voice.replacements[3] "y" is over 100 characters; dropped',
+      'skyr.json: voice.replacements[2].find "a b c d e f g h i j k" is over 10 words; dropped',
+      `skyr.json: voice.replacements[3].replace "${"a".repeat(40)}…" is over 100 characters; dropped`,
       'skyr.json: voice.replacements[4] needs a non-empty "find" and "replace"; dropped',
       'skyr.json: voice.replacements[6] repeats the find "DUP" (ignoring case); dropped',
     ]);

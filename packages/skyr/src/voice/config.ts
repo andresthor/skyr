@@ -150,17 +150,24 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
       );
       continue;
     }
-    if (find.length > REPLACEMENT_CHARS || replace.length > REPLACEMENT_CHARS) {
+    const sides = { find, replace };
+    const overChars = (["find", "replace"] as const).find(
+      (side) => sides[side].length > REPLACEMENT_CHARS,
+    );
+    if (overChars) {
       problem(
-        `replacements[${i}]`,
-        `${quoted(find)} is over ${REPLACEMENT_CHARS} characters; dropped`,
+        `replacements[${i}].${overChars}`,
+        `${quoted(sides[overChars])} is over ${REPLACEMENT_CHARS} characters; dropped`,
       );
       continue;
     }
-    if (words(find) > REPLACEMENT_WORDS || words(replace) > REPLACEMENT_WORDS) {
+    const overWords = (["find", "replace"] as const).find(
+      (side) => words(sides[side]) > REPLACEMENT_WORDS,
+    );
+    if (overWords) {
       problem(
-        `replacements[${i}]`,
-        `${quoted(find)} is over ${REPLACEMENT_WORDS} words; dropped`,
+        `replacements[${i}].${overWords}`,
+        `${quoted(sides[overWords])} is over ${REPLACEMENT_WORDS} words; dropped`,
       );
       continue;
     }
@@ -201,7 +208,7 @@ export function parseVoiceSection(raw: unknown): {
   }
   const section = raw as Record<string, unknown>;
   for (const key of Object.keys(section))
-    if (!(key in VOICE_DEFAULTS))
+    if (!Object.hasOwn(VOICE_DEFAULTS, key))
       problem(
         key,
         `is not a setting; ignored (settings: ${Object.keys(VOICE_DEFAULTS).join(", ")})`,

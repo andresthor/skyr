@@ -457,7 +457,7 @@ test("frames not shaped as Corti documents them are ignored, and the session car
   h.session.cancel();
 });
 
-test("a listener that throws ends the session with an error instead of escaping to Pi", async () => {
+test("a listener that throws ends the session with an error naming its cause instead of escaping to Pi", async () => {
   const h = await drive({
     onFinal: () => {
       throw new Error("editor broke");
@@ -473,7 +473,28 @@ test("a listener that throws ends the session with an error instead of escaping 
   ).not.toThrow();
   expect(h.onError).toHaveBeenCalledTimes(1);
   expect(h.onError).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "internal error" }),
+    expect.objectContaining({ message: "internal error: editor broke" }),
+  );
+});
+
+test("a listener's throw reaches onError as one clean line, clipped to 40 characters", async () => {
+  const h = await drive({
+    onFinal: () => {
+      throw new Error(
+        `\x1b]52;c;cGF5bG9hZA==\x07editor\nbroke ${"y".repeat(80)}`,
+      );
+    },
+  });
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  h.sock.server({
+    type: "transcript",
+    data: { text: "boom", start: 0, isFinal: true },
+  });
+  expect(h.onError).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: `internal error: editor broke ${"y".repeat(27)}…`,
+    }),
   );
 });
 

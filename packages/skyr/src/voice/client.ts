@@ -16,7 +16,7 @@ const PCM = `audio/pcm; rate=${SAMPLE_RATE_HZ}; channels=1; bits=16; endian=litt
 const CHUNK_BYTES = (SAMPLE_RATE_HZ / 1000) * 250 * 2;
 /** Past this after `end` the caller keeps the last interim; flushing on quiet usually has the final in already. */
 const END_TIMEOUT_MS = 2_500;
-/** How much of Corti's own reason an error line carries. */
+/** How much of a foreign reason, Corti's or a throw's, an error line carries. */
 const REASON_CHARS = 40;
 
 /** A frame field read as Corti documents it, or undefined; frames are untrusted input. */
@@ -227,9 +227,11 @@ export function startSession(o: SessionOptions): SttSession {
     (...a: A) => {
       try {
         fn(...a);
-      } catch {
+      } catch (error: unknown) {
+        const cause =
+          error instanceof Error ? oneLine(error.message, REASON_CHARS) : "";
         try {
-          fail(new VoiceError("internal error"));
+          fail(new VoiceError(`internal error${cause ? `: ${cause}` : ""}`));
         } catch {
           // onError itself threw: the session is already torn down, and a throw here would exit Pi
         }

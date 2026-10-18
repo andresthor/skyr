@@ -320,7 +320,7 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
     const result = results(parent.session).get(task);
     expect(result?.isError).toBe(true);
     expect(result && textOf(result)).toMatch(
-      /^subagent: scout was stopped before it answered\n\(id [0-9a-f]{8}\)$/,
+      /^subagent: scout was stopped by the user before it answered\n\(id [0-9a-f]{8}\)$/,
     );
   }
   expect(parent.widgets.at(-1)).toBeUndefined();
@@ -613,6 +613,22 @@ test("with no agent files the tool is still offered, says what an ad-hoc call is
   );
   expect(declared[0]?.description).not.toContain("undefined");
   expect(results(session).get("x")?.isError).toBe(false);
+});
+
+test("a child that ends aborted with nobody stopping it names no stopper", async () => {
+  const parent = await parentSession({
+    respond: router([call({ agent: "scout", task: "s" })], () =>
+      fauxAssistantMessage("", { stopReason: "aborted" }),
+    ),
+    userAgents: SCOUT,
+  });
+
+  await parent.session.prompt("go");
+
+  const result = results(parent.session).get("s");
+  expect(textOf(result!)).toMatch(
+    /^subagent: scout was stopped before it answered\n\(id [0-9a-f]{8}\)$/,
+  );
 });
 
 test("a broken or unknown agent, an unresolvable model, or a child that errors fails the call and tells the model what to try", async () => {

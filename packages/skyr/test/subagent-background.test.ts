@@ -123,7 +123,7 @@ test("Esc does not stop a background child, and /subagents stop <id> does", asyn
   expect(childAborted).toBe(true);
   const message = await delivered(parent);
   expect(textOf(message)).toMatch(
-    /^\[background subagent "run bg" \(id [0-9a-f]{8}\): aborted, .*\]\n\nsubagent: "run bg" was stopped before it answered$/,
+    /^\[background subagent "run bg" \(id [0-9a-f]{8}\): aborted, .*\]\n\nsubagent: "run bg" was stopped by the user before it answered$/,
   );
   expect(parent.notices.at(-1)).toBe("subagent: stopping 1 subagent");
   expect(parent.widgets.at(-1)).toBeUndefined();

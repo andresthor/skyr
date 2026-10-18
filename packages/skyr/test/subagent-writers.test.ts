@@ -247,7 +247,7 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
   const w2 = results(parent.session).get("w2");
   expect(w2?.isError).toBe(true);
   expect(textOf(w2!)).toContain(
-    'subagent: "run w2" was stopped before it started',
+    'subagent: "run w2" was stopped by the user before it started',
   );
   expect(textOf(w2!)).toMatch(/\(id [0-9a-f]{8}\)$/);
   expect(w2?.details).toMatchObject({ status: "aborted", turns: 0, tokens: 0 });
@@ -256,7 +256,7 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
   expect(parent.widgets.at(-1)).toBeUndefined();
 });
 
-test("session_shutdown aborts queued children", async () => {
+test("a reload aborts queued children, and their result says Pi reloaded", async () => {
   const h1 = hold();
   const parent = await parentSession({
     respond: router(
@@ -282,7 +282,7 @@ test("session_shutdown aborts queued children", async () => {
   const byTask = results(parent.session);
   expect(byTask.get("w1")?.isError).toBe(true);
   expect(textOf(byTask.get("w2")!)).toContain(
-    'subagent: "run w2" was stopped before it started',
+    'subagent: "run w2" was stopped because Pi reloaded before it started',
   );
   expect(textOf(byTask.get("w2")!)).toMatch(/\(id [0-9a-f]{8}\)$/);
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);

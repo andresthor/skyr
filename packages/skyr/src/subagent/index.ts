@@ -206,12 +206,15 @@ async function answer(
   label: string,
   id: string,
   result: ChildResult,
-  recovered?: boolean,
+  {
+    recovered,
+    stoppedBy = "",
+  }: { recovered?: boolean; stoppedBy?: string } = {},
 ): Promise<{ text: string; spillFile?: string }> {
   const marker = recovered ? " (recovered after a restart)" : "";
   if (result.status === "aborted")
     return {
-      text: `subagent: ${label} was stopped before it answered${marker}`,
+      text: `subagent: ${label} was stopped${stoppedBy} before it answered${marker}`,
     };
   if (result.status === "failed")
     return {
@@ -593,12 +596,23 @@ export function registerSubagent(pi: ExtensionAPI): void {
       const resumed = call.continueOf;
       const parentFile = ctx.sessionManager.getSessionFile();
       const own = new AbortController();
+      const sessionSignal = sessionAbort.signal;
       // A background child outlives the call, so the call's signal (Esc) is not part of its own.
       const childSignal = AbortSignal.any([
         ...(signal && !background ? [signal] : []),
-        sessionAbort.signal,
+        sessionSignal,
         own.signal,
       ]);
+      // First cause; anything but the session is Esc, `/subagents stop`, or Pi aborting the turn
+      // before a session switch.
+      const stoppedBy = () =>
+        !childSignal.aborted
+          ? ""
+          : childSignal.reason !== sessionSignal.reason
+            ? " by the user"
+            : sessionSignal.reason === "reload"
+              ? " because Pi reloaded"
+              : " because the session ended";
       const born = generation;
       const id = call.id;
       // Before the first await: Pi starts a batch's calls in order only up to that point.
@@ -643,7 +657,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
               send(run);
           }, PULSE_MS);
 
-      const stoppedBeforeStart = `subagent: ${label} was stopped before it started`;
       const failed = (error: unknown, worktree?: WorktreePlan) =>
         fail(
           `${label}: ` +
@@ -669,13 +682,17 @@ export function registerSubagent(pi: ExtensionAPI): void {
           details: { ...last, status, endedAt: Date.now(), ...extra },
         };
       };
+      const stoppedBeforeStart = () =>
+        ended(
+          "aborted",
+          `subagent: ${label} was stopped${stoppedBy()} before it started`,
+        );
 
       const finish = async (): Promise<Outcome> => {
         try {
           if (slot?.behind) {
             await slot.wait(childSignal);
-            if (childSignal.aborted)
-              return ended("aborted", stoppedBeforeStart);
+            if (childSignal.aborted) return stoppedBeforeStart();
             const { behind: _, ...rest } = sent;
             sent = { ...rest, status: "running" };
             store.apply(id, { type: "start", snapshot: sent });
@@ -716,7 +733,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
             childSignal,
             (event) => store.apply(id, event),
           );
-          const { text, spillFile } = await answer(label, id, result);
+          const { text, spillFile } = await answer(label, id, result, {
+            stoppedBy: stoppedBy(),
+          });
           const noted = call.worktree
             ? worktreeNote(call.worktree, result.status === "done")
             : call.worktreeWhy === undefined
@@ -758,9 +777,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
         try {
           outcome = await finish();
         } catch (error: unknown) {
-          // Cancelled before the child started: let Pi see its own cancellation.
-          if (childSignal.aborted) throw error;
-          throw failed(error, call.worktree);
+          // Pi's own cancellation (Esc) is Pi's to report.
+          if (signal?.aborted) throw error;
+          if (!childSignal.aborted) throw failed(error, call.worktree);
+          outcome = stoppedBeforeStart();
         }
         // Only a foreground result needs the id tag: a background one's delivered header carries it.
         return {
@@ -775,7 +795,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       void finish()
         .catch((error: unknown) =>
           childSignal.aborted
-            ? ended("aborted", stoppedBeforeStart)
+            ? stoppedBeforeStart()
             : ended("failed", failed(error, call.worktree).message),
         )
         .then((outcome) => {
@@ -957,7 +977,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           usage: stored.usage,
           sessionFile: stored.sessionFile,
         },
-        true,
+        { recovered: true },
       );
       recovered.push({
         text,
@@ -1043,9 +1063,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
     unsubscribe = store.subscribe(draw);
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", (event, ctx) => {
     generation += 1;
-    sessionAbort.abort();
+    // the reason lets a stopped child say whether Pi reloaded or the session ended
+    sessionAbort.abort(event.reason);
     unsubscribe?.();
     unsubscribe = undefined;
     stopTick();

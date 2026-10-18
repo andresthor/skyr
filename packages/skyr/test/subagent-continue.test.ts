@@ -298,7 +298,7 @@ test("Esc on a running foreground continue aborts it inline and delivers nothing
   );
   const res = results(parent.session).get("two")!;
   expect(res.isError).toBe(true);
-  expect(textOf(res)).toMatch(/was stopped before it answered/);
+  expect(textOf(res)).toMatch(/was stopped by the user before it answered/);
   // The turn died at the abort: the third parent request never happened.
   expect(parentTurns(parent)).toHaveLength(2);
 });

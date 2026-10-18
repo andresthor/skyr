@@ -224,11 +224,19 @@ function fakePi(): { pi: ExtensionAPI; captured: Captured } {
 }
 
 /**
- * Voice registered directly: the `controller` seam that replaces Corti and the microphone is
- * reachable only through `registerVoice`, not through `registerSkyr`.
+ * Voice registered directly: the seams that replace Corti and the microphone are reachable
+ * only through `registerVoice`, not through `registerSkyr`. `signIns` lists the token requests
+ * voice made; each is answered 503, so no token is cached from one test to the next.
  */
-export function registeredVoice(o: VoiceOptions = {}): Captured {
+export function registeredVoice(
+  o: VoiceOptions = {},
+): Captured & { signIns: string[] } {
   const { pi, captured } = fakePi();
-  registerVoice(pi, o);
-  return captured;
+  const signIns: string[] = [];
+  const signIn = (async (url: string) => {
+    signIns.push(url);
+    return new Response("unavailable", { status: 503 });
+  }) as unknown as typeof fetch;
+  registerVoice(pi, { fetch: signIn, ...o });
+  return { ...captured, signIns };
 }

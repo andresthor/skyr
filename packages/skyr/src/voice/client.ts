@@ -107,8 +107,11 @@ function transcriptData(
 }
 
 /** Token fetch is the slowest step of arming; do it early when voice is likely. */
-export function prewarmToken(creds: SttCredentials): void {
-  getSttToken(creds).catch(() => {});
+export function prewarmToken(
+  creds: SttCredentials,
+  doFetch?: typeof fetch,
+): void {
+  getSttToken(creds, doFetch).catch(() => {});
 }
 
 export function startSession(o: SessionOptions): SttSession {

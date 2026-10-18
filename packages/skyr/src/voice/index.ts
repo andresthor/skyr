@@ -55,6 +55,8 @@ export interface VoiceOptions {
   /** What the terminal can show; read from the environment when not given. */
   mode?: VoiceMode;
   env?: NodeJS.ProcessEnv;
+  /** Test seam: the fetch the session_start token prewarm uses instead of the global one. */
+  fetch?: typeof fetch;
   /** Test seam: replaces the live Corti session and microphone. */
   controller?: Partial<
     Pick<DictationControllerOptions, "start" | "source" | "timing">
@@ -323,7 +325,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     });
     pushPresenter();
     // the token request is the slowest step of arming; a cached one makes ctrl+space feel instant
-    prewarmToken(creds);
+    prewarmToken(creds, opts.fetch);
   });
 
   pi.on("session_shutdown", () => {

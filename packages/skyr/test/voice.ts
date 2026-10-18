@@ -30,7 +30,7 @@ import {
   createVoiceEditorClass,
   type VoiceEditorOptions,
 } from "../src/voice/editor.js";
-import { registerVoice, type VoiceOptions } from "../src/voice/index.js";
+import { type VoiceDeps, wireVoice } from "../src/voice/index.js";
 import type { VoiceKeys, VoiceSnapshot } from "../src/voice/indicator.js";
 import type { Paint, VoiceMode, VoiceTheme } from "../src/voice/palette.js";
 import { scratchDir } from "./session.js";
@@ -366,12 +366,12 @@ function fakePi(): { pi: ExtensionAPI; captured: Captured } {
 }
 
 /**
- * Voice registered directly: the seams that replace Corti and the microphone are reachable
- * only through `registerVoice`, not through `registerSkyr`. `signIns` lists the token requests
- * voice made; each is answered 503, so no token is cached from one test to the next.
+ * Voice registered through `wireVoice`, the entry that takes the seams replacing Corti and the
+ * microphone. `signIns` lists the token requests voice made; each is answered 503, so no token
+ * is cached from one test to the next.
  */
 export function registeredVoice(
-  o: VoiceOptions = {},
+  o: VoiceDeps = {},
 ): Captured & { signIns: string[] } {
   const { pi, captured } = fakePi();
   const signIns: string[] = [];
@@ -379,7 +379,7 @@ export function registeredVoice(
     signIns.push(url);
     return new Response("unavailable", { status: 503 });
   }) as unknown as typeof fetch;
-  registerVoice(pi, { fetch: signIn, ...o });
+  wireVoice(pi, { fetch: signIn, ...o });
   return { ...captured, signIns };
 }
 

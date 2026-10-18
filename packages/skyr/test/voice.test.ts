@@ -1,6 +1,6 @@
 /**
- * Voice through what it registers. Most tests call `registerVoice` on a fake Pi, because the
- * seam that replaces Corti and the microphone is reachable only there; the registerSkyr block
+ * Voice through what it registers. Most tests call `wireVoice` on a fake Pi, because the
+ * seams that replace Corti and the microphone are reachable only there; the registerSkyr block
  * tests the entry a host calls, and one test loads skyr into a real Pi session.
  */
 import { writeFileSync } from "node:fs";

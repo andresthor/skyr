@@ -22,10 +22,7 @@ import { quoted } from "../tools/render.js";
 import { prewarmToken, type SttConfig } from "./client.js";
 import { parseVoiceSection } from "./config.js";
 import { credentialsNotice, resolveSttCredentials } from "./credentials.js";
-import {
-  DictationController,
-  type DictationControllerOptions,
-} from "./dictation.js";
+import { DictationController, type DictationDeps } from "./dictation.js";
 import { createVoiceDisplay } from "./display.js";
 import {
   BINDINGS,
@@ -37,15 +34,14 @@ import type { Paint, VoiceMode } from "./palette.js";
 
 const VOICE_SHORTCUT = "ctrl+space";
 
-export interface VoiceOptions {
+/** Seams for tests; each defaults to the real thing. */
+export interface VoiceDeps {
   /** What the terminal can show; read from the environment when not given. */
   mode?: VoiceMode;
-  /** Test seam: the fetch the session_start token prewarm uses instead of the global one. */
+  /** The fetch the session_start token prewarm uses instead of the global one. */
   fetch?: typeof fetch;
-  /** Test seam: replaces the live Corti session and microphone. */
-  controller?: Partial<
-    Pick<DictationControllerOptions, "start" | "source" | "timing">
-  >;
+  /** Replaces the live Corti session, the microphone and the controller's timing. */
+  controller?: DictationDeps;
 }
 
 interface Tui {
@@ -93,8 +89,21 @@ function startRefusal(
 
 type EditorFactory = Parameters<ExtensionUIContext["setEditorComponent"]>[0];
 
-export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
-  const mode = opts.mode ?? voiceMode(process.env);
+/**
+ * Reads the STT credentials once, here: without them only `/voice` exists, to say so; with them
+ * `/voice`, ctrl+space and the session_start and session_shutdown handlers. Registering starts
+ * nothing: the display starts with a TUI session, the mic with a dictation.
+ */
+export function registerVoice(pi: ExtensionAPI): void {
+  wireVoice(pi);
+}
+
+/**
+ * `registerVoice` with its test seams.
+ * @internal
+ */
+export function wireVoice(pi: ExtensionAPI, deps: VoiceDeps = {}): void {
+  const mode = deps.mode ?? voiceMode(process.env);
   const resolved = resolveSttCredentials();
 
   if (!("creds" in resolved)) {
@@ -146,14 +155,16 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     repaint,
   });
 
-  const controller = new DictationController({
-    creds,
-    config: () => config,
-    sink,
-    onLevel: (dbfs) => display.level(dbfs),
-    onChange: () => display.refresh(),
-    ...opts.controller,
-  });
+  const controller = new DictationController(
+    {
+      creds,
+      config: () => config,
+      sink,
+      onLevel: (dbfs) => display.level(dbfs),
+      onChange: () => display.refresh(),
+    },
+    deps.controller,
+  );
 
   // Esc and `/voice off`: the controller puts the buffer back and shows the undo notice itself
   const cancel = () => controller.cancel();
@@ -258,7 +269,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     await mount(ctx);
     display.start(ctx.ui);
     // a cached token makes ctrl+space feel instant
-    prewarmToken(creds, { fetch: opts.fetch });
+    prewarmToken(creds, { fetch: deps.fetch });
   });
 
   pi.on("session_shutdown", () => {

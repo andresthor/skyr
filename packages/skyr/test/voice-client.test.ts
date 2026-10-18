@@ -1,5 +1,5 @@
 /**
- * The Corti streaming client, driven only through the seams `SessionOptions` exposes: a fake
+ * The Corti streaming client, driven only through its `deps` seams: a fake
  * `fetch` (token + cache) and a fake `WebSocket` (config, transcripts, closes). Real network
  * and real auth stay out of the test. The token cache is module state, so `creds()` gives each
  * session an identity no earlier test has cached. Timers are fake, and a wait settles the
@@ -16,6 +16,7 @@ import {
 } from "vitest";
 import {
   getSttToken,
+  type SessionDeps,
   type SessionOptions,
   type SttConfig,
   type SttSession,
@@ -115,6 +116,12 @@ function tokenFetch(
   }) as unknown as typeof fetch;
 }
 
+/** A sign-in that always answers and a fake socket, in place of the network. */
+const fakes = (): SessionDeps => ({
+  fetch: tokenFetch([], "tok", 3600),
+  WebSocket: SocketMaker,
+});
+
 interface Drive {
   session: SttSession;
   source: PassThrough;
@@ -131,19 +138,20 @@ async function drive(o: Partial<SessionOptions> = {}): Promise<Drive> {
   const onError = vi.fn();
   const final = vi.fn();
   const interim = vi.fn();
-  const session = startSession({
-    ...CONFIG,
-    creds: creds(),
-    onReady: () => {},
-    onLevel: () => {},
-    source: () => source,
-    onInterim: interim,
-    onFinal: final,
-    onError,
-    fetch: tokenFetch([], "tok", 3600),
-    WebSocket: SocketMaker,
-    ...o,
-  });
+  const session = startSession(
+    {
+      ...CONFIG,
+      creds: creds(),
+      onReady: () => {},
+      onLevel: () => {},
+      source: () => source,
+      onInterim: interim,
+      onFinal: final,
+      onError,
+      ...o,
+    },
+    fakes(),
+  );
   onTestFinished(() => void source.destroy());
   await settled();
   const sock = sockets()[before]!;
@@ -241,20 +249,21 @@ test("DNS naming the sign-in host as unknown points at a mistyped environment", 
 
 test("a plain recorder failure reads as microphone unavailable", async () => {
   const onError = vi.fn();
-  startSession({
-    ...CONFIG,
-    creds: creds(),
-    onReady: () => {},
-    onLevel: () => {},
-    source: () => {
-      throw new Error("spawn went wrong");
+  startSession(
+    {
+      ...CONFIG,
+      creds: creds(),
+      onReady: () => {},
+      onLevel: () => {},
+      source: () => {
+        throw new Error("spawn went wrong");
+      },
+      onInterim: () => {},
+      onFinal: () => {},
+      onError,
     },
-    onInterim: () => {},
-    onFinal: () => {},
-    onError,
-    fetch: tokenFetch([], "tok", 3600),
-    WebSocket: SocketMaker,
-  });
+    fakes(),
+  );
   await settled();
   expect(onError).toHaveBeenCalledWith(
     expect.objectContaining({ message: "microphone unavailable" }),
@@ -525,22 +534,23 @@ test("a recorder that fails to start, reported to an onError that throws, never 
   const record = (e: unknown) => escaped.push(e);
   process.on("uncaughtException", record);
   onTestFinished(() => void process.off("uncaughtException", record));
-  const session = startSession({
-    ...CONFIG,
-    creds: creds(),
-    onReady: () => {},
-    onLevel: () => {},
-    source: () => {
-      throw new Error("spawn failed");
+  const session = startSession(
+    {
+      ...CONFIG,
+      creds: creds(),
+      onReady: () => {},
+      onLevel: () => {},
+      source: () => {
+        throw new Error("spawn failed");
+      },
+      onInterim: () => {},
+      onFinal: () => {},
+      onError: () => {
+        throw new Error("controller broke");
+      },
     },
-    onInterim: () => {},
-    onFinal: () => {},
-    onError: () => {
-      throw new Error("controller broke");
-    },
-    fetch: tokenFetch([], "tok", 3600),
-    WebSocket: SocketMaker,
-  });
+    fakes(),
+  );
   await settled();
   expect(escaped).toEqual([]);
   await expect(session.stop()).resolves.toBeUndefined();
@@ -680,20 +690,21 @@ test("each recorder chunk's level reaches onLevel in dBFS", async () => {
 
 test("a recorder that fails with its own reason reports that reason", async () => {
   const onError = vi.fn();
-  startSession({
-    ...CONFIG,
-    creds: creds(),
-    onReady: () => {},
-    onLevel: () => {},
-    source: () => {
-      throw new VoiceError("sox not found · brew install sox");
+  startSession(
+    {
+      ...CONFIG,
+      creds: creds(),
+      onReady: () => {},
+      onLevel: () => {},
+      source: () => {
+        throw new VoiceError("sox not found · brew install sox");
+      },
+      onInterim: () => {},
+      onFinal: () => {},
+      onError,
     },
-    onInterim: () => {},
-    onFinal: () => {},
-    onError,
-    fetch: tokenFetch([], "tok", 3600),
-    WebSocket: SocketMaker,
-  });
+    fakes(),
+  );
   await settled();
   expect(onError).toHaveBeenCalledTimes(1);
   expect(onError).toHaveBeenCalledWith(

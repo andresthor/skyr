@@ -54,8 +54,6 @@ export interface SessionOptions extends SttConfig {
   /** Each captured chunk's level in dBFS, −Infinity for digital silence, roughly every 64 ms. */
   onLevel: (dbfs: number) => void;
   onError: (err: VoiceError) => void;
-  fetch?: typeof fetch;
-  WebSocket?: typeof WebSocket;
 }
 
 export interface SttSession {
@@ -176,6 +174,11 @@ function transcriptData(
   };
 }
 
+/** Seams for tests: Node's global fetch and WebSocket by default. */
+export interface SessionDeps extends TokenDeps {
+  WebSocket?: typeof WebSocket;
+}
+
 /** Token fetch is the slowest step of arming; do it early when voice is likely. */
 export function prewarmToken(creds: SttCredentials, deps?: TokenDeps): void {
   // a failed prewarm is retried, and reported, by the session's own sign-in
@@ -190,8 +193,11 @@ export function prewarmToken(creds: SttCredentials, deps?: TokenDeps): void {
  * failure meanwhile, and never resolves if Corti neither accepts nor closes: the caller bounds
  * that wait.
  */
-export function startSession(o: SessionOptions): SttSession {
-  const Socket = o.WebSocket ?? WebSocket;
+export function startSession(
+  o: SessionOptions,
+  deps: SessionDeps = {},
+): SttSession {
+  const Socket = deps.WebSocket ?? WebSocket;
   let ws: WebSocket | undefined;
   let audio: Readable | undefined;
   let pending = Buffer.alloc(0);
@@ -281,7 +287,7 @@ export function startSession(o: SessionOptions): SttSession {
     }),
   );
 
-  getSttToken(o.creds, { fetch: o.fetch })
+  getSttToken(o.creds, deps)
     .then((token) => {
       if (closed) return;
       const q = new URLSearchParams({

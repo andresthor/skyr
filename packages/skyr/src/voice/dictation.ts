@@ -66,7 +66,7 @@ export interface DictationTiming {
 }
 
 /**
- * The controller's timing for every field the caller's `timing` leaves out.
+ * The controller's timing for every field `DictationDeps.timing` leaves out.
  * @internal
  */
 export const DEFAULT_TIMING: DictationTiming = {
@@ -124,9 +124,13 @@ export interface DictationControllerOptions {
   onChange: () => void;
   /** Each chunk's level in dBFS, −Infinity for digital silence. */
   onLevel: (dbfs: number) => void;
+}
+
+/** Seams for tests: the live Corti session, the microphone and DEFAULT_TIMING by default. */
+export interface DictationDeps {
+  start?: (o: SessionOptions) => SttSession;
   source?: () => Readable;
   timing?: Partial<DictationTiming>;
-  start?: (o: SessionOptions) => SttSession;
 }
 
 /** What the displays need to know at one moment, read off one clock and one dictation. */
@@ -162,8 +166,11 @@ export class DictationController {
   /** Ends the notice currently up, error or discarded. */
   private hold: Timer | undefined;
 
-  constructor(private readonly o: DictationControllerOptions) {
-    this.timing = { ...DEFAULT_TIMING, ...o.timing };
+  constructor(
+    private readonly o: DictationControllerOptions,
+    private readonly deps: DictationDeps = {},
+  ) {
+    this.timing = { ...DEFAULT_TIMING, ...deps.timing };
   }
 
   get state(): VoiceState {
@@ -269,9 +276,9 @@ export class DictationController {
     this.o.sink.begin();
     // the session never calls back before it returns, so its callbacks can close over `d`
     const d: Dictation = {
-      session: (this.o.start ?? startSession)({
+      session: (this.deps.start ?? startSession)({
         creds: this.o.creds,
-        source: this.o.source ?? micSource,
+        source: this.deps.source ?? micSource,
         ...this.o.config(),
         onReady: () => {
           if (d !== this.d) return;

@@ -1,6 +1,6 @@
 /**
- * The dictation state machine, driven entirely through the seams `DictationControllerOptions`
- * exposes: a fake session factory, explicit timing and a recorded sink. Timers are fake, so
+ * The dictation state machine, driven entirely through its constructor: a recorded sink, and
+ * the `DictationDeps` seams for a fake session factory and explicit timing. Timers are fake, so
  * every wait below is exact rather than a race against the wall clock.
  */
 import { PassThrough } from "node:stream";
@@ -79,33 +79,37 @@ function harness(
   const sessions: FakeSession[] = [];
   const options: SessionOptions[] = [];
   let controller: DictationController;
-  controller = new DictationController({
-    creds: CREDS,
-    config: () => CONFIG,
-    sink: {
-      begin: () => events.push({ op: "begin" }),
-      interim: (s) => events.push({ op: "interim", arg: s }),
-      final: (s) => events.push({ op: "final", arg: s }),
-      end: () => events.push({ op: "end" }),
-      revert: () => {
-        events.push({ op: "revert" });
-        return false;
+  controller = new DictationController(
+    {
+      creds: CREDS,
+      config: () => CONFIG,
+      sink: {
+        begin: () => events.push({ op: "begin" }),
+        interim: (s) => events.push({ op: "interim", arg: s }),
+        final: (s) => events.push({ op: "final", arg: s }),
+        end: () => events.push({ op: "end" }),
+        revert: () => {
+          events.push({ op: "revert" });
+          return false;
+        },
+        ...o.sinkOverride,
       },
-      ...o.sinkOverride,
+      onChange: () => states.push(controller.state),
+      onLevel: o.onLevel ?? (() => {}),
     },
-    onChange: () => states.push(controller.state),
-    onLevel: o.onLevel ?? (() => {}),
-    source: () => new PassThrough(),
-    start: (opts) => {
-      options.push(opts);
-      const session = new FakeSession(
-        o.stopNeverResolves ? new Promise<void>(() => {}) : Promise.resolve(),
-      );
-      sessions.push(session);
-      return session;
+    {
+      source: () => new PassThrough(),
+      start: (opts) => {
+        options.push(opts);
+        const session = new FakeSession(
+          o.stopNeverResolves ? new Promise<void>(() => {}) : Promise.resolve(),
+        );
+        sessions.push(session);
+        return session;
+      },
+      timing: { ...TIMING, ...timing },
     },
-    timing: { ...TIMING, ...timing },
-  });
+  );
   const opts = () => options.at(-1)!;
   return { controller, events, states, sessions, opts };
 }

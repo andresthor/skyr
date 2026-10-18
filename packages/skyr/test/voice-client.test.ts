@@ -125,7 +125,25 @@ async function drive(o: Partial<SessionOptions> = {}): Promise<Drive> {
 const writePcm = (source: PassThrough, bytes: number) =>
   source.write(Buffer.alloc(bytes, 4));
 
-test("getSttToken caches per env\\0tenant\\0clientId, with the 60 s margin", async () => {
+test("one token serves an identity until a minute before expiry", async () => {
+  const a: number[] = [];
+  const c = { ...CREDS, clientId: "c-a" };
+  expect(await getSttToken(c, { fetch: tokenFetch(a, "t-a", 3600) })).toBe(
+    "t-a",
+  );
+  expect(await getSttToken(c, { fetch: tokenFetch(a, "t-a", 3600) })).toBe(
+    "t-a",
+  );
+  expect(a).toHaveLength(1);
+  // expires_in at the margin leaves nothing to live on: a dying token is refetched
+  const e: number[] = [];
+  const f = { ...CREDS, clientId: "c-e" };
+  await getSttToken(f, { fetch: tokenFetch(e, "t-e", 60) });
+  await getSttToken(f, { fetch: tokenFetch(e, "t-e", 60) });
+  expect(e).toHaveLength(2);
+});
+
+test("another identity gets its own token", async () => {
   const a: number[] = [];
   const b: number[] = [];
   const c = { ...CREDS, clientId: "c-a" };
@@ -133,21 +151,12 @@ test("getSttToken caches per env\\0tenant\\0clientId, with the 60 s margin", asy
   expect(await getSttToken(c, { fetch: tokenFetch(a, "t-a", 3600) })).toBe(
     "t-a",
   );
-  expect(await getSttToken(c, { fetch: tokenFetch(a, "t-a", 3600) })).toBe(
-    "t-a",
-  );
   expect(await getSttToken(d, { fetch: tokenFetch(b, "t-b", 3600) })).toBe(
     "t-b",
   );
-  // same token twice per identity, fresh per identity
+  // one fetch per identity, never shared
   expect(a).toHaveLength(1);
   expect(b).toHaveLength(1);
-  // expires_in at the margin leaves nothing to live on: a dying token is refetched
-  const e: number[] = [];
-  const f = { ...CREDS, clientId: "c-e" };
-  await getSttToken(f, { fetch: tokenFetch(e, "t-e", 60) });
-  await getSttToken(f, { fetch: tokenFetch(e, "t-e", 60) });
-  expect(e).toHaveLength(2);
 });
 
 /** A fetch that answers every request with `status`. */
@@ -222,7 +231,19 @@ test("a plain recorder failure reads as microphone unavailable", async () => {
   );
 });
 
-test("CONFIG_ACCEPTED opens the pump at the 8,000 B chunk boundary, with the config per the union", async () => {
+test("no audio leaves before Corti accepts the config; after, it goes in 8,000 B chunks", async () => {
+  const h = await drive();
+  writePcm(h.source, 12_000); // held by the client until the pump can discharge it
+  h.sock.onopen?.();
+  expect(h.sock.audio()).toEqual([]);
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  expect(h.sock.audio()).toHaveLength(1); // 8,000 out of 12,000
+  writePcm(h.source, 4_000);
+  await vi.waitFor(() => expect(h.sock.audio()).toHaveLength(2)); // 16,000 total = two chunks
+  h.session.cancel();
+});
+
+test("the voice settings reach Corti's config with exactly one punctuation mode", async () => {
   const h = await drive({
     language: "da",
     interims: true,
@@ -230,12 +251,8 @@ test("CONFIG_ACCEPTED opens the pump at the 8,000 B chunk boundary, with the con
     keyterms: ["keyterm k"],
     replacements: [{ find: "teh", replace: "the" }],
   });
-  writePcm(h.source, 12_000); // accepted only after the pump discharges
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_ACCEPTED" });
-  expect(await vi.waitFor(() => h.sock.audio())).toHaveLength(1); // 8,000 out of 12,000
-  writePcm(h.source, 4_000);
-  await vi.waitFor(() => expect(h.sock.audio()).toHaveLength(2)); // 16,000 total = two chunks
   const config = h.sock.control()[0]!.configuration as Record<string, unknown>;
   expect(config.primaryLanguage).toBe("da");
   expect(config.interimResults).toBe(true);
@@ -245,6 +262,7 @@ test("CONFIG_ACCEPTED opens the pump at the 8,000 B chunk boundary, with the con
   expect(config.keyterms).toEqual({ terms: [{ term: "keyterm k" }] });
   expect(config.replacements).toEqual([{ find: "teh", replace: "the" }]);
   expect(config.audioFormat).toContain("rate=16000");
+  h.session.cancel();
 });
 
 test("fields left out take Corti's defaults, and the language always comes from the caller", async () => {
@@ -278,7 +296,7 @@ test("other CONFIG_* frames are a config failure: the mic and socket close, and 
   expect(h.onError).toHaveBeenCalledTimes(1);
 });
 
-test("transcripts route finals and interims", async () => {
+test("an interim shows as provisional text and its final commits it", async () => {
   const h = await drive();
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_ACCEPTED" });
@@ -327,7 +345,7 @@ test("ended and then a 1006 close is success: the final is delivered and the sto
   h.sock.onclose?.();
 });
 
-test("a stop sends the pending bytes plus end; a server 1006 after `ended` resolves the drain", async () => {
+test("a stop sends the last partial chunk before `end`, so the final word reaches Corti", async () => {
   const h = await drive();
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_ACCEPTED" });

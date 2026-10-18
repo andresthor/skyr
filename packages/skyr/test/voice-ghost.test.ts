@@ -207,7 +207,9 @@ test("NO_COLOR keeps the ghost as italic and faint text, with no colour anywhere
   const all = lines.join("\n");
   expect(all).not.toContain("\x1b[38;");
   expect(lines[1]).toContain("\x1b[2m\x1b[3m world\x1b[23m\x1b[22m");
-  // TERM=dumb draws no decoration at all
+});
+
+test("TERM=dumb draws no decoration at all: the rows come back unchanged", () => {
   const base = editorBase("hello", 40, { paddingX: 2 });
   expect(
     spliceGhost(base, {
@@ -232,7 +234,14 @@ test("the palette is the theme's own colours and colour mode", () => {
     },
     getColorMode: () => "256color",
   });
-  expect(palette.colors.accent).toEqual(c("#88acb5"));
+  expect(palette.colors).toEqual({
+    accent: c("#88acb5"),
+    text: c("#9a9aa7"),
+    muted: c("#898a96"),
+    dim: c("#72727d"),
+    error: c("#cc6666"),
+    warning: c("#d7af5f"),
+  });
   expect(palette.mode).toBe("256color");
   expect(paletteFromTheme(undefined)).toBe(FALLBACK_PALETTE);
 });

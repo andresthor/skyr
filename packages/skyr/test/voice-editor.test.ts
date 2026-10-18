@@ -260,7 +260,7 @@ describe("render", () => {
     expect(editor.render(40)[1] ?? "").toContain("\x1b[38;2;102;102;102m");
   });
 
-  test("a base render throw propagates: the catch guards only the decoration maths", () => {
+  test("a broken base editor still fails loudly; voice hides only its own drawing errors", () => {
     const editor = fresh("hello", {
       throwsOnRender: true,
       clock: clock(),

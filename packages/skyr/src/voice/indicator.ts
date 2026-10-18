@@ -2,7 +2,8 @@
  * What voice shows of a dictation: `renderRule()` for the editor's bottom rule while voice is
  * on, `renderStatus()` for the footer row when the editor can't carry it, and the level history
  * that turns mic levels in at whatever rate they arrive into one smoothed bar per BAR_MS. All
- * wording is decided once in `voiceView()`; the two renderers are layout only.
+ * wording is decided once in `voiceView()`, and every mark the two displays share is drawn once,
+ * in `marks()`.
  *
  * Every glyph is in U+2580–259F or is a width-1 symbol. Never braille.
  */
@@ -95,6 +96,7 @@ export function renderStatus(
   const ascii = paint.mode === "ascii";
   const fg = (c: Color, text: string) => styled(paint, text, { fg: c });
   const label = fg(T.muted, "voice");
+  const m = marks(paint);
   const view = voiceView(s);
   if (view.kind === "error") {
     const text = sliceByColumn(
@@ -103,29 +105,17 @@ export function renderStatus(
       ERROR_COLS - ERROR_PREFIX_COLS,
       true,
     );
-    return `${label} ${fg(T.error, ascii ? "x" : "✗")}${fg(T.muted, ` ${text}`)}`;
+    return `${label} ${m.cause(text)}`;
   }
   if (view.kind === "off") return undefined;
-  if (view.kind === "discarded") return `${label} ${fg(T.muted, "discarded")}`;
-  const light = view.recording
-    ? ascii
-      ? "[rec]"
-      : fg(T.accent, "●")
-    : ascii
-      ? "[...]"
-      : fg(T.muted, "○");
-  // the footer collapses runs of spaces, so the ellipsis is drawn without its rule-side padding
-  const word =
-    fg(T.muted, view.word) +
-    (view.dots ? fg(T.dim, (ascii ? "." : "·").repeat(view.dots)) : "");
-  const sep = ascii ? ", " : fg(T.dim, " · ");
+  if (view.kind === "discarded") return `${label} ${m.discarded}`;
   // the footer collapses runs of spaces, so silence is dim rule cells rather than padding
   const silence = (x: string) => fg(T.dim, ascii ? x.replaceAll("─", "-") : x);
   const meter = view.recording
     ? meterCells(s.bars, silence, paint)
     : silence("─".repeat(METER_CELLS));
-  const advisories = view.advisories.map((a) => fg(T[a.tone], a.text));
-  return `${[`${label} ${light} ${word}`, ...advisories].join(sep)} ${meter}`;
+  const lw = `${label} ${m.light(view)} ${m.word(view)}`;
+  return `${[lw, ...m.advisories(view)].join(m.sep)} ${meter}`;
 }
 
 /** An advisory line: `tone` picks the theme colour it draws in. */
@@ -139,17 +129,46 @@ type VoiceView =
   | { kind: "off" }
   | { kind: "error"; message: string }
   | { kind: "discarded" }
-  | {
-      kind: "live";
-      /** The mic is open: the light stays on through the tail after Enter. */
-      recording: boolean;
-      word: "starting" | "listening" | "finishing";
-      /** Steps of the finishing ellipsis: server work, never motion in the meter. */
-      dots: 0 | 1 | 2 | 3;
-      /** What the bound keys would do right now. */
-      offer: "keep" | "cancel" | "discard";
-      advisories: Advisory[];
-    };
+  | LiveView;
+
+interface LiveView {
+  kind: "live";
+  /** The mic is open: the light stays on through the tail after Enter. */
+  recording: boolean;
+  word: "starting" | "listening" | "finishing";
+  /** Steps of the finishing ellipsis: server work, never motion in the meter. */
+  dots: 0 | 1 | 2 | 3;
+  /** What the bound keys would do right now. */
+  offer: "keep" | "cancel" | "discard";
+  advisories: Advisory[];
+}
+
+/** The view's marks as both displays draw them: the same glyphs, words and colours on each. */
+function marks(paint: Paint) {
+  const T = paint.theme.colors;
+  const ascii = paint.mode === "ascii";
+  const fg = (c: Color, text: string) => styled(paint, text, { fg: c });
+  return {
+    sep: ascii ? ", " : fg(T.dim, " · "),
+    discarded: fg(T.muted, "discarded"),
+    /** The error mark, then `text`: the error's message, clipped to the display's room. */
+    cause: (text: string) =>
+      `${fg(T.error, ascii ? "x" : "✗")}${fg(T.muted, ` ${text}`)}`,
+    light: (v: LiveView) =>
+      v.recording
+        ? ascii
+          ? "[rec]"
+          : fg(T.accent, "●")
+        : ascii
+          ? "[...]"
+          : fg(T.muted, "○"),
+    /** The word and its ellipsis, without the rule's padding: the footer collapses runs of spaces. */
+    word: (v: LiveView) =>
+      fg(T.muted, v.word) +
+      (v.dots ? fg(T.dim, (ascii ? "." : "·").repeat(v.dots)) : ""),
+    advisories: (v: LiveView) => v.advisories.map((a) => fg(T[a.tone], a.text)),
+  };
+}
 
 /** Reads the facts once, deciding everything the displays then only have to draw. */
 function voiceView(s: VoiceSnapshot): VoiceView {
@@ -275,13 +294,12 @@ export function renderRule(
   { width, hiddenBelow = 0, rule, keys, paint }: RuleOptions,
 ): string | undefined {
   const T = paint.theme.colors;
-  const ascii = paint.mode === "ascii";
   const fg = (c: Color, text: string) => styled(paint, text, { fg: c });
+  const m = marks(paint);
   const view = voiceView(s);
   const line = (n: number) => rule("─".repeat(Math.max(0, n)));
   const key = (k: string, what: string) =>
     k ? `${fg(T.dim, k)}${fg(T.muted, ` ${what}`)}` : "";
-  const sep = ascii ? ", " : fg(T.dim, " · ");
 
   // `── left ──…── right ──`, or undefined when it can't fit
   const compose = (left: string, right: string, meter = "") => {
@@ -298,7 +316,6 @@ export function renderRule(
   const more = hiddenBelow > 0 ? rule(`↓ ${hiddenBelow} more`) : undefined;
 
   if (view.kind === "error") {
-    const mark = fg(T.error, ascii ? "x" : "✗");
     // as wide as `── ✗ ` before the message, ` ──` after it, plus compose's spare column
     const room = Math.max(0, width - ERROR_ROW_MARGIN);
     const full = view.message;
@@ -306,42 +323,29 @@ export function renderRule(
       visibleWidth(full) <= room
         ? full
         : `${sliceByColumn(full, 0, room - 1, true)}…`;
-    const cause = `${mark}${fg(T.muted, ` ${text}`)}`;
+    const cause = m.cause(text);
     return first([compose(cause, more ?? ""), compose(cause, "")]);
   }
-  if (view.kind === "discarded") {
-    const notice = fg(T.muted, "discarded");
+  if (view.kind === "discarded")
     return first([
-      compose(notice, more ?? key(keys.undo, "undo")),
-      compose(notice, ""),
+      compose(m.discarded, more ?? key(keys.undo, "undo")),
+      compose(m.discarded, ""),
     ]);
-  }
   if (view.kind === "off") return undefined;
 
-  const light = view.recording
-    ? ascii
-      ? "[rec]"
-      : fg(T.accent, "●")
-    : ascii
-      ? "[...]"
-      : fg(T.muted, "○");
+  const light = m.light(view);
   // the ellipsis keeps a fixed three cells on the rule, so the row never shifts under it
-  const word =
-    fg(T.muted, view.word) +
-    (view.dots
-      ? fg(T.dim, (ascii ? "." : "·").repeat(view.dots)) +
-        " ".repeat(3 - view.dots)
-      : "");
-  const advisories = view.advisories.map((a) => fg(T[a.tone], a.text));
+  const word = m.word(view) + (view.dots ? " ".repeat(3 - view.dots) : "");
+  const advisories = m.advisories(view);
   const lw = `${light} ${word}`;
-  const phrase = advisories.length ? [lw, ...advisories].join(sep) : lw;
+  const phrase = advisories.length ? [lw, ...advisories].join(m.sep) : lw;
 
   // an unbound id draws no hint at all: the rule never names a key that isn't there
   const hints =
     view.offer === "keep"
       ? [key(keys.submit, "keep"), key(keys.cancel, "discard")]
           .filter(Boolean)
-          .join(sep)
+          .join(m.sep)
       : key(keys.cancel, view.offer);
   const fewerHints =
     view.offer === "keep" ? key(keys.cancel, "discard") : hints;

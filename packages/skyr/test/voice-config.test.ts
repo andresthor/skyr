@@ -40,10 +40,21 @@ test("readSkyrFile: malformed JSON never throws, names the reason, and keeps sta
 
 test("readSkyrFile: a mis-spelled section name is reported, not silently dropped", () => {
   const { data, problems } = readSkyrFile(
-    agentDir('{"voicee":{"language":"da"},"subagent":{}}'),
+    agentDir('{"voicee":{"language":"da"},"voice":{}}'),
   );
-  expect(data).toEqual({ subagent: {} });
+  expect(data).toEqual({ voice: {} });
   expect(problems).toEqual(['skyr.json: unknown section "voicee", ignored']);
+});
+
+test("readSkyrFile: a section for a module with no settings is reported, not silently accepted", () => {
+  const { data, problems } = readSkyrFile(
+    agentDir('{"webSearch":{"maxResults":5},"subagent":{}}'),
+  );
+  expect(data).toEqual({});
+  expect(problems).toEqual([
+    'skyr.json: unknown section "webSearch", ignored',
+    'skyr.json: unknown section "subagent", ignored',
+  ]);
 });
 
 test("readSkyrFile: a non-object file degrades to defaults with one problem", () => {

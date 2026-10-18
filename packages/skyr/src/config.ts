@@ -7,17 +7,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** One skyr extension per module key; a section exists only when the module has knobs. */
-export interface ConfigFile {
-  voice?: unknown;
-  webSearch?: unknown;
-  subagent?: unknown;
-}
+/** One key per module that reads the file; a section is added with the code that reads it. */
+const SECTIONS = ["voice"] as const;
 
-const SECTIONS = ["voice", "webSearch", "subagent"] as const;
+export type ConfigFile = Partial<Record<(typeof SECTIONS)[number], unknown>>;
 
 export interface SkyrFile {
-  data: Partial<ConfigFile>;
+  data: ConfigFile;
   problems: string[];
 }
 
@@ -47,7 +43,7 @@ export function readSkyrFile(agentDir: string): SkyrFile {
       data: {},
       problems: ["skyr.json: expected an object with one key per module"],
     };
-  const data: Partial<ConfigFile> = {};
+  const data: ConfigFile = {};
   const problems: string[] = [];
   for (const [key, value] of Object.entries(parsed)) {
     if (!(SECTIONS as readonly string[]).includes(key)) {

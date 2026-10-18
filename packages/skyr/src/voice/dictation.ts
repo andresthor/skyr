@@ -13,6 +13,7 @@
 import type { Readable } from "node:stream";
 import {
   type SessionOptions,
+  type SttConfig,
   type SttSession,
   startSession,
 } from "./client.js";
@@ -75,16 +76,11 @@ export const SPEECH_DBFS = 20 * Math.log10((2500 / 32768) * 0.15 ** (1 / 0.6));
 /** ~1.5 s of chunks that are exactly zero: macOS hands a mic-denied process silence, not an error. */
 const ZERO_CHUNKS_BLOCKED = 24;
 
-export interface DictationControllerOptions {
+/** The Corti config, resolved from the skyr.json voice section by registerVoice, is read at every
+ * `start`, so the owning object may be updated between sessions. */
+export interface DictationControllerOptions extends Partial<SttConfig> {
   creds: SttCredentials;
   sink: DictationSink;
-  /** The Corti config fields, resolved from the skyr.json voice section by registerVoice;
-   * read at every `start`, so the owning object may be updated between sessions. */
-  language?: string;
-  interims?: boolean;
-  punctuation?: "automatic" | "spoken";
-  keyterms?: readonly string[];
-  replacements?: readonly { find: string; replace: string }[];
   onChange: () => void;
   /** Each chunk's raw RMS, 0..1 of full scale. */
   onLevel?: (rms: number) => void;

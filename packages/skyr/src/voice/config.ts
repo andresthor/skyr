@@ -8,6 +8,8 @@
  * replacements differing only in case are CONFIG_DENIED — this validator owns that rule.
  */
 
+import type { Replacement, SttConfig } from "./client.js";
+
 /** Built-in coding vocabulary appended under every user list, unchanged from the vendored copy. */
 
 /** Case-sensitive written forms; Corti caps each at 50 chars / 5 words. */
@@ -43,22 +45,16 @@ export const CODING_KEYTERMS: readonly string[] = [
  * Deterministic fixes for misses measured on the live endpoint. `find` matches
  * case-insensitively, and two rules differing only in case are CONFIG_DENIED.
  */
-export const CODING_REPLACEMENTS: readonly { find: string; replace: string }[] =
-  [
-    { find: "vitist", replace: "vitest" },
-    { find: "vi test", replace: "vitest" },
-    { find: "async await", replace: "async/await" },
-    { find: "type script", replace: "TypeScript" },
-    { find: "Get Hub", replace: "GitHub" },
-  ];
+export const CODING_REPLACEMENTS: readonly Replacement[] = [
+  { find: "vitist", replace: "vitest" },
+  { find: "vi test", replace: "vitest" },
+  { find: "async await", replace: "async/await" },
+  { find: "type script", replace: "TypeScript" },
+  { find: "Get Hub", replace: "GitHub" },
+];
 
-export interface VoiceConfig {
-  language: string;
-  interims: boolean;
-  punctuation: "automatic" | "spoken";
-  keyterms: string[];
-  replacements: { find: string; replace: string }[];
-}
+/** The voice section as the user wrote it: a Corti config before mergeVocabulary adds the built-ins. */
+export type VoiceConfig = SttConfig;
 
 export const VOICE_DEFAULTS: VoiceConfig = {
   language: "en",
@@ -127,11 +123,8 @@ function parseKeyterms(raw: unknown, problem: Problem): string[] {
   return out;
 }
 
-function parseReplacements(
-  raw: unknown,
-  problem: Problem,
-): { find: string; replace: string }[] {
-  const out: { find: string; replace: string }[] = [];
+function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
+  const out: Replacement[] = [];
   if (!Array.isArray(raw)) {
     problem('"replacements" must be an array, built-ins only sent');
     return out;
@@ -229,10 +222,9 @@ export function parseVoiceSection(raw: unknown): {
 
 /** Merges user terms over the built-ins (built-ins win the case-duplicate check; counts were
  * capped during parsing, so the merged lists stay inside Corti's 1,000). */
-export function mergeVocabulary(config: VoiceConfig): {
-  keyterms: string[];
-  replacements: { find: string; replace: string }[];
-} {
+export function mergeVocabulary(
+  config: VoiceConfig,
+): Pick<SttConfig, "keyterms" | "replacements"> {
   const seen = new Set(CODING_KEYTERMS.map((t) => t.toLowerCase()));
   const keyterms = [...CODING_KEYTERMS];
   for (const term of config.keyterms) {

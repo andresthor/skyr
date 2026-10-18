@@ -19,18 +19,32 @@ const CHUNK = 8000;
 /** Past this after `end` the caller keeps the last interim; flushing on quiet usually has the final in already. */
 const END_TIMEOUT_MS = 2500;
 
-export interface SessionOptions {
+/** Corti's two punctuation modes: inferred from the audio, or only where the speaker says it. */
+export type Punctuation = "automatic" | "spoken";
+
+/** A rewrite Corti applies to the transcript; `find` matches case-insensitively. */
+export interface Replacement {
+  find: string;
+  replace: string;
+}
+
+/** What a Corti session is configured with: the settings the skyr.json voice section carries. */
+export interface SttConfig {
+  /** Corti primaryLanguage. */
+  language: string;
+  /** Interims drive the ghost text; off only when a locale mishandles them. */
+  interims: boolean;
+  /** The two modes are exclusive server-side; exactly one is sent. */
+  punctuation: Punctuation;
+  /** Sent as given; voice/config.ts mergeVocabulary adds the built-ins. */
+  keyterms: readonly string[];
+  replacements: readonly Replacement[];
+}
+
+/** A field left out takes Corti's default: "en", interims on, automatic punctuation, no vocabulary. */
+export interface SessionOptions extends Partial<SttConfig> {
   creds: SttCredentials;
   source: () => Readable;
-  /** Corti primaryLanguage; "en" server-side default when omitted. */
-  language?: string;
-  /** Interims drive the ghost text; off only when a locale mishandles them. */
-  interims?: boolean;
-  /** The two punctuation modes are exclusive server-side; exactly one is sent. */
-  punctuation?: "automatic" | "spoken";
-  /** User + built-in vocabulary, pre-merged (voice/config.ts mergeVocabulary). */
-  keyterms?: readonly string[];
-  replacements?: readonly { find: string; replace: string }[];
   /** Server accepted the config; audio is flowing. */
   onReady?: () => void;
   onInterim: (segment: string) => void;

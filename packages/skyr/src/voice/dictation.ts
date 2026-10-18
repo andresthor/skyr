@@ -264,11 +264,13 @@ export class DictationController {
     if (!d) return;
     d.session.cancel();
     this.end(d);
-    // guarded: this runs from the key hook, whose caller crashes Pi on a throw rather
-    // than reporting it — the dictation is ended, so no sink throw can strand anything
-    let reverted = false;
+    // guarded one by one: the key hook's caller crashes Pi on a throw, and a broken end
+    // must not stop the buffer going back
     try {
       this.o.sink.end();
+    } catch {}
+    let reverted = false;
+    try {
       // true means committed words went; their undo offer is the notice for that
       reverted = this.o.sink.revert();
     } catch {}

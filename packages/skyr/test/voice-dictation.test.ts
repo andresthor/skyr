@@ -584,6 +584,27 @@ test("a sink that throws during the drain still ends the dictation, and nothing 
   expect(d.controller.state).toBe("arming");
 });
 
+test("Esc still puts the buffer back when the sink's end throws", () => {
+  let reverted = 0;
+  const h = harness(
+    {},
+    {
+      sinkOverride: {
+        end: () => {
+          throw new Error("broken editor");
+        },
+        revert: () => ++reverted > 0,
+      },
+    },
+  );
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.opts().onFinal("spoken words");
+  h.controller.cancel();
+  expect(reverted).toBe(1);
+  expect(h.controller.state).toBe("discarded");
+});
+
 test("a begin that throws starts no session and strands nothing", () => {
   const d = harness(
     {},

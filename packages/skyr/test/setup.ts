@@ -14,7 +14,9 @@ process.env.PI_CODING_AGENT_DIR = mkdtempSync(
 );
 process.env.PI_OFFLINE = "1";
 for (const key of Object.keys(process.env)) {
-  if (SECRET_ENV.test(key)) delete process.env[key];
+  // a GIT_DIR inherited from a hook or `git rebase --exec` would point the tests' own git
+  // repos at the repo running them
+  if (SECRET_ENV.test(key) || key.startsWith("GIT_")) delete process.env[key];
 }
 
 globalThis.fetch = async (input) => {

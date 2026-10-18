@@ -49,25 +49,32 @@ const FFMPEG_ARGS = [
 ];
 
 /** GUI-launched terminals often lack Homebrew on PATH, so absolute locations are probed first. */
-function findBinary(bin: string): string | undefined {
-  const dirs = [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    ...(process.env.PATH ?? "").split(":").filter(Boolean),
-  ];
+const probeDirs = () => [
+  "/opt/homebrew/bin",
+  "/usr/local/bin",
+  "/usr/bin",
+  ...(process.env.PATH ?? "").split(":").filter(Boolean),
+];
+
+function findBinary(bin: string, dirs: readonly string[]): string | undefined {
   return dirs.map((d) => `${d}/${bin}`).find((p) => existsSync(p));
+}
+
+/** Seam for tests: the directories searched for a recorder, in order; Homebrew's, then PATH by default. */
+export interface MicDeps {
+  dirs?: readonly string[];
 }
 
 /**
  * Spawns sox `rec` (ffmpeg as a fallback) and returns its stdout. Destroying the
  * stream kills the recorder. A recorder that exits on its own before it is
  * stopped surfaces as a "microphone unavailable" error, which is how a busy device
- * or a permission problem shows.
+ * or a permission problem shows. Throws `VoiceError` when neither recorder is found in
+ * `dirs`, which defaults to the real search path.
  */
-export function micSource(): Readable {
-  const rec = findBinary("rec");
-  const recorder = rec || findBinary("ffmpeg");
+export function micSource({ dirs = probeDirs() }: MicDeps = {}): Readable {
+  const rec = findBinary("rec", dirs);
+  const recorder = rec || findBinary("ffmpeg", dirs);
   // ffmpeg works too, but only on macOS, so the hint names sox
   if (recorder === undefined)
     throw new VoiceError("sox not found · brew install sox");

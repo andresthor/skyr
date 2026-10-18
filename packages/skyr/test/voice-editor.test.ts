@@ -232,6 +232,21 @@ describe("render", () => {
     expect(editor.render(40)).toEqual(baseRender(editor));
   });
 
+  test("a committed span fades over its drying window, rather than staying wet and then vanishing", () => {
+    const c = clock();
+    const editor = fresh("hello", { paddingX: 2, cursorCol: 5, clock: c });
+    editor.commit("world");
+    const colour = () =>
+      styledRuns(editor.render(40)[1] ?? "").find((r) => r.text.includes("w"))
+        ?.fg;
+    const wet = colour();
+    c.advance(DRY_MS / 2);
+    const drying = colour();
+    expect(wet).toBeDefined();
+    expect(drying).toBeDefined();
+    expect(drying).not.toEqual(wet);
+  });
+
   test("the ghost draws beside the cursor cell, a fresh span is wet, and a dried span is colourless again", () => {
     const c = clock();
     const editor = fresh("hello", {

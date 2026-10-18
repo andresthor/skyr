@@ -1,7 +1,7 @@
 /**
  * Voice through what it registers. Most tests call `registerVoice` on a fake Pi, because the
- * seam that replaces Corti and the microphone is reachable only there; one test registers
- * through `registerSkyr`, and one loads skyr into a real Pi session.
+ * seam that replaces Corti and the microphone is reachable only there; the registerSkyr block
+ * tests the entry a host calls, and one test loads skyr into a real Pi session.
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";

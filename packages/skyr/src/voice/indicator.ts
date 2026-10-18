@@ -68,10 +68,12 @@ export function createLevelHistory(): LevelHistory {
   };
 }
 
-/** The widest row an error message may build in the footer; pi truncates further to the terminal's width. */
-/** The footer's whole error row: the `voice ✗` prefix plus the message. */
+/** The footer's whole error row: the `voice ✗` prefix plus the message;
+ * pi truncates further to the terminal's width. */
 export const ERROR_COLS = 60;
 const ERROR_PREFIX_COLS = 8;
+/** Non-message columns in the rule's `── ✗ <message> ──`, plus one spare as compose keeps. */
+const ERROR_ROW_MARGIN = 9;
 
 /** Warn this long before the hard cap, so the cap is first advisory, then fact. */
 const CAP_WARN_MS = 15_000;
@@ -301,7 +303,8 @@ export function renderRule(
 
   if (view.kind === "error") {
     const mark = fg(T.error, ascii ? "x" : "✗");
-    const room = Math.max(0, width - 9);
+    // as wide as `── ✗ ` before the message, ` ──` after it, plus compose's spare column
+    const room = Math.max(0, width - ERROR_ROW_MARGIN);
     const full = view.message;
     const text =
       visibleWidth(full) <= room

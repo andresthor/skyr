@@ -52,15 +52,12 @@ const FFMPEG_ARGS = [
 ];
 
 /** GUI-launched terminals often lack Homebrew on PATH, so absolute locations are probed first. */
-function findBinary(
-  bin: string,
-  path = process.env.PATH ?? "",
-): string | undefined {
+function findBinary(bin: string): string | undefined {
   const dirs = [
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
-    ...path.split(":").filter(Boolean),
+    ...(process.env.PATH ?? "").split(":").filter(Boolean),
   ];
   return dirs.map((d) => `${d}/${bin}`).find((p) => existsSync(p));
 }

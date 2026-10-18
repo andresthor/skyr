@@ -8,7 +8,7 @@ import { renderStatus, type VoiceSnapshot } from "./indicator.js";
 import type { Paint } from "./palette.js";
 
 /** The status key the presenter claims in pi's footer; unrelated extensions stay unnamed. */
-export const VOICE_STATUS_KEY = "voice";
+export const VOICE_STATUS_KEY = "skyr.voice";
 
 /** The narrowest shape of the host's status surface the presenter needs. */
 interface StatusUI {

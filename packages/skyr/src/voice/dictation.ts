@@ -30,6 +30,7 @@ import {
   noSpeech,
   noWords,
   type VoiceError,
+  wordsKept,
 } from "./errors.js";
 import { dbfs, FULL_SCALE, micSource } from "./mic.js";
 
@@ -385,7 +386,7 @@ export class DictationController {
     this.end(d);
     // settled before the sink runs: a broken editor must not strand a live dictation,
     // and a throw here would exit Pi, because fail is also called from timers
-    this.message = kept(d) ? `${err.message} · words kept` : err.message;
+    this.message = kept(d) ? wordsKept(err.message) : err.message;
     this.held("error", this.timing.errorHoldMs);
     // guarded one by one: the error line is already up, and a throw here would
     // exit Pi, because fail is also called from timers

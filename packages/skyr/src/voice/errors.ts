@@ -9,6 +9,9 @@ import { basename } from "node:path";
 import { clip, errnoOf, oneLine } from "../tools/render.js";
 import type { CredentialResult, SttCredentials } from "./credentials.js";
 
+/** The error line when words the user watched appear were kept: cause plus outcome. */
+export const wordsKept = (message: string) => `${message} · words kept`;
+
 export class VoiceError extends Error {
   constructor(message: string) {
     super(message);

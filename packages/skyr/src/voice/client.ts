@@ -80,17 +80,30 @@ export async function getSttToken(
     throw new VoiceError("auth", "credentials rejected");
   if (!res.ok)
     throw new VoiceError("network", `Corti auth unavailable (${res.status})`);
-  const body = (await res.json()) as {
-    access_token: string;
-    expires_in: number;
-  };
+  const body: unknown = await res.json().catch(() => undefined);
+  const { access_token: token, expires_in: expiresIn } =
+    typeof body === "object" && body !== null
+      ? (body as Record<string, unknown>)
+      : {};
+  if (typeof token !== "string" || typeof expiresIn !== "number")
+    throw new VoiceError("network", "Corti sign-in sent an unreadable answer");
   // a token only has to be valid at connect time; the margin keeps a session from starting on a dying one
-  cached = {
-    key,
-    token: body.access_token,
-    exp: Date.now() + (body.expires_in - 60) * 1000,
+  cached = { key, token, exp: Date.now() + (expiresIn - 60) * 1000 };
+  return token;
+}
+
+/** A transcript frame's data, or undefined when it is not shaped as Corti documents it. */
+function transcriptData(
+  data: unknown,
+): { text: string; start: number; isFinal: boolean } | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const d = data as Record<string, unknown>;
+  if (typeof d.text !== "string") return undefined;
+  return {
+    text: d.text,
+    start: typeof d.start === "number" ? d.start : 0,
+    isFinal: d.isFinal === true,
   };
-  return body.access_token;
 }
 
 /** Token fetch is the slowest step of arming; do it early when voice is likely. */
@@ -122,9 +135,21 @@ export function startSession(o: SessionOptions): SttSession {
   };
   const fail = (err: VoiceError) => {
     if (closed) return;
-    if (!stopping) o.onError(err);
     teardown();
+    if (!stopping) o.onError(err);
   };
+  // socket and stream events run outside Pi's handlers, where a throw is an uncaughtException and Pi exits
+  const guard =
+    <A extends unknown[]>(fn: (...a: A) => void) =>
+    (...a: A) => {
+      try {
+        fn(...a);
+      } catch {
+        try {
+          fail(new VoiceError("network", "internal error"));
+        } catch {} // the session is already torn down; one report is all a broken listener gets
+      }
+    };
   const pump = () => {
     while (
       accepted &&
@@ -150,22 +175,28 @@ export function startSession(o: SessionOptions): SttSession {
     );
     return { stop: () => done, cancel: () => {} };
   }
-  audio.on("error", (e) =>
-    fail(
-      e instanceof VoiceError
-        ? e
-        : new VoiceError("mic", "no microphone found"),
+  audio.on(
+    "error",
+    guard((e: unknown) =>
+      fail(
+        e instanceof VoiceError
+          ? e
+          : new VoiceError("mic", "no microphone found"),
+      ),
     ),
   );
-  audio.on("data", (d: Buffer) => {
-    if (closed || stopping) return;
-    o.onLevel?.(pcmRms(d));
-    pending = Buffer.concat([pending, d]);
-    pump();
-  });
+  audio.on(
+    "data",
+    guard((d: Buffer) => {
+      if (closed || stopping) return;
+      o.onLevel?.(pcmRms(d));
+      pending = Buffer.concat([pending, d]);
+      pump();
+    }),
+  );
 
-  getSttToken(o.creds, o.fetch).then(
-    (token) => {
+  getSttToken(o.creds, o.fetch)
+    .then((token) => {
       if (closed) return;
       const q = new URLSearchParams({
         "tenant-name": o.creds.tenant,
@@ -197,31 +228,30 @@ export function startSession(o: SessionOptions): SttSession {
             },
           }),
         );
-      ws.onmessage = (ev) => {
+      ws.onmessage = guard((ev: MessageEvent) => {
         if (closed || typeof ev.data !== "string") return;
-        let m: {
-          type?: string;
-          reason?: string;
-          data?: { text?: string; start?: number; isFinal?: boolean };
-        };
+        let frame: unknown;
         try {
-          m = JSON.parse(ev.data);
+          frame = JSON.parse(ev.data);
         } catch {
-          return;
+          return; // a frame that is not JSON is not protocol
         }
+        if (typeof frame !== "object" || frame === null) return;
+        const m = frame as Record<string, unknown>;
         if (m.type === "CONFIG_ACCEPTED") {
           accepted = true;
           o.onReady?.();
           pump();
-        } else if (m.type?.startsWith("CONFIG_")) {
+        } else if (typeof m.type === "string" && m.type.startsWith("CONFIG_")) {
           // after CONFIG_DENIED the server holds the socket open until its 10 s timeout
           fail(new VoiceError("config", "Corti rejected the session"));
-        } else if (m.type === "transcript" && m.data) {
+        } else if (m.type === "transcript") {
+          const data = transcriptData(m.data);
+          if (!data) return;
           const u = transcript.accept({
+            ...data,
             // server text reaches the screen and the prompt: whole terminal sequences and invisibles go here
-            text: stripInvisible(stripTerminalSequences(m.data.text ?? "")),
-            start: m.data.start ?? 0,
-            isFinal: m.data.isFinal === true,
+            text: stripInvisible(stripTerminalSequences(data.text)),
           });
           if (u.kind === "final") o.onFinal(u.segment);
           else if (u.kind === "interim") o.onInterim(u.segment);
@@ -231,21 +261,24 @@ export function startSession(o: SessionOptions): SttSession {
           ended = true;
           teardown();
         }
-      };
+      });
       // the server drops TCP (1006) right after "ended"; that close is success
-      ws.onclose = () =>
+      ws.onclose = guard(() =>
         ended || stopping
           ? teardown()
-          : fail(new VoiceError("network", "connection lost"));
+          : fail(new VoiceError("network", "connection lost")),
+      );
       ws.onerror = () => {};
-    },
-    (e) =>
-      fail(
-        e instanceof VoiceError
-          ? e
-          : new VoiceError("network", "can't reach Corti"),
+    })
+    .catch(
+      guard((e: unknown) =>
+        fail(
+          e instanceof VoiceError
+            ? e
+            : new VoiceError("network", "can't reach Corti"),
+        ),
       ),
-  );
+    );
 
   return {
     stop() {

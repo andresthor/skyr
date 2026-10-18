@@ -318,3 +318,55 @@ test("a premature close is a network failure", async () => {
   );
   await expect(h.session.stop()).resolves.toBe("");
 });
+
+test("frames not shaped as Corti documents them are ignored, and the session carries on", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  for (const frame of [
+    "null",
+    "[]",
+    "7",
+    { type: 1 },
+    { type: "transcript" },
+    { type: "transcript", data: { text: 5, start: 0, isFinal: true } },
+  ])
+    expect(() => h.sock.server(frame)).not.toThrow();
+  h.sock.server({
+    type: "transcript",
+    data: { text: "still here", start: 0, isFinal: true },
+  });
+  expect(h.final).toHaveBeenCalledWith("still here");
+  expect(h.onError).not.toHaveBeenCalled();
+  h.session.cancel();
+});
+
+test("a listener that throws ends the session with an error instead of escaping to Pi", async () => {
+  const h = await drive({
+    onFinal: () => {
+      throw new Error("editor broke");
+    },
+  });
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  expect(() =>
+    h.sock.server({
+      type: "transcript",
+      data: { text: "boom", start: 0, isFinal: true },
+    }),
+  ).not.toThrow();
+  expect(h.onError).toHaveBeenCalledTimes(1);
+  expect(h.onError).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "internal error" }),
+  );
+});
+
+test("a sign-in answer without a usable token fails as unreadable, never as a socket with no token", async () => {
+  for (const body of ["{}", '{"access_token":7}', "not json"])
+    await expect(
+      getSttToken(
+        creds(),
+        (async () => new Response(body)) as unknown as typeof fetch,
+      ),
+    ).rejects.toThrow("Corti sign-in sent an unreadable answer");
+});

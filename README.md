@@ -8,7 +8,7 @@ as a Pi package.
 
 ## Install
 
-Needs Pi 0.99.2 or later. From a checkout:
+Needs Pi 1.3.0 or later. From a checkout:
 
 ```sh
 pi install /path/to/skyr/packages/skyr    # every `pi` loads it from then on
@@ -35,13 +35,17 @@ cursor as plain text, with the interim ones following the cursor as ghost text. 
 puts the editor back the way it was, Enter stops without sending (the next Enter sends), so text
 is never auto-sent. Quiet only asks the server for the pending final early — it never ends a
 dictation. Without `CORTI_*` credentials, `/voice` says so in one line and does nothing else.
+`/voice on` and `/voice off` spell the toggle out; any other argument is refused with the
+valid forms.
 
 While voice is on, the editor's bottom rule shows it: a level meter that rises only for speech,
 `●` while the mic records (`○` before the first audio and after it closes), the state
 (`starting`, `listening`, `finishing`), and the keys that apply right now. Esc and ctrl+c both
 discard; if they reverted words already committed, the rule offers `ctrl+-` to undo that for two
-seconds or until the next key. The footer shows the same marks only while a card or another extension's editor hides
-the voice editor. Under `NO_COLOR` the marks stay and lose their colour; `TERM=dumb` gets ASCII.
+seconds or until the next key. The footer shows the same marks only while the voice editor
+cannot carry its rule — a card has the keyboard, another extension owns the editor, or the
+rule drawing failed. Under `NO_COLOR` the marks stay and lose their colour; `TERM=dumb` gets
+ASCII.
 
 Credentials, like every other secret here, come from the environment:
 
@@ -67,8 +71,8 @@ Behaviour knobs live in `<agentDir>/skyr.json` under the `voice` key:
 ```
 
 `keyterms` and `replacements` are appended to the built-in coding vocabulary; edits apply on the
-next session. A malformed section degrades to the defaults and is said once at startup, never a
-startup failure. Term caps are Corti's: 50 chars / 5 words per keyterm, 100 chars / 10 words per
+next session. A malformed section degrades to the defaults and is reported once per session,
+never a startup failure. Term caps are Corti's: 50 chars / 5 words per keyterm, 100 chars / 10 words per
 replacement, 1,000 per connection.
 
 ## Subagents

@@ -1,8 +1,10 @@
-// No test may see the real home, agent dir, credentials or network. Plain assignments, not
-// vi.stubEnv/stubGlobal: tests that call vi.unstubAll* would otherwise restore the real ones.
+// No test may see the real home, agent dir, credentials, network or microphone. Plain
+// assignments, not vi.stubEnv/stubGlobal: tests that call vi.unstubAll* would otherwise restore
+// the real ones.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, vi } from "vitest";
 
 const SECRET_ENV =
   /_(API_KEY|TOKEN)$|^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|PROFILE)$|^GOOGLE_(APPLICATION_CREDENTIALS|CLOUD_PROJECT)$|^AZURE_|^CORTI_/;
@@ -23,3 +25,32 @@ globalThis.fetch = async (input) => {
   const url = input instanceof Request ? input.url : String(input);
   throw new Error(`test reached the network: ${url}`);
 };
+
+// rec or ffmpeg outside the temp dir is a real recorder, so the real microphone. Its spawn
+// throws, and the test fails afterwards too, since the voice client rewords a throwing source.
+const reachedMic = vi.hoisted((): string[] => []);
+vi.mock("node:child_process", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:child_process")>();
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const spawn = new Proxy(real.spawn, {
+    apply(target, thisArg, args) {
+      const cmd = String(args[0]);
+      const name = path.basename(cmd);
+      if (
+        (name === "rec" || name === "ffmpeg") &&
+        !cmd.startsWith(os.tmpdir())
+      ) {
+        reachedMic.push(cmd);
+        throw new Error(`test reached the microphone: ${cmd}`);
+      }
+      return Reflect.apply(target, thisArg, args);
+    },
+  });
+  return { ...real, spawn, default: { ...real, spawn } };
+});
+afterEach(() => {
+  const reached = reachedMic.splice(0);
+  if (reached.length)
+    throw new Error(`test reached the microphone: ${reached.join(", ")}`);
+});

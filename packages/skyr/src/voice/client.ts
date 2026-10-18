@@ -10,7 +10,6 @@ import { stripInvisible } from "../tools/render.js";
 import type { SttCredentials } from "./credentials.js";
 import { VoiceError } from "./errors.js";
 import { pcmRms } from "./mic.js";
-import { TranscriptAssembler } from "./transcript.js";
 
 const PCM =
   "audio/pcm; rate=16000; channels=1; bits=16; endian=little; encoding=sint";
@@ -137,7 +136,6 @@ export function prewarmToken(creds: SttCredentials, deps?: TokenDeps): void {
 /** Opens the mic and a Corti session. No callback in `o` runs before this returns. */
 export function startSession(o: SessionOptions): SttSession {
   const Socket = o.WebSocket ?? WebSocket;
-  const transcript = new TranscriptAssembler();
   let ws: WebSocket | undefined;
   let audio: Readable | undefined;
   let pending = Buffer.alloc(0);
@@ -147,6 +145,10 @@ export function startSession(o: SessionOptions): SttSession {
   let closed = false;
   let resolveStop!: () => void;
   const done = new Promise<void>((r) => (resolveStop = r));
+  // Interims are cumulative within a segment and replace each other; finals are per segment
+  // and append. The server re-sends the last interim right after its final, so a re-sent
+  // interim — one that does not start past the last final — is dropped.
+  let lastFinalStart = Number.NEGATIVE_INFINITY;
 
   const teardown = () => {
     if (closed) return;
@@ -269,13 +271,14 @@ export function startSession(o: SessionOptions): SttSession {
         } else if (m.type === "transcript") {
           const data = transcriptData(m.data);
           if (!data) return;
-          const u = transcript.accept({
-            ...data,
-            // server text reaches the screen and the prompt: whole terminal sequences and invisibles go here
-            text: stripInvisible(stripTerminalSequences(data.text)),
-          });
-          if (u.kind === "final") o.onFinal(u.segment);
-          else if (u.kind === "interim") o.onInterim(u.segment);
+          // server text reaches the screen and the prompt: whole terminal sequences and invisibles go here
+          const text = stripInvisible(stripTerminalSequences(data.text)).trim();
+          if (data.isFinal) {
+            lastFinalStart = data.start;
+            if (text) o.onFinal(text);
+          } else if (data.start > lastFinalStart) {
+            o.onInterim(text);
+          }
         } else if (m.type === "error") {
           fail(new VoiceError("Corti transcription error"));
         } else if (m.type === "ended") {

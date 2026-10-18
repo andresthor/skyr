@@ -79,8 +79,15 @@ async function probeProcRunner(): Promise<boolean> {
     );
     if (code !== 0) return false;
     const raw = await readFile(join(dir, "result.json"), "utf8");
-    const parsed = JSON.parse(raw) as { v?: number; status?: string };
-    return parsed.v === 1 && parsed.status === "done";
+    const parsed: unknown = JSON.parse(raw);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "v" in parsed &&
+      parsed.v === 1 &&
+      "status" in parsed &&
+      parsed.status === "done"
+    );
   } catch {
     return false;
   } finally {

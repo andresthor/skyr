@@ -134,7 +134,7 @@ test("toggle arms, the session's acceptance listens, a stop keeps the words stil
   expect(h.states).not.toContain("error");
 });
 
-test("flushMs of quiet asks the session for the pending final early; ongoing speech keeps postponing it", async () => {
+test("a pause asks Corti for the pending final early; continuous speech never does", async () => {
   const h = harness();
   h.controller.toggle();
   h.opts().onReady?.();
@@ -165,14 +165,17 @@ test("a stop after one final commits it once and ends without an error", async (
   expect(h.states).not.toContain("error");
 });
 
-test("a stop before any speech or text ends quietly: changing your mind is not an error", () => {
+test("a stop before anything was heard ends quietly: changing your mind is not an error", () => {
   const h = harness();
   h.controller.toggle();
   h.controller.toggle();
   expect(h.controller.state).toBe("idle");
   expect(h.states).not.toContain("error");
   expect(h.sessions[0]?.canceled).toBe(true);
-  // the same after the session was accepted, from Enter's stop
+});
+
+test("Enter's stop after acceptance, still before anything was heard, ends quietly too", () => {
+  const h = harness();
   h.controller.toggle();
   h.opts().onReady?.();
   h.controller.finish();
@@ -206,8 +209,10 @@ test("a failure keeps the words on screen and says so", () => {
   );
   // the interim the user watched appear is committed, not dropped
   expect(h.events).toContainEqual({ op: "final", arg: "and the second" });
-  // a failure before any words says only what went wrong
-  h.controller.dismiss();
+});
+
+test("a failure before any words says only what went wrong", () => {
+  const h = harness();
   h.controller.toggle();
   h.opts().onError?.(new VoiceError("connection to Corti lost"));
   expect(h.controller.facts().message).toBe("connection to Corti lost");
@@ -292,7 +297,7 @@ test("Esc cancels on the spot, puts the buffer back, and late session callbacks 
   expect(h.events).toHaveLength(since);
 });
 
-test("silence from a blocked microphone surfaces as the mic error after ~24 zero chunks", async () => {
+test("a mic that delivers only digital silence is reported as blocked in privacy settings", async () => {
   const h = harness();
   h.controller.toggle();
   for (let i = 0; i < 24; i++) h.opts().onLevel?.(0);

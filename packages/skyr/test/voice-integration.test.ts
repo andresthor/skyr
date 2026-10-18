@@ -210,31 +210,31 @@ test("during dictation the rule rides our focused editor, and discarding committ
   expect(ed.decor.rule?.discarded).toBe(false);
 });
 
+const TAIL_MS = 400;
+
+/** A TUI session with our editor mounted and focused, on fake timers. */
+async function mounted() {
+  withCreds();
+  agentDirWith();
+  const rec = recording();
+  const pi = registeredVoice({
+    mode: "ascii",
+    controller: { start: rec.start, timing: { tailMs: TAIL_MS } },
+  });
+  const ctx = voiceCtx();
+  await pi.handlers.get("session_start")!(null, ctx);
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const ed = mountedEditor(ctx.ui);
+  const submitted = vi.fn();
+  const escaped = vi.fn();
+  ed.onSubmit = submitted;
+  ed.onEscape = escaped;
+  const toggle = () => pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+  return { ...rec, pi, ctx, ed, submitted, escaped, toggle };
+}
+
 describe("keys through the voice editor, with Pi's real bindings", () => {
-  const TAIL_MS = 400;
-
-  /** A TUI session with our editor mounted and focused, on fake timers. */
-  async function mounted() {
-    withCreds();
-    agentDirWith();
-    const rec = recording();
-    const pi = registeredVoice({
-      mode: "ascii",
-      controller: { start: rec.start, timing: { tailMs: TAIL_MS } },
-    });
-    const ctx = voiceCtx();
-    await pi.handlers.get("session_start")!(null, ctx);
-    vi.useFakeTimers();
-    onTestFinished(() => void vi.useRealTimers());
-    const ed = mountedEditor(ctx.ui);
-    const submitted = vi.fn();
-    const escaped = vi.fn();
-    ed.onSubmit = submitted;
-    ed.onEscape = escaped;
-    const toggle = () => pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
-    return { ...rec, ctx, ed, submitted, escaped, toggle };
-  }
-
   test("Enter during dictation stops it and is swallowed, so the half-heard prompt is never sent", async () => {
     const h = await mounted();
     await h.toggle();
@@ -287,4 +287,20 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
       "warning",
     );
   });
+});
+
+test("session_shutdown, even twice, cancels the dictation once, clears the footer and leaves no timer", async () => {
+  const h = await mounted();
+  await h.toggle();
+  h.starts[0]!.onReady?.();
+  // a card hides our editor, so the footer is carrying voice when the session ends
+  h.ed.focused = false;
+  await vi.advanceTimersByTimeAsync(100);
+  expect(h.ctx.ui.setStatus.mock.calls.at(-1)?.[1]).toBeDefined();
+  const shutdown = h.pi.handlers.get("session_shutdown")!;
+  await shutdown(null, h.ctx);
+  await shutdown(null, h.ctx);
+  expect(h.ends[0]).toEqual({ stopped: 0, cancelled: 1 });
+  expect(h.ctx.ui.setStatus.mock.calls.at(-1)).toEqual(["voice", undefined]);
+  expect(vi.getTimerCount()).toBe(0);
 });

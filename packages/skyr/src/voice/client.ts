@@ -89,10 +89,9 @@ function signInUnreachable(error: unknown): VoiceError {
   );
 }
 
-/** Seam for tests: global fetch offline, and a deadline a test can shorten. */
+/** Seam for tests: global fetch offline. */
 export interface TokenDeps {
   fetch?: typeof fetch;
-  timeoutMs?: number;
 }
 
 /**
@@ -104,53 +103,63 @@ export interface TokenDeps {
  */
 export async function getSttToken(
   creds: SttCredentials,
-  { fetch: doFetch = fetch, timeoutMs = TOKEN_TIMEOUT_MS }: TokenDeps = {},
+  { fetch: doFetch = fetch }: TokenDeps = {},
 ): Promise<string> {
   const key = `${creds.environment}\0${creds.tenant}\0${creds.clientId}`;
   if (cached?.key === key && Date.now() < cached.exp) return cached.token;
   const url = `https://auth.${creds.environment}.corti.app/realms/${encodeURIComponent(creds.tenant)}/protocol/openid-connect/token`;
-  let res: Response;
+  const deadline = new AbortController();
+  // a timer, not AbortSignal.timeout: one clock for voice's deadlines; cleared in finally, so
+  // the body read stays inside it
+  const timer = setTimeout(() => deadline.abort(), TOKEN_TIMEOUT_MS);
+  timer.unref();
   try {
-    res = await doFetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: creds.clientId,
-        client_secret: creds.clientSecret,
-        scope: "openid transcribe",
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (error) {
-    // AbortSignal.timeout rejects as a TimeoutError; every other failure is a reachability one
-    throw error instanceof Error && error.name === "TimeoutError"
-      ? new VoiceError(`Corti sign-in didn't answer in ${timeoutMs / 1000} s`)
-      : signInUnreachable(error);
+    let res: Response;
+    try {
+      res = await doFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: creds.clientId,
+          client_secret: creds.clientSecret,
+          scope: "openid transcribe",
+        }),
+        signal: deadline.signal,
+      });
+    } catch (error) {
+      throw deadline.signal.aborted
+        ? new VoiceError(
+            `Corti sign-in didn't answer in ${TOKEN_TIMEOUT_MS / 1000} s`,
+          )
+        : signInUnreachable(error);
+    }
+    if (res.status === 400 || res.status === 401 || res.status === 403)
+      throw new VoiceError(
+        "Corti refused the client · check CORTI_CLIENT_ID and CORTI_CLIENT_SECRET",
+      );
+    // Keycloak answers an unknown realm with 404, so a tenant typo reads as one
+    if (res.status === 404)
+      throw new VoiceError("unknown Corti tenant · check CORTI_TENANT_NAME");
+    if (!res.ok)
+      throw new VoiceError(`Corti sign-in failed (HTTP ${res.status})`);
+    const body: unknown = await res.json().catch(() => undefined);
+    const { access_token: token, expires_in: expiresIn } =
+      typeof body === "object" && body !== null
+        ? (body as Record<string, unknown>)
+        : {};
+    if (typeof token !== "string" || typeof expiresIn !== "number")
+      throw new VoiceError("Corti sign-in sent an unreadable answer");
+    // a token only has to be valid at connect time
+    cached = {
+      key,
+      token,
+      exp: Date.now() + (expiresIn - TOKEN_MARGIN_S) * 1000,
+    };
+    return token;
+  } finally {
+    clearTimeout(timer);
   }
-  if (res.status === 400 || res.status === 401 || res.status === 403)
-    throw new VoiceError(
-      "Corti refused the client · check CORTI_CLIENT_ID and CORTI_CLIENT_SECRET",
-    );
-  // Keycloak answers an unknown realm with 404, so a tenant typo reads as one
-  if (res.status === 404)
-    throw new VoiceError("unknown Corti tenant · check CORTI_TENANT_NAME");
-  if (!res.ok)
-    throw new VoiceError(`Corti sign-in failed (HTTP ${res.status})`);
-  const body: unknown = await res.json().catch(() => undefined);
-  const { access_token: token, expires_in: expiresIn } =
-    typeof body === "object" && body !== null
-      ? (body as Record<string, unknown>)
-      : {};
-  if (typeof token !== "string" || typeof expiresIn !== "number")
-    throw new VoiceError("Corti sign-in sent an unreadable answer");
-  // a token only has to be valid at connect time
-  cached = {
-    key,
-    token,
-    exp: Date.now() + (expiresIn - TOKEN_MARGIN_S) * 1000,
-  };
-  return token;
 }
 
 /** A transcript frame's data, or undefined when it is not shaped as Corti documents it. */

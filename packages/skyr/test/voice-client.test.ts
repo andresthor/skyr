@@ -1,11 +1,19 @@
 /**
  * The Corti streaming client, driven only through the seams `SessionOptions` exposes: a fake
  * `fetch` (token + cache) and a fake `WebSocket` (config, transcripts, closes). Real network
- * and real auth stay out of the test. The token cache is module state, so every test's
- * credentials get a fresh env\0tenant\0clientId key.
+ * and real auth stay out of the test. The token cache is module state, so `creds()` gives each
+ * session an identity no earlier test has cached. Timers are fake, and a wait settles the
+ * promises in flight rather than letting wall-clock time pass.
  */
 import { PassThrough } from "node:stream";
-import { expect, onTestFinished, test, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  expect,
+  onTestFinished,
+  test,
+  vi,
+} from "vitest";
 import {
   getSttToken,
   type SessionOptions,
@@ -19,7 +27,16 @@ import { DEFAULT_TIMING } from "../src/voice/dictation.js";
 import { VoiceError } from "../src/voice/errors.js";
 import { CREDS } from "./voice.js";
 
-const tick = () => new Promise((r) => setTimeout(r, 0));
+/** Settles pending promise chains: queued from a continuation, a nextTick runs only once the microtask queue is empty. */
+const settled = () => new Promise<void>((r) => process.nextTick(r));
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 class FakeSocket {
   /** Node's global WebSocket exposes these as statics; startSession reads `Socket.OPEN`. */
@@ -107,7 +124,7 @@ interface Drive {
   sock: FakeSocket;
 }
 
-/** Starts a session with every fake injected; the socket exists after two microtask ticks. */
+/** Starts a session with every fake injected; the socket exists once the sign-in has settled. */
 async function drive(o: Partial<SessionOptions> = {}): Promise<Drive> {
   const before = sockets().length;
   const source = new PassThrough();
@@ -128,8 +145,7 @@ async function drive(o: Partial<SessionOptions> = {}): Promise<Drive> {
     ...o,
   });
   onTestFinished(() => void source.destroy());
-  await tick();
-  await tick();
+  await settled();
   const sock = sockets()[before]!;
   return { session, source, onError, final, interim, sock };
 }
@@ -239,7 +255,7 @@ test("a plain recorder failure reads as microphone unavailable", async () => {
     fetch: tokenFetch([], "tok", 3600),
     WebSocket: SocketMaker,
   });
-  await tick();
+  await settled();
   expect(onError).toHaveBeenCalledWith(
     expect.objectContaining({ message: "microphone unavailable" }),
   );
@@ -254,9 +270,7 @@ test("no audio leaves before Corti accepts the config; after, it goes in 8,000 B
   // 8,000 out of 12,000; the rest waits for a whole chunk
   expect(h.sock.audio().map((f) => f.length)).toEqual([8_000]);
   writePcm(h.source, 4_000);
-  await vi.waitFor(() =>
-    expect(h.sock.audio().map((f) => f.length)).toEqual([8_000, 8_000]),
-  );
+  expect(h.sock.audio().map((f) => f.length)).toEqual([8_000, 8_000]);
   h.session.cancel();
 });
 
@@ -415,10 +429,8 @@ test("a premature close is a network failure", async () => {
   h.sock.server({ type: "CONFIG_ACCEPTED" });
   h.sock.readyState = 3;
   h.sock.onclose?.();
-  await vi.waitFor(() =>
-    expect(h.onError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "connection to Corti lost" }),
-    ),
+  expect(h.onError).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "connection to Corti lost" }),
   );
   await expect(h.session.stop()).resolves.toBeUndefined();
 });
@@ -508,7 +520,7 @@ test("a recorder that fails to start, reported to an onError that throws, never 
     fetch: tokenFetch([], "tok", 3600),
     WebSocket: SocketMaker,
   });
-  await tick();
+  await settled();
   expect(escaped).toEqual([]);
   await expect(session.stop()).resolves.toBeUndefined();
 });
@@ -611,8 +623,6 @@ test("when Corti never sends ended, a stop still resolves after the end timeout,
     type: "transcript",
     data: { text: "kept words", start: 0, isFinal: true },
   });
-  vi.useFakeTimers();
-  onTestFinished(() => void vi.useRealTimers());
   let resolved = false;
   void h.session.stop().then(() => {
     resolved = true;
@@ -663,23 +673,33 @@ test("a recorder that fails with its own reason reports that reason", async () =
     fetch: tokenFetch([], "tok", 3600),
     WebSocket: SocketMaker,
   });
-  await tick();
+  await settled();
   expect(onError).toHaveBeenCalledTimes(1);
   expect(onError).toHaveBeenCalledWith(
     expect.objectContaining({ message: "sox not found · brew install sox" }),
   );
 });
 
-test("a hung sign-in times out by name, with the deadline it was given", async () => {
+test("a hung sign-in times out by name after 8 s", async () => {
+  // as fetch does, a hung request rejects with its signal's reason once that aborts
   const hung: typeof fetch = (_url, init) =>
     new Promise<never>((_resolve, reject) =>
       init?.signal?.addEventListener("abort", () =>
-        reject(new DOMException("The operation was aborted", "TimeoutError")),
+        reject(init.signal?.reason),
       ),
     );
-  await expect(
-    getSttToken(creds(), { fetch: hung, timeoutMs: 100 }),
-  ).rejects.toThrow("Corti sign-in didn't answer in 0.1 s");
+  let failure: unknown;
+  getSttToken(creds(), { fetch: hung }).catch((error: unknown) => {
+    failure = error;
+  });
+  await vi.advanceTimersByTimeAsync(7_999);
+  expect(failure).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(failure).toEqual(
+    expect.objectContaining({
+      message: "Corti sign-in didn't answer in 8 s",
+    }),
+  );
 });
 
 test("the sign-in deadline is shorter than the arm window, so a dead auth is named first", () => {

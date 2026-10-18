@@ -18,10 +18,18 @@ import {
   spliceGhost,
   stripAnsi,
 } from "../src/voice/ghost.js";
-import { FALLBACK_PALETTE, paletteFromTheme } from "../src/voice/palette.js";
+import {
+  FALLBACK_PALETTE,
+  paintFor,
+  paletteFromTheme,
+  type VoiceMode,
+} from "../src/voice/palette.js";
 import { editorRows } from "./voice.js";
 
 const T = FALLBACK_PALETTE;
+/** The fallback paint in a given mode, as the old `palette`/`mode` pair read. */
+const paint = (mode: VoiceMode = "color", palette = FALLBACK_PALETTE) =>
+  paintFor(palette, mode);
 
 /** [top rule, ...text rows, bottom rule], as Pi's editor renders it around the plain text. */
 const editorBase = (
@@ -39,7 +47,7 @@ test("the ghost lands right after the cursor cell, on the cursor's own row", () 
     width: 40,
     paddingX: 2,
     ghost: "world",
-    palette: T,
+    paint: paint(),
   });
   expect(lines).toHaveLength(3);
   const row = lines[1] ?? "";
@@ -57,7 +65,7 @@ test("a ghost too wide for the cursor row wraps below it and never passes the bo
     width,
     paddingX,
     ghost: "one two three four five",
-    palette: T,
+    paint: paint(),
   });
   const botRule = lines.length - 1;
   expect(botRule).toBeGreaterThan(2);
@@ -81,7 +89,7 @@ test("a cursor row with room only in the padding still keeps every row within wi
     width,
     paddingX,
     ghost,
-    palette: T,
+    paint: paint(),
   });
   for (const row of lines) {
     expect(visibleWidth(row)).toBeLessThanOrEqual(width);
@@ -98,7 +106,7 @@ test("escape bytes in the ghost text never reach any rendered row", () => {
     width: 30,
     paddingX: 1,
     ghost,
-    palette: T,
+    paint: paint(),
   });
   const all = lines.join("\n");
   expect(all).not.toContain("\x1b[31m");
@@ -111,7 +119,7 @@ test("a newline or tab in the ghost never reaches a row: the ghost is one displa
   const lines = spliceGhost(editorBase("x", 30), {
     width: 30,
     ghost: "first line\nsecond\tthird",
-    palette: T,
+    paint: paint(),
   });
   for (const line of lines) {
     expect(line).not.toMatch(/[\n\t]/);
@@ -122,27 +130,27 @@ test("a newline or tab in the ghost never reaches a row: the ghost is one displa
 
 test("an editor without the cursor cell draws no ghost and no wet colouring", () => {
   const base = editorBase("hello", 20, { focused: false });
-  expect(spliceGhost(base, { width: 20, ghost: "ghost", palette: T })).toEqual(
-    base,
-  );
+  expect(
+    spliceGhost(base, { width: 20, ghost: "ghost", paint: paint() }),
+  ).toEqual(base);
   expect(
     spliceGhost(base, {
       width: 20,
       ghost: "ghost",
       drying: [{ chars: 2, lead: 0, age: 10 }],
-      palette: T,
+      paint: paint(),
     }),
   ).toEqual(base);
 });
 
 test("an idle buffer is returned exactly, and the rules stay Pi's: the ghost never recolours them", () => {
   const base = editorBase("hello", 20);
-  expect(spliceGhost(base, { width: 20, palette: T })).toEqual(base);
+  expect(spliceGhost(base, { width: 20, paint: paint() })).toEqual(base);
   const decorated = spliceGhost(base, {
     width: 20,
     ghost: "more",
     drying: [{ chars: 3, lead: 0, age: 10 }],
-    palette: T,
+    paint: paint(),
   });
   expect(decorated[0]).toBe(base[0]);
   expect(decorated.at(-1)).toBe(base.at(-1));
@@ -150,7 +158,7 @@ test("an idle buffer is returned exactly, and the rules stay Pi's: the ghost nev
   const dried = spliceGhost(base, {
     width: 20,
     drying: [{ chars: 3, lead: 0, age: DRY_MS }],
-    palette: T,
+    paint: paint(),
   });
   expect(dried[1]).toBe(base[1]);
 });
@@ -160,7 +168,7 @@ test("a committed span is born brand-lime at the cursor and dries colourless aft
     width: 40,
     paddingX: 2,
     drying: [{ chars: 5, lead: 0, age: 0 }],
-    palette: T,
+    paint: paint(),
   });
   const row = wet[1] ?? "";
   // the accent token (#B8F818) at age 0
@@ -170,19 +178,18 @@ test("a committed span is born brand-lime at the cursor and dries colourless aft
     width: 40,
     paddingX: 2,
     drying: [{ chars: 5, lead: 0, age: DRY_MS }],
-    palette: T,
+    paint: paint(),
   });
   expect(dried[1]).toBe(`  hello${CURSOR_CELL}${" ".repeat(32)}`);
 });
 
 test("a 256-colour terminal gets 256-colour escapes from the theme, never 24-bit ones", () => {
-  const palette = { ...T, mode: "256color" as const };
   const lines = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
     width: 40,
     paddingX: 2,
     ghost: "world",
     drying: [{ chars: 5, lead: 0, age: 50 }],
-    palette,
+    paint: paint("color", { ...T, mode: "256color" }),
   });
   const all = lines.join("\n");
   expect(all).not.toContain("\x1b[38;2;");
@@ -195,8 +202,7 @@ test("NO_COLOR keeps the ghost as italic and faint text, with no colour anywhere
     paddingX: 2,
     ghost: "world",
     drying: [{ chars: 5, lead: 0, age: 50 }],
-    palette: T,
-    mode: "mono",
+    paint: paint("mono"),
   });
   const all = lines.join("\n");
   expect(all).not.toContain("\x1b[38;");
@@ -208,7 +214,7 @@ test("NO_COLOR keeps the ghost as italic and faint text, with no colour anywhere
       width: 40,
       paddingX: 2,
       ghost: "world",
-      mode: "ascii",
+      paint: paint("ascii"),
     }),
   ).toEqual(base);
 });
@@ -247,7 +253,7 @@ test("two finals landing 100 ms apart dry on their own clocks, and the space bet
         { chars: 3, lead: 1, age: 50 },
         { chars: 3, lead: 0, age: 150 },
       ],
-      palette: T,
+      paint: paint(),
     })[1] ?? "";
   const runs = runColours(row);
   expect(runs.map((r) => r.text)).toEqual(["one", "two"]);
@@ -270,7 +276,7 @@ test("a theme whose accent is close to its text still gets a visible flash, in t
     spliceGhost(editorBase("hello", 40), {
       width: 40,
       drying: [{ chars: 5, lead: 0, age: 0 }],
-      palette: sequoia,
+      paint: paint("color", sequoia),
     })[1] ?? "";
   const [r, g, b] = (runColours(row)[0]?.rgb ?? "").split(";").map(Number);
   const start = colorToOklch(rgbColor(r ?? 0, g ?? 0, b ?? 0));
@@ -291,16 +297,14 @@ test("under NO_COLOR a fresh commit is bold until it dries, with no colour", () 
   const wet = spliceGhost(editorBase("hello", 40), {
     width: 40,
     drying: [{ chars: 5, lead: 0, age: 100 }],
-    palette: T,
-    mode: "mono",
+    paint: paint("mono"),
   });
   expect(wet[1]).toContain("\x1b[1mhello\x1b[22m");
   expect(wet.join("")).not.toContain("\x1b[38;");
   const dry = spliceGhost(editorBase("hello", 40), {
     width: 40,
     drying: [{ chars: 5, lead: 0, age: DRY_MS }],
-    palette: T,
-    mode: "mono",
+    paint: paint("mono"),
   });
   expect(dry[1]).not.toContain("\x1b[1m");
 });
@@ -315,7 +319,7 @@ test("emoji with a variation selector never push a ghost or drying row past the 
         paddingX: 1,
         ghost: `${"▶️ ".repeat(12)}©️®️‼️ done`,
         drying: [{ chars: 4, lead: 1, age: 50 }],
-        palette: T,
+        paint: paint(),
       },
     );
     for (const row of lines)

@@ -15,13 +15,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { sanitize } from "../tools/render.js";
-import {
-  clamp01,
-  FALLBACK_PALETTE,
-  painter,
-  type VoiceMode,
-  type VoicePalette,
-} from "./palette.js";
+import { clamp01, FALLBACK_PALETTE, type Paint, paintFor } from "./palette.js";
 
 export const DRY_MS = 300;
 
@@ -126,9 +120,7 @@ interface GhostInput {
   drying?: readonly DryingSpan[];
   /** Rows the editor drew under its bottom rule (the autocomplete list). */
   below?: number;
-  palette?: VoicePalette;
-  /** `ascii` draws no decoration at all; `mono` keeps the ghost as italic and faint text. */
-  mode?: VoiceMode;
+  paint?: Paint;
 }
 
 /**
@@ -145,14 +137,13 @@ export function spliceGhost(
     ghost = "",
     drying = [],
     below = 0,
-    palette = FALLBACK_PALETTE,
-    mode = "color",
+    paint = paintFor(FALLBACK_PALETTE, "color"),
   }: GhostInput,
 ): string[] {
   const out = lines.slice();
-  if (mode === "ascii") return out;
-  const T = palette.colors;
-  const fg = painter(palette, mode);
+  // `ascii` (TERM=dumb) draws no decoration at all; `mono` keeps the ghost as italic faint text
+  if (paint.ascii) return out;
+  const { colors: T, colour, fg } = paint;
   const topRule = 0;
   const botRule = out.length - 1 - below;
   if (botRule <= topRule) return out;
@@ -184,7 +175,7 @@ export function spliceGhost(
     const reach = wet.reduce((n, s) => n + s.chars + s.lead, 0);
     // NO_COLOR has no colour to fade, so the span is bold until it dries
     const style = (c: Color, s: string) =>
-      mode === "color" ? fg(c, s) : `\x1b[1m${s}\x1b[22m`;
+      colour ? fg(c, s) : `\x1b[1m${s}\x1b[22m`;
     // paints `text` from its end leftwards; `d0` is its last character's distance from the cursor
     const paintTail = (text: string, d0: number): string => {
       let tail = "";

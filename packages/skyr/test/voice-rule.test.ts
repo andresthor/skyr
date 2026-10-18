@@ -12,12 +12,19 @@ import {
   renderRule,
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
-import { FALLBACK_PALETTE, type VoiceMode } from "../src/voice/palette.js";
+import {
+  FALLBACK_PALETTE,
+  paintFor,
+  type VoiceMode,
+} from "../src/voice/palette.js";
 import { HINT_KEYS, snap } from "./voice.js";
 
 const rule = (s: string) => s;
 const atDb = (db: number) => meterUnit(10 ** (db / 20));
 const SILENCE = Array.from({ length: 8 }, () => atDb(-58));
+/** The fallback paint in a given mode, as the old `palette`/`mode` pair read. */
+const paint = (mode: VoiceMode = "color", palette = FALLBACK_PALETTE) =>
+  paintFor(palette, mode);
 const draw = (
   s: Partial<VoiceSnapshot>,
   o: { width?: number; mode?: VoiceMode; hiddenBelow?: number } = {},
@@ -26,7 +33,7 @@ const draw = (
     width: o.width ?? 72,
     rule,
     keys: HINT_KEYS,
-    mode: o.mode,
+    paint: paint(o.mode),
     hiddenBelow: o.hiddenBelow,
   });
 const plain = (s: Partial<VoiceSnapshot>, o = {}) =>
@@ -211,7 +218,7 @@ test("TERM=dumb marks are ASCII; NO_COLOR keeps the glyphs without colour; 256-c
     width: 72,
     rule,
     keys: HINT_KEYS,
-    palette: { ...FALLBACK_PALETTE, mode: "256color" },
+    paint: paint("color", { ...FALLBACK_PALETTE, mode: "256color" }),
   })!;
   expect(indexed).not.toContain("\x1b[38;2;");
 });

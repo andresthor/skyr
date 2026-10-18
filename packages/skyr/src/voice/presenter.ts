@@ -5,7 +5,7 @@
  * is not (another extension owns the editor, or a card hides it).
  */
 import { renderStatus, type VoiceSnapshot } from "./indicator.js";
-import type { VoiceMode, VoicePalette } from "./palette.js";
+import type { Paint } from "./palette.js";
 
 /** The status key the presenter claims in pi's footer; unrelated extensions stay unnamed. */
 export const VOICE_STATUS_KEY = "voice";
@@ -30,16 +30,14 @@ interface VoicePresenterOptions {
   /** Our editor when it is the one installed, else undefined. */
   editor: () => RuleEditor | undefined;
   status: StatusUI;
-  /** Reads theme colours afresh per frame, so the footer row follows theme switches. */
-  palette: () => VoicePalette;
-  mode: VoiceMode;
+  /** The footer's colours, read afresh per update, so the row follows theme switches. */
+  paint: () => Paint;
 }
 
 export function voicePresenter({
   editor,
   status,
-  palette,
-  mode,
+  paint,
 }: VoicePresenterOptions): VoicePresenter {
   // null, not undefined: the first update always reaches the footer, clearing anything left there
   let shown: string | undefined | null = null;
@@ -51,7 +49,7 @@ export function voicePresenter({
       if (ed) ed.decor.rule = onRule ? snapshot : undefined;
       const row = onRule
         ? undefined
-        : renderStatus(snapshot, { palette: palette(), mode });
+        : renderStatus(snapshot, { paint: paint() });
       if (row === shown) return;
       shown = row;
       status.setStatus(VOICE_STATUS_KEY, row);

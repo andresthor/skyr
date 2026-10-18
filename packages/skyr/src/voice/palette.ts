@@ -3,8 +3,9 @@
  * mode joined in one palette, so 256-colour terminals get 256-colour escapes from the same
  * code that writes truecolour ones.
  *
- * The palette is the fallback when there is no theme to read (`FALLBACK_PALETTE`), and
- * `painter` is how every mark picks a colour in the palette's mode.
+ * The palette is the fallback when there is no theme to read (`FALLBACK_PALETTE`). `paintFor`
+ * bundles a palette with a `VoiceMode` into one `Paint`, the single colour value every drawing
+ * surface takes — nothing threads a (palette, mode) pair.
  */
 import {
   type Color,
@@ -55,8 +56,34 @@ export function paletteFromTheme(theme: ThemeLike | undefined): VoicePalette {
 
 export const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
-/** Colours `s` in the palette's mode; mono and ascii draw no colour at all. */
-export const painter =
-  (P: VoicePalette, mode: VoiceMode) =>
-  (c: Color, s: string): string =>
-    mode === "color" ? `${foregroundAnsi(c, P.mode)}${s}\x1b[39m` : s;
+/** Everything a glyph with a colour needs: the theme tokens, what the terminal can carry, and the painter. */
+export interface Paint {
+  colors: Record<VoiceToken, Color>;
+  /** TERM=dumb: neither colour nor the decorated glyph set. */
+  ascii: boolean;
+  /** False under NO_COLOR: glyphs and attributes stay, colour goes. */
+  colour: boolean;
+  /** Colours `s` with `c`, in the palette's mode; plain `s` when colour is out. */
+  fg(c: Color, s: string): string;
+}
+
+/** One `Paint` for a frame, from a ready palette or straight from the theme. */
+export function paintFor(
+  source: VoicePalette | ThemeLike | undefined,
+  mode: VoiceMode,
+): Paint {
+  // a theme hands its colours over one accessor at a time; a VoicePalette is already one
+  const P =
+    source && "getColorMode" in source
+      ? paletteFromTheme(source)
+      : (source ?? FALLBACK_PALETTE);
+  return {
+    colors: P.colors,
+    ascii: mode === "ascii",
+    colour: mode === "color",
+    fg:
+      mode === "color"
+        ? (c, s) => `${foregroundAnsi(c, P.mode)}${s}\x1b[39m`
+        : (_c, s) => s,
+  };
+}

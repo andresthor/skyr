@@ -39,7 +39,7 @@ import {
   TICK_MS,
   type VoiceSnapshot,
 } from "./indicator.js";
-import { paletteFromTheme, type VoiceMode } from "./palette.js";
+import { paintFor, type VoiceMode } from "./palette.js";
 import { type VoicePresenter, voicePresenter } from "./presenter.js";
 
 export const VOICE_SHORTCUT = "ctrl+space";
@@ -223,8 +223,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
         { embedWorkingStatus: true },
       );
       ed.keyHook = keyHook;
-      ed.palette = () => paletteFromTheme(ctxRef?.ui.theme);
-      ed.decor.mode = mode;
+      ed.paint = () => paintFor(ctxRef?.ui.theme, mode);
       editor = ed;
       tui = t;
       return ed;
@@ -261,8 +260,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     presenter = voicePresenter({
       editor: () => editor,
       status: ctx.ui,
-      palette: () => paletteFromTheme(ctxRef?.ui.theme),
-      mode,
+      paint: () => paintFor(ctxRef?.ui.theme, mode),
     });
     pushPresenter();
     // the token request is the slowest step of arming; a cached one makes ctrl+space feel instant

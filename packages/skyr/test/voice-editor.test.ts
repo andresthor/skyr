@@ -12,7 +12,7 @@ import {
   type VoiceEditorLike,
 } from "../src/voice/editor.js";
 import { CURSOR_CELL, DRY_MS, stripAnsi } from "../src/voice/ghost.js";
-import { FALLBACK_PALETTE, type VoicePalette } from "../src/voice/palette.js";
+import { FALLBACK_PALETTE, paintFor } from "../src/voice/palette.js";
 import { editorRows, keybindings, snap } from "./voice.js";
 
 /** A minimal stand-in for pi-tui's Editor: [top rule, ...text rows, bottom rule], with the fake cursor at end of the cursor line. */
@@ -93,8 +93,8 @@ const VoiceEditor = createVoiceEditorClass(
 
 /** VoiceEditorLike's `focused` is a settable own accessor on the instance, so the test types it as one. */
 type EditorInstance = Omit<VoiceEditorLike, "focused"> &
-  Pick<InstanceType<typeof VoiceEditor>, "keyHook"> &
-  FakeEditor & { focused: boolean; palette: () => VoicePalette };
+  Pick<InstanceType<typeof VoiceEditor>, "keyHook" | "paint"> &
+  FakeEditor & { focused: boolean };
 
 function fresh(
   text = "",
@@ -200,17 +200,21 @@ describe("render", () => {
     expect(editor.render(40)).toEqual(ghostOnly.render(40));
   });
 
-  test("the palette is read per frame, so a mid-session theme switch reaches ghost and firm colours", () => {
+  test("the paint is read per frame, so a mid-session theme switch reaches ghost and firm colours", () => {
     const editor = fresh("hello", { paddingX: 2 });
     editor.decor.ghost = "world";
-    editor.palette = () => ({
-      ...FALLBACK_PALETTE,
-      colors: { ...FALLBACK_PALETTE.colors, dim: parseColor("#767676") },
-    });
+    editor.paint = () =>
+      paintFor(
+        {
+          ...FALLBACK_PALETTE,
+          colors: { ...FALLBACK_PALETTE.colors, dim: parseColor("#767676") },
+        },
+        "color",
+      );
     const row = editor.render(40)[1] ?? "";
     // the ghost's dim colour is the live palette's dim, not the fallback's
     expect(row).toContain("\x1b[38;2;118;118;118m");
-    editor.palette = () => FALLBACK_PALETTE;
+    editor.paint = () => paintFor(FALLBACK_PALETTE, "color");
     expect(editor.render(40)[1] ?? "").toContain("\x1b[38;2;102;102;102m");
   });
 
@@ -263,7 +267,7 @@ describe("bottom rule", () => {
   test("a throw while drawing the voice rule leaves Pi's rule, never a broken input bar", () => {
     const editor = fresh("hello");
     editor.decor.rule = listening;
-    editor.palette = () => {
+    editor.paint = () => {
       throw new Error("theme went away");
     };
     expect(editor.render(40).at(-1)).toBe(`<${"─".repeat(40)}>`);

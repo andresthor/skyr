@@ -203,7 +203,7 @@ test("a mid-session theme switch reaches the status row and the editor's ghost/f
   expect(switched.includes("\x1b[38;2;200;190;180m")).toBe(true);
   // and the editor reads the palette through the same live theme ref
   const ed = mountedEditor(ctx.ui);
-  expect(ed.palette().colors.accent).toEqual(parseColor("#c8beb4"));
+  expect(ed.paint().colors.accent).toEqual(parseColor("#c8beb4"));
 });
 
 test("TERM=dumb is ascii; NO_COLOR is mono, keeping glyphs; FORCE_COLOR wins over NO_COLOR", () => {

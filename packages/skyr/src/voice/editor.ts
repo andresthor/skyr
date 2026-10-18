@@ -19,11 +19,7 @@ import type {
 import type { DictationSink } from "./dictation.js";
 import { DRY_MS, spliceGhost } from "./ghost.js";
 import { renderRule, type VoiceKeys, type VoiceSnapshot } from "./indicator.js";
-import {
-  FALLBACK_PALETTE,
-  type VoiceMode,
-  type VoicePalette,
-} from "./palette.js";
+import { FALLBACK_PALETTE, type Paint, paintFor } from "./palette.js";
 
 /** The text to insert so a segment reads naturally between what is before and after the cursor. */
 function spacedSegment(before: string, after: string, segment: string): string {
@@ -43,7 +39,6 @@ interface VoiceDecor {
   rule?: VoiceSnapshot;
   /** Drawing the rule threw once: for this editor's life, voice shows in the footer instead. */
   ruleFailed?: boolean;
-  mode?: VoiceMode;
 }
 
 export interface VoiceEditorLike {
@@ -68,8 +63,8 @@ export function createVoiceEditorClass(
       ghost: "",
       drying: [],
     };
-    /** The palette for this render, re-read every frame so /theme reaches the ghost and drying colours. */
-    palette: () => VoicePalette = () => FALLBACK_PALETTE;
+    /** The colours for this render, rebuilt every frame so /theme reaches the ghost and drying spans. */
+    paint: () => Paint = () => paintFor(FALLBACK_PALETTE, "color");
     /** Consulted before Pi sees a key; return true to swallow it. */
     keyHook?: (data: string, keys: KeybindingsManager) => boolean;
     private readonly keys: KeybindingsManager;
@@ -101,7 +96,7 @@ export function createVoiceEditorClass(
 
     override render(width: number): string[] {
       const base = super.render(width);
-      const { ghost, drying, mode } = this.decor;
+      const { ghost, drying } = this.decor;
       if (!ghost && !drying.length) return base;
       // this editor is permanent: a throw here would take the input bar down with it
       try {
@@ -111,12 +106,11 @@ export function createVoiceEditorClass(
           paddingX: this.getPaddingX(),
           ghost,
           drying: drying.map((s) => ({ ...s, age: t - s.at })),
-          mode,
+          paint: this.paint(),
           // private in pi-tui's types, but it is what tells the bottom rule from the autocomplete rows
           below:
             (this as unknown as { renderedAutocompleteHeight?: number })
               .renderedAutocompleteHeight ?? 0,
-          palette: this.palette(),
         });
       } catch {
         return base;
@@ -127,7 +121,7 @@ export function createVoiceEditorClass(
       width: number,
       hiddenLineCount: number,
     ): string {
-      const { rule, mode } = this.decor;
+      const { rule } = this.decor;
       // pi-tui calls this from render() before the ghost's guard: a throw must fall back here too
       try {
         const row =
@@ -137,8 +131,7 @@ export function createVoiceEditorClass(
             hiddenBelow: hiddenLineCount,
             rule: (s) => this.borderColor(s),
             keys: this.hintKeys(),
-            palette: this.palette(),
-            mode,
+            paint: this.paint(),
           });
         if (row !== undefined) return row;
       } catch {

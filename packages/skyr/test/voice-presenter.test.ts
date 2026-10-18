@@ -7,7 +7,11 @@ import { parseColor, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { stripAnsi } from "../src/voice/ghost.js";
 import { renderStatus } from "../src/voice/indicator.js";
-import { FALLBACK_PALETTE } from "../src/voice/palette.js";
+import {
+  FALLBACK_PALETTE,
+  paintFor,
+  type VoiceMode,
+} from "../src/voice/palette.js";
 import {
   type RuleEditor,
   VOICE_STATUS_KEY,
@@ -31,8 +35,7 @@ function setup(editor?: RuleEditor) {
   const present = voicePresenter({
     editor: () => editor,
     status: ui,
-    palette: () => FALLBACK_PALETTE,
-    mode: "color",
+    paint: () => paintFor(FALLBACK_PALETTE, "color"),
   });
   return { ui, present };
 }
@@ -76,6 +79,10 @@ test("the footer is set only when its row changes", () => {
   expect(ui.lines).toHaveLength(2);
 });
 
+/** The fallback paint in a given mode, as the old `palette`/`mode` pair read. */
+const paint = (mode: VoiceMode = "color", palette = FALLBACK_PALETTE) =>
+  paintFor(palette, mode);
+
 test("the footer row names voice first, so a neighbouring status can't claim its marks", () => {
   expect(
     stripAnsi(
@@ -109,10 +116,10 @@ test("the error row names the cause, truncated by whole columns", () => {
 });
 
 test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {
-  expect(stripAnsi(renderStatus(snap(), { mode: "ascii" })!)).toMatch(
+  expect(stripAnsi(renderStatus(snap(), { paint: paint("ascii") })!)).toMatch(
     /^voice \[rec\] listening [-=#]{8}$/,
   );
-  const mono = renderStatus(snap(), { mode: "mono" })!;
+  const mono = renderStatus(snap(), { paint: paint("mono") })!;
   expect(mono).not.toContain("\x1b[");
   expect(mono).toContain("●");
 });
@@ -122,12 +129,12 @@ test("the footer row reads the palette it is given, so it follows theme switches
     ...FALLBACK_PALETTE,
     colors: { ...FALLBACK_PALETTE.colors, accent: parseColor("#157937") },
   };
-  expect(renderStatus(snap(), { palette: light })).toContain(
+  expect(renderStatus(snap(), { paint: paint("color", light) })).toContain(
     "\x1b[38;2;21;121;55m●",
   );
   expect(
     renderStatus(snap(), {
-      palette: { ...FALLBACK_PALETTE, mode: "256color" },
+      paint: paint("color", { ...FALLBACK_PALETTE, mode: "256color" }),
     }),
   ).not.toContain("\x1b[38;2;");
 });

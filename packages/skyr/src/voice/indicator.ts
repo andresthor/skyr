@@ -15,13 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { type DictationFacts, SPEECH_DBFS } from "./dictation.js";
 import { dbfs } from "./mic.js";
-import {
-  clamp01,
-  FALLBACK_PALETTE,
-  painter,
-  type VoiceMode,
-  type VoicePalette,
-} from "./palette.js";
+import { clamp01, FALLBACK_PALETTE, type Paint, paintFor } from "./palette.js";
 
 export const TICK_MS = 50;
 
@@ -91,14 +85,9 @@ const ELLIPSIS_MS = 300;
  */
 export function renderStatus(
   s: VoiceSnapshot,
-  {
-    palette = FALLBACK_PALETTE,
-    mode = "color",
-  }: { palette?: VoicePalette; mode?: VoiceMode } = {},
+  { paint = paintFor(FALLBACK_PALETTE, "color") }: { paint?: Paint } = {},
 ): string | undefined {
-  const T = palette.colors;
-  const fg = painter(palette, mode);
-  const ascii = mode === "ascii";
+  const { colors: T, ascii, fg } = paint;
   const label = fg(T.muted, "voice");
   if (s.state === "error") {
     const text = sliceByColumn(s.message, 0, ERROR_COLS - 8, true);
@@ -107,13 +96,13 @@ export function renderStatus(
   const phase = phaseOf(s);
   if (s.state === "discarded") return `${label} ${fg(T.muted, "discarded")}`;
   if (!phase) return undefined;
-  const { light, word, advisories } = marks(s, phase, palette, mode, false);
+  const { light, word, advisories } = marks(s, phase, paint, false);
   const sep = ascii ? ", " : fg(T.dim, " · ");
   // the footer collapses runs of spaces, so silence is dim rule cells rather than padding
   const silence = (x: string) => fg(T.dim, ascii ? x.replaceAll("─", "-") : x);
   const meter =
     phase === "listening" || phase === "tail"
-      ? meterCells(s.bars, silence, palette, mode)
+      ? meterCells(s.bars, silence, paint)
       : silence("─".repeat(METER_CELLS));
   return `${[`${label} ${light} ${word}`, ...advisories].join(sep)} ${meter}`;
 }
@@ -125,13 +114,10 @@ export function renderStatus(
 function marks(
   s: VoiceSnapshot,
   phase: Phase,
-  palette: VoicePalette,
-  mode: VoiceMode,
+  paint: Paint,
   steady: boolean,
 ): { light: string; word: string; advisories: string[] } {
-  const T = palette.colors;
-  const fg = painter(palette, mode);
-  const ascii = mode === "ascii";
+  const { colors: T, ascii, fg } = paint;
   const light =
     phase === "listening" || phase === "tail"
       ? ascii
@@ -225,8 +211,7 @@ interface RuleOptions {
   /** The editor's `borderColor`: Pi colours its rules by thinking level and bash mode. */
   rule: (s: string) => string;
   keys: VoiceKeys;
-  palette?: VoicePalette;
-  mode?: VoiceMode;
+  paint?: Paint;
 }
 
 /**
@@ -242,13 +227,10 @@ export function renderRule(
     hiddenBelow = 0,
     rule,
     keys,
-    palette = FALLBACK_PALETTE,
-    mode = "color",
+    paint = paintFor(FALLBACK_PALETTE, "color"),
   }: RuleOptions,
 ): string | undefined {
-  const T = palette.colors;
-  const fg = painter(palette, mode);
-  const ascii = mode === "ascii";
+  const { colors: T, ascii, fg } = paint;
   const phase = phaseOf(s);
   const line = (n: number) => rule("─".repeat(Math.max(0, n)));
   const key = (k: string, what: string) =>
@@ -289,7 +271,7 @@ export function renderRule(
   }
   if (!phase) return undefined;
 
-  const { light, word, advisories } = marks(s, phase, palette, mode, true);
+  const { light, word, advisories } = marks(s, phase, paint, true);
 
   // Enter keeps only what the server will transcribe: speech, on an accepted session
   const canKeep = s.heardSpeech && s.accepted;
@@ -304,7 +286,7 @@ export function renderRule(
 
   const meter =
     phase === "listening" || phase === "tail"
-      ? meterCells(s.bars, rule, palette, mode)
+      ? meterCells(s.bars, rule, paint)
       : line(METER_CELLS);
   const lw = `${light} ${word}`;
   const phrase = advisories.length ? [lw, ...advisories].join(sep) : lw;
@@ -322,10 +304,9 @@ export function renderRule(
 function meterCells(
   bars: readonly number[],
   rule: (s: string) => string,
-  palette: VoicePalette,
-  mode: VoiceMode,
+  paint: Paint,
 ): string {
-  const fg = painter(palette, mode);
+  const fg = paint.fg;
   const toDb = (u: number) => METER_FLOOR_DB + u * METER_SPAN_DB;
   const lo = SPEECH_DBFS;
   const hi = Math.max(lo + MIN_RANGE_DB, ...bars.map(toDb));
@@ -338,13 +319,13 @@ function meterCells(
       continue;
     }
     const k = Math.round(clamp01((db - lo) / (hi - lo)) * (RISE.length - 1));
-    if (mode === "ascii") {
+    if (paint.ascii) {
       out += k < 4 ? "=" : "#";
       continue;
     }
     const top = k === RISE.length - 1;
     const colour = shade(
-      palette.colors.accent,
+      paint.colors.accent,
       -0.22 + (0.22 * k) / (RISE.length - 1) + (top ? 0.04 : 0),
       top ? 1.3 : 1,
     );

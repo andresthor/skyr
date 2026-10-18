@@ -255,7 +255,7 @@ test("terminal sequences and invisible characters in server text never reach the
   h.session.cancel();
 });
 
-test("ended and then a 1006 close is success: the committed text resolves", async () => {
+test("ended and then a 1006 close is success: the final is delivered and the stop resolves", async () => {
   const h = await drive();
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_ACCEPTED" });
@@ -264,7 +264,8 @@ test("ended and then a 1006 close is success: the committed text resolves", asyn
     data: { text: "one last word", start: 0, isFinal: true },
   });
   h.sock.server({ type: "ended" });
-  await expect(h.session.stop()).resolves.toBe("one last word");
+  await expect(h.session.stop()).resolves.toBeUndefined();
+  expect(h.final.mock.calls).toEqual([["one last word"]]);
   expect(h.onError).not.toHaveBeenCalled();
   // the server's own 1006 drop after `ended` is the success path's tail; teardown stays idempotent
   h.sock.onclose?.();
@@ -280,7 +281,7 @@ test("a stop sends the pending bytes plus end; a server 1006 after `ended` resol
   expect(h.sock.control().at(-1)).toEqual({ type: "end" });
   h.sock.server({ type: "ended" });
   h.sock.onclose?.();
-  await expect(stop).resolves.toBe("");
+  await expect(stop).resolves.toBeUndefined();
 });
 
 test("a premature close is a network failure", async () => {
@@ -294,7 +295,7 @@ test("a premature close is a network failure", async () => {
       expect.objectContaining({ message: "connection lost" }),
     ),
   );
-  await expect(h.session.stop()).resolves.toBe("");
+  await expect(h.session.stop()).resolves.toBeUndefined();
 });
 
 test("frames not shaped as Corti documents them are ignored, and the session carries on", async () => {
@@ -358,7 +359,7 @@ test("a listener and onError that both throw still tear the session down, and st
   ).not.toThrow();
   expect(h.sock.readyState).toBe(3);
   expect(h.source.destroyed).toBe(true);
-  await expect(h.session.stop()).resolves.toBe("boom");
+  await expect(h.session.stop()).resolves.toBeUndefined();
 });
 
 test("a recorder that fails to start, reported to an onError that throws, never escapes to Pi", async () => {
@@ -381,7 +382,7 @@ test("a recorder that fails to start, reported to an onError that throws, never 
   });
   await tick();
   expect(escaped).toEqual([]);
-  await expect(session.stop()).resolves.toBe("");
+  await expect(session.stop()).resolves.toBeUndefined();
 });
 
 test("a sign-in answer without a usable token fails as unreadable, never as a socket with no token", async () => {
@@ -410,7 +411,8 @@ test("the interim Corti re-sends after a final is dropped, so a stop never commi
   expect(h.interim).toHaveBeenCalledTimes(2);
   const stop = h.session.stop();
   h.sock.server({ type: "ended" });
-  await expect(stop).resolves.toBe("hello there");
+  await expect(stop).resolves.toBeUndefined();
+  expect(h.final.mock.calls).toEqual([["hello there"]]);
 });
 
 test("a Corti error frame ends the session with an error", async () => {
@@ -424,7 +426,7 @@ test("a Corti error frame ends the session with an error", async () => {
   expect(h.sock.readyState).toBe(3);
 });
 
-test("a failure while a stop drains is not reported: the stop resolves with what was committed", async () => {
+test("a failure while a stop drains is not reported: the stop resolves and the finals stand", async () => {
   const h = await drive();
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_ACCEPTED" });
@@ -434,11 +436,12 @@ test("a failure while a stop drains is not reported: the stop resolves with what
   });
   const stop = h.session.stop();
   h.sock.server({ type: "error" });
-  await expect(stop).resolves.toBe("kept words");
+  await expect(stop).resolves.toBeUndefined();
+  expect(h.final.mock.calls).toEqual([["kept words"]]);
   expect(h.onError).not.toHaveBeenCalled();
 });
 
-test("a close while a stop drains resolves the committed text, with no error", async () => {
+test("a close while a stop drains resolves the stop, with the finals kept and no error", async () => {
   const h = await drive();
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_ACCEPTED" });
@@ -448,7 +451,8 @@ test("a close while a stop drains resolves the committed text, with no error", a
   });
   const stop = h.session.stop();
   h.sock.onclose?.();
-  await expect(stop).resolves.toBe("kept words");
+  await expect(stop).resolves.toBeUndefined();
+  expect(h.final.mock.calls).toEqual([["kept words"]]);
   expect(h.onError).not.toHaveBeenCalled();
 });
 
@@ -472,7 +476,7 @@ test("after cancel no callback fires, whatever the server still sends", async ()
   expect(h.onError).not.toHaveBeenCalled();
 });
 
-test("when Corti never sends ended, a stop still resolves with the committed text after the end timeout", async () => {
+test("when Corti never sends ended, a stop still resolves after the end timeout, the finals kept", async () => {
   const h = await drive();
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_ACCEPTED" });
@@ -482,14 +486,15 @@ test("when Corti never sends ended, a stop still resolves with the committed tex
   });
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
-  let resolved: string | undefined;
-  void h.session.stop().then((text) => {
-    resolved = text;
+  let resolved = false;
+  void h.session.stop().then(() => {
+    resolved = true;
   });
   await vi.advanceTimersByTimeAsync(2_499);
-  expect(resolved).toBeUndefined();
+  expect(resolved).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
-  expect(resolved).toBe("kept words");
+  expect(resolved).toBe(true);
+  expect(h.final.mock.calls).toEqual([["kept words"]]);
   expect(h.onError).not.toHaveBeenCalled();
 });
 

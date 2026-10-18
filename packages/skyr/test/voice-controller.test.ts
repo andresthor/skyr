@@ -38,7 +38,7 @@ class FakeSession implements SttSession {
   canceled = false;
   flushed = 0;
 
-  constructor(private readonly stopResult: Promise<string>) {}
+  constructor(private readonly stopResult: Promise<void>) {}
 
   stop = () => {
     this.stopCalls++;
@@ -78,9 +78,7 @@ function harness(
     start: (opts) => {
       options.push(opts);
       const session = new FakeSession(
-        o.stopNeverResolves
-          ? new Promise<string>(() => {})
-          : Promise.resolve("everything"),
+        o.stopNeverResolves ? new Promise<void>(() => {}) : Promise.resolve(),
       );
       sessions.push(session);
       return session;

@@ -52,7 +52,7 @@ function recording() {
     return {
       stop: () => {
         end.stopped++;
-        return Promise.resolve("");
+        return Promise.resolve();
       },
       cancel: () => {
         end.cancelled++;

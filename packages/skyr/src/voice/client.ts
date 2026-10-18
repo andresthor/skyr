@@ -43,8 +43,8 @@ export interface SessionOptions {
 }
 
 export interface SttSession {
-  /** Stop capture, drain the remaining finals, resolve with everything committed. */
-  stop(): Promise<string>;
+  /** Stop capture and drain the remaining finals through `onFinal`; resolves once the session is closed. */
+  stop(): Promise<void>;
   /** Drop everything now. No more callbacks fire. */
   cancel(): void;
   /** Ask for the pending segment's final now (about 1 s) instead of at the next pause or `end`. */
@@ -123,8 +123,8 @@ export function startSession(o: SessionOptions): SttSession {
   let stopping = false;
   let ended = false;
   let closed = false;
-  let resolveStop!: (text: string) => void;
-  const done = new Promise<string>((r) => (resolveStop = r));
+  let resolveStop!: () => void;
+  const done = new Promise<void>((r) => (resolveStop = r));
 
   const teardown = () => {
     if (closed) return;
@@ -133,7 +133,7 @@ export function startSession(o: SessionOptions): SttSession {
     try {
       ws?.close();
     } catch {}
-    resolveStop(transcript.committed);
+    resolveStop();
   };
   const fail = (err: VoiceError) => {
     if (closed) return;

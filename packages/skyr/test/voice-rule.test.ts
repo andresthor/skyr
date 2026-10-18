@@ -342,6 +342,19 @@ test("the error row names the cause, truncated by whole columns", () => {
   expect(visibleWidth(long)).toBe(60);
 });
 
+test("a message that fits the footer's 60 columns shows whole; one column more is cut to end in …", () => {
+  const row = (message: string) =>
+    stripTerminalSequences(
+      renderStatus(snap({ state: "error", message }), { paint: testPaint() })!,
+    );
+  const fits = row("x".repeat(52));
+  expect(fits).toBe(`voice ✗ ${"x".repeat(52)}`);
+  expect(visibleWidth(fits)).toBe(60);
+  const cut = row("x".repeat(53));
+  expect(cut).toBe(`voice ✗ ${"x".repeat(51)}…`);
+  expect(visibleWidth(cut)).toBe(60);
+});
+
 test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {
   const dumb = renderStatus(snap(), { paint: testPaint("ascii") })!;
   expect(dumb).toMatch(/^voice \[rec\] listening [-=#]{8}$/);

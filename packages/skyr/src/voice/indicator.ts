@@ -100,8 +100,7 @@ export function renderStatus(
   const view = voiceView(s);
   if (view.kind === "error") {
     const prefix = visibleWidth(`${label} ${m.cause("")}`);
-    const text = sliceByColumn(view.message, 0, ERROR_COLS - prefix, true);
-    return `${label} ${m.cause(text)}`;
+    return `${label} ${m.cause(fitCols(view.message, ERROR_COLS - prefix))}`;
   }
   if (view.kind === "off") return undefined;
   if (view.kind === "discarded") return `${label} ${m.discarded}`;
@@ -137,6 +136,14 @@ interface LiveView {
   /** What the bound keys would do right now. */
   offer: "keep" | "cancel" | "discard";
   advisories: Advisory[];
+}
+
+/** `text` whole when it fits in `cols` columns, else cut by whole columns to end in "…". */
+function fitCols(text: string, cols: number): string {
+  // not truncateToWidth: it wraps its ellipsis in SGR resets, ending the muted colour early
+  return visibleWidth(text) <= cols
+    ? text
+    : `${sliceByColumn(text, 0, cols - 1, true)}…`;
 }
 
 /** The view's marks as both displays draw them: the same glyphs, words and colours on each. */
@@ -312,14 +319,10 @@ export function renderRule(
   const more = hiddenBelow > 0 ? rule(`↓ ${hiddenBelow} more`) : undefined;
 
   if (view.kind === "error") {
-    const full = view.message;
     // the columns a message may take, keeping one rule cell
-    const room = ends(m.cause(""), "").fill - 1;
-    const text =
-      visibleWidth(full) <= room
-        ? full
-        : `${sliceByColumn(full, 0, room - 1, true)}…`;
-    const cause = m.cause(text);
+    const cause = m.cause(
+      fitCols(view.message, ends(m.cause(""), "").fill - 1),
+    );
     return first([compose(cause, more ?? ""), compose(cause, "")]);
   }
   if (view.kind === "discarded")

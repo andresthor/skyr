@@ -171,7 +171,7 @@ export function voiceView(s: VoiceSnapshot): VoiceView {
     advisories.push({ text: "no audio yet", tone: "warning" });
   if (s.state === "arming" && s.micOpen && s.sinceStartMs > SLOW_START_MS)
     advisories.push({ text: "connecting", tone: "muted" });
-  // half the failure window, so "no voice yet" can never appear after the "nothing heard" failure
+  // half the failure window, so "no voice yet" can never appear after the no-speech failure
   if (
     phase === "listening" &&
     !s.heardSpeech &&

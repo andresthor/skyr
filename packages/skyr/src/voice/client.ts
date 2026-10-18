@@ -230,7 +230,9 @@ export function startSession(o: SessionOptions): SttSession {
       } catch {
         try {
           fail(new VoiceError("internal error"));
-        } catch {} // onError itself threw: the session is already torn down, and a throw here would exit Pi
+        } catch {
+          // onError itself threw: the session is already torn down, and a throw here would exit Pi
+        }
       }
     };
   /** Sends what the recorder left and `end`, then waits for "ended" no longer than END_TIMEOUT_MS. */

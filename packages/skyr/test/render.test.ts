@@ -45,6 +45,12 @@ describe("sanitize", () => {
       "good.com done",
     );
   });
+
+  test("a lone surrogate and interlinear annotation marks are dropped, a paired emoji kept", () => {
+    const text = sanitize("a\uD800b\uDC00c \uFFF9note\uFFFA\uFFFB 🎉");
+    expect(text).toBe("abc note 🎉");
+    expect(visibleWidth(text)).toBe(11);
+  });
 });
 
 describe("stripInvisible", () => {

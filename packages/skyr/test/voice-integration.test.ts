@@ -366,6 +366,41 @@ test("session_shutdown, even twice, cancels the dictation once, clears the foote
   expect(vi.getTimerCount()).toBe(0);
 });
 
+test("/voice with an argument it does not take is refused, naming the valid forms", async () => {
+  withCreds();
+  agentDirWith();
+  const { starts, start } = recording();
+  const pi = registeredVoice({ mode: "ascii", controller: { start } });
+  const ctx = voiceCtx();
+  await pi.handlers.get("session_start")!(null, ctx);
+  await pi.commands.get("voice")!.handler("frobnicate", ctx);
+  expect(starts).toHaveLength(0);
+  expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
+  expect(ctx.ui.notify.mock.calls[0]).toEqual([
+    'voice: "frobnicate" is not an option; use /voice, /voice on or /voice off',
+    "warning",
+  ]);
+  // "on" and a bare /voice stay dictation starts, "off" still cancels
+  await pi.commands.get("voice")!.handler("on", ctx);
+  expect(starts).toHaveLength(1);
+  await pi.commands.get("voice")!.handler("off", ctx);
+  await pi.commands.get("voice")!.handler("", ctx);
+  expect(starts).toHaveLength(2);
+  expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
+});
+
+test("the command and shortcut descriptions say what they do", async () => {
+  withCreds();
+  agentDirWith();
+  const pi = registeredVoice({ mode: "ascii" });
+  expect(pi.commands.get("voice")?.description).toBe(
+    "Dictate with Corti speech-to-text (ctrl+space) · /voice off cancels",
+  );
+  expect(pi.shortcuts.get(VOICE_SHORTCUT)?.description).toBe(
+    "Start or stop voice dictation",
+  );
+});
+
 const HEADLESS = (["rpc", "json", "print"] as const).flatMap((mode) =>
   [true, false].map((hasUI) => ({ mode, hasUI })),
 );

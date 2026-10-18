@@ -33,7 +33,7 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
-import { credentialsNotice, startBlocked } from "./errors.js";
+import { credentialsNotice, startBlocked, unknownVoiceArg } from "./errors.js";
 import {
   createLevelHistory,
   meterUnit,
@@ -241,16 +241,18 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   };
 
   pi.registerCommand("voice", {
-    description:
-      "Dictate with Corti speech-to-text (ctrl+space) · /voice off cancels",
+    description: `Dictate with Corti speech-to-text (${VOICE_SHORTCUT}) · /voice off cancels`,
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      if (args.trim() === "off") cancel();
-      else toggle(ctx);
+      const arg = args.trim();
+      if (arg === "off") cancel();
+      // "on" is the explicit spelling of a bare /voice: both go through toggle
+      else if (arg === "" || arg === "on") toggle(ctx);
+      else ctx.ui.notify(unknownVoiceArg(arg), "warning");
     },
   });
 
   pi.registerShortcut(VOICE_SHORTCUT, {
-    description: "Voice dictation",
+    description: "Start or stop voice dictation",
     handler: async (ctx: ExtensionContext) => toggle(ctx),
   });
 

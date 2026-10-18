@@ -6,7 +6,7 @@
  * server text only as one clean clipped line. Never a stack trace or a foreign message.
  */
 import { basename } from "node:path";
-import { errnoOf, oneLine } from "../tools/render.js";
+import { clip, errnoOf, oneLine } from "../tools/render.js";
 import type { CredentialResult, SttCredentials } from "./credentials.js";
 
 export class VoiceError extends Error {
@@ -123,6 +123,13 @@ export function credentialsNotice(
   }
   return `voice: ${from.invalid} must be ${CRED_FORMS[from.invalid]}; voice is off`;
 }
+
+/** Echoed user input into a notice: clipped, then quoted so control characters read as text. */
+const quotedArg = (arg: string) => JSON.stringify(clip(arg, 20));
+
+/** The chat notice when /voice gets an argument it does not take. */
+export const unknownVoiceArg = (arg: string) =>
+  `voice: ${quotedArg(arg)} is not an option; use /voice, /voice on or /voice off`;
 
 /**
  * The errno inside a fetch failure. undici wraps the real error (DNS, TLS) in its cause

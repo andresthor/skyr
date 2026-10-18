@@ -497,7 +497,7 @@ export interface VoiceKeys {
 
 interface RuleOptions {
   width: number;
-  /** Text rows scrolled out below the editor; Pi's own `↓ N more` label. */
+  /** Text rows scrolled out below the editor: Pi's `↓ N more` label takes the hints' place. */
   hiddenBelow?: number;
   /** The editor's `borderColor`: Pi colours its rules by thinking level and bash mode. */
   rule: (s: string) => string;
@@ -509,7 +509,8 @@ interface RuleOptions {
 /**
  * The editor's bottom rule while voice is on, exactly `width` columns: the meter rises out of the
  * rule, then the mic light, the state and any advisory, and the keys that apply right now. Narrow
- * widths drop whole elements; undefined means voice has nothing to say and Pi draws its own rule.
+ * widths drop whole elements: hints, meter, advisories, word, light. Undefined means voice has
+ * nothing to say or nothing fits, and Pi draws its own rule.
  */
 export function renderRule(
   s: VoiceSnapshot,
@@ -539,18 +540,11 @@ export function renderRule(
     const tail = right ? ` ${right} ${line(2)}` : line(2);
     const n = width - visibleWidth(head) - visibleWidth(tail) - 1;
     if (n < 1) return undefined;
-    const more = hiddenBelow > 0 ? ` ↓ ${hiddenBelow} more ` : "";
-    const fill =
-      more && n >= visibleWidth(more) + 2
-        ? (() => {
-            const a = Math.floor((n - visibleWidth(more)) / 2);
-            return `${line(a)}${more}${line(n - a - visibleWidth(more))}`;
-          })()
-        : line(n);
-    return `${head} ${fill}${tail}`;
+    return `${head} ${line(n)}${tail}`;
   };
   const first = (rows: (string | undefined)[]) =>
-    rows.find((r) => r !== undefined) ?? line(width);
+    rows.find((r) => r !== undefined);
+  const more = hiddenBelow > 0 ? rule(`↓ ${hiddenBelow} more`) : undefined;
 
   if (s.state === "error") {
     const mark = fg(T.error, ascii ? "x" : "✗");
@@ -565,7 +559,7 @@ export function renderRule(
   if (!phase) {
     return s.discarded
       ? first([
-          compose(fg(T.muted, "discarded"), key(keys.undo, "undo")),
+          compose(fg(T.muted, "discarded"), more ?? key(keys.undo, "undo")),
           compose(fg(T.muted, "discarded"), ""),
         ])
       : undefined;
@@ -591,10 +585,9 @@ export function renderRule(
   const lw = `${light} ${word}`;
   const phrase = advisories.length ? [lw, ...advisories].join(sep) : lw;
   return first([
-    compose(phrase, hints, meter),
-    compose(phrase, fewerHints, meter),
+    compose(phrase, more ?? hints, meter),
+    compose(phrase, more ?? fewerHints, meter),
     compose(phrase, "", meter),
-    compose(lw, "", meter),
     compose(phrase, ""),
     compose(lw, ""),
     compose(light, ""),

@@ -66,9 +66,9 @@ test("every row is exactly the width, at every width, in every state and mode", 
     for (const s of STATES)
       for (let width = 9; width <= 140; width++) {
         const row = draw(s, { width, mode, hiddenBelow: width % 3 });
-        expect(visibleWidth(row ?? ""), `${mode} ${s.state} @${width}`).toBe(
-          width,
-        );
+        // undefined hands the row to Pi's own rule, which is exactly the width too
+        if (row !== undefined)
+          expect(visibleWidth(row), `${mode} ${s.state} @${width}`).toBe(width);
       }
 });
 
@@ -148,8 +148,27 @@ test("the rule keeps Pi's colour: every rule cell goes through the editor's own 
   expect(row.endsWith("<──>")).toBe(true);
 });
 
-test("Pi's scroll label survives in the fill when the editor is scrolled", () => {
-  expect(plain({}, { width: 90, hiddenBelow: 3 })).toContain(" ↓ 3 more ");
+test("a scrolled editor's ↓ N more takes the hints' place, ahead of any advisory", () => {
+  const row = plain({ capLeftMs: 9_500 }, { width: 72, hiddenBelow: 3 });
+  expect(row).toMatch(/● listening · 10s left ─+ ↓ 3 more ──$/);
+  expect(row).not.toContain("escape");
+  expect(plain({ state: "idle", discarded: true }, { hiddenBelow: 3 })).toMatch(
+    /^── discarded ─+ ↓ 3 more ──$/,
+  );
+});
+
+test("the meter drops before an advisory: a narrow rule still says time is running out", () => {
+  for (let width = 33; width <= 43; width++) {
+    expect(plain({ capLeftMs: 14_000 }, { width })).toContain("14s left");
+    expect(
+      plain({ bars: SILENCE, heardSpeech: false, sinceStart: 5000 }, { width }),
+    ).toContain("no voice yet");
+  }
+});
+
+test("when not even the mic light fits, voice draws nothing and Pi's own rule, scroll label included, stands", () => {
+  expect(draw({}, { width: 7, hiddenBelow: 3 })).toBeUndefined();
+  expect(draw({}, { width: 10, mode: "ascii" })).toBeUndefined();
 });
 
 test("after Esc reverted committed words, the rule says so and names the undo", () => {

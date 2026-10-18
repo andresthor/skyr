@@ -1,9 +1,7 @@
 /**
- * `registerVoice` through its public interface: registration shape, the no-credential stub,
- * the headless start (no UI mount in a UI-less mode), the config pick-up from skyr.json, and
- * the refused-start guard. A minimal fake ExtensionAPI/ExtensionContext stands in for the host;
- * this drive reaches the same public entry the resource loader reaches in
- * test/pi-contract.test.ts for the other registrars.
+ * Voice through what it registers. Most tests call `registerVoice` on a fake Pi, because the
+ * seam that replaces Corti and the microphone is reachable only there; one test registers
+ * through `registerSkyr`, and one loads skyr into a real Pi session.
  */
 import { parseColor } from "@earendil-works/pi-tui";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
@@ -15,6 +13,7 @@ import {
   agentDirWith,
   CREDS,
   mountedEditor,
+  registeredSkyr,
   registeredVoice,
   type ThemeStub,
   voiceCtx,
@@ -362,4 +361,20 @@ test("each TUI session_start asks for a token ahead of the first dictation; a he
   await start(null, voiceCtx());
   expect(pi.signIns).toHaveLength(2);
   expect(pi.signIns[0]).toMatch(/^https:\/\/auth\.test-env\.corti\.app\//);
+});
+
+describe("registerSkyr", () => {
+  test("without Corti credentials it registers only /voice, to say what is missing", () => {
+    const pi = registeredSkyr();
+    expect(pi.commands.has("voice")).toBe(true);
+    expect([...pi.shortcuts.keys()]).toEqual([]);
+  });
+
+  test("with Corti credentials it registers /voice and ctrl+space", () => {
+    withCreds();
+    const pi = registeredSkyr();
+    expect(pi.commands.has("voice")).toBe(true);
+    expect([...pi.shortcuts.keys()]).toEqual([VOICE_SHORTCUT]);
+    expect(VOICE_SHORTCUT).toBe("ctrl+space");
+  });
 });

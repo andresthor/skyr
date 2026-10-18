@@ -16,6 +16,7 @@ import {
   KeybindingsManager as TuiKeybindingsManager,
 } from "@earendil-works/pi-tui";
 import { type Mock, onTestFinished, vi } from "vitest";
+import { registerSkyr } from "../src/index.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
 import type { createVoiceEditorClass } from "../src/voice/editor.js";
 import { registerVoice, type VoiceOptions } from "../src/voice/index.js";
@@ -219,6 +220,9 @@ function fakePi(): { pi: ExtensionAPI; captured: Captured } {
     registerShortcut: (keys: string, spec: Shortcut) =>
       captured.shortcuts.set(keys, spec),
     on: (event: string, fn: Handler) => captured.handlers.set(event, fn),
+    // registerSkyr also registers the web tools and subagent; these tests read only voice's part
+    registerTool: () => {},
+    registerMessageRenderer: () => {},
   };
   return { pi: pi as unknown as ExtensionAPI, captured };
 }
@@ -239,4 +243,11 @@ export function registeredVoice(
   }) as unknown as typeof fetch;
   registerVoice(pi, { fetch: signIn, ...o });
   return { ...captured, signIns };
+}
+
+/** Everything skyr registers, through the entry a host calls. */
+export function registeredSkyr(): Captured {
+  const { pi, captured } = fakePi();
+  registerSkyr(pi);
+  return captured;
 }

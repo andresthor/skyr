@@ -2,8 +2,11 @@
  * The dictation state machine, free of any TUI:
  *
  *   idle ─toggle→ arming ─CONFIG_ACCEPTED→ listening ─toggle / enter→ transcribing ─finals drained→ idle
- *                   ├─ toggle / enter before any speech or text → idle (quietly)
- *                   └──────────── any failure ───────────→ error ─(hold)→ idle
+ *                     └─────────────── toggle / enter ───────────────↗
+ *
+ *   arming, listening       ─toggle / enter before any speech or text→ idle, quietly
+ *   arming … transcribing   ─Esc→ idle, the buffer put back
+ *   arming … transcribing   ─any failure→ error ─hold or any key→ idle; toggle starts afresh
  *
  * Quiet never stops a dictation: people pause to think. It only asks the server for
  * the pending final early, so a stop has little left to wait for.
@@ -77,6 +80,35 @@ export const SPEECH_DBFS = 20 * Math.log10((2500 / 32768) * 0.15 ** (1 / 0.6));
 /** ~1.5 s of chunks that are exactly zero: macOS hands a mic-denied process silence, not an error. */
 const ZERO_CHUNKS_BLOCKED = 24;
 
+type Timer = ReturnType<typeof setTimeout>;
+
+/** One dictation, from `start` until it ends. The next `start` replaces it; nothing resets it. */
+interface Dictation {
+  readonly session: SttSession;
+  readonly startedAt: number;
+  /** Waiting for the recorder's first chunk, then open until the tail after a stop ends. */
+  mic: "waiting" | "open" | "closed";
+  /** The server took the session; before that, audio is only buffered. */
+  accepted: boolean;
+  /** Someone spoke: a chunk above SPEECH_DBFS, or any text from Corti. */
+  heard: boolean;
+  finals: number;
+  /** The live segment's interim, until its final arrives. */
+  interim: string;
+  /** Exactly-zero chunks in a row; -Infinity once any other chunk arrived. */
+  zeroChunks: number;
+  lastChunkAt: number;
+  /** Every timer this dictation set, cleared together when it ends. */
+  readonly timers: Set<Timer>;
+  flush?: Timer;
+  stall?: Timer;
+}
+
+/** The mic is feeding a dictation that a stop or a failure can still end. */
+const capturing = (s: VoiceState) => s === "arming" || s === "listening";
+/** Words the user watched appear, which a stop or a failure keeps. */
+const kept = (d: Dictation) => d.finals > 0 || d.interim !== "";
+
 export interface DictationControllerOptions {
   creds: SttCredentials;
   sink: DictationSink;
@@ -94,24 +126,14 @@ export class DictationController {
   state: VoiceState = "idle";
   /** When the current state began, for the indicator's state-relative animation. */
   stateSince = 0;
-  /** When the current dictation started: its advisories and its hard cap count from here. */
-  private startedAt = 0;
+  /** The error line while `state` is "error". */
   message = "";
 
-  private session: SttSession | undefined;
   private readonly timing: DictationTiming;
-  private timers = new Set<ReturnType<typeof setTimeout>>();
-  private quietStartTimer: ReturnType<typeof setTimeout> | undefined;
-  private flushTimer: ReturnType<typeof setTimeout> | undefined;
-  private stallTimer: ReturnType<typeof setTimeout> | undefined;
-  private lastChunkAt = 0;
-  private heard = false;
-  private mic: "waiting" | "open" | "closed" = "closed";
-  private sessionAccepted = false;
-  private zeroChunks = 0;
-  private pendingInterim = "";
-  private finals = 0;
-  private generation = 0;
+  /** The running dictation; undefined from the moment it ends. A callback holding another is stale. */
+  private d: Dictation | undefined;
+  /** Ends the error line. */
+  private hold: Timer | undefined;
 
   constructor(private readonly o: DictationControllerOptions) {
     this.timing = { ...DEFAULT_TIMING, ...o.timing };
@@ -119,17 +141,17 @@ export class DictationController {
 
   /** The recorder is delivering audio: from its first chunk until the stop that ends the tail. */
   get micOpen(): boolean {
-    return this.mic === "open" && this.active;
+    return this.d?.mic === "open";
   }
 
   /** The server took the session; before that, audio is only buffered. */
   get accepted(): boolean {
-    return this.sessionAccepted;
+    return this.d?.accepted ?? false;
   }
 
   /** ms since this dictation started. */
   get sinceStartMs(): number {
-    return Date.now() - this.startedAt;
+    return this.d ? Date.now() - this.d.startedAt : 0;
   }
 
   /** ms before the hard cap stops this dictation, as the controller enforces it. */
@@ -139,116 +161,55 @@ export class DictationController {
 
   /** This dictation has heard someone: a chunk above SPEECH_DBFS, or any text from Corti. */
   get heardSpeech(): boolean {
-    return this.heard;
+    return this.d?.heard ?? false;
   }
 
+  /** A dictation is running: arming, listening or transcribing. */
   get active(): boolean {
-    return (
-      this.state === "arming" ||
-      this.state === "listening" ||
-      this.state === "transcribing"
-    );
+    return this.d !== undefined;
   }
 
   /** The trigger: start when idle, stop-and-keep when capturing, ignored while draining. */
   toggle(): void {
     if (this.state === "idle" || this.state === "error") this.start();
-    else if (this.state === "arming" || this.state === "listening")
-      this.finish();
-  }
-
-  private start(): void {
-    this.clearTimers();
-    const gen = ++this.generation;
-    this.startedAt = Date.now();
-    this.heard = false;
-    this.mic = "waiting";
-    this.sessionAccepted = false;
-    this.zeroChunks = 0;
-    this.pendingInterim = "";
-    this.finals = 0;
-    this.o.sink.begin();
-    this.setState("arming");
-    const live = () => gen === this.generation;
-    this.later(this.timing.armTimeoutMs, () => {
-      if (live() && this.state === "arming")
-        this.fail(new VoiceError("Corti didn't answer"));
-    });
-    this.quietStartTimer = this.later(this.timing.noSpeechMs, () => {
-      if (
-        live() &&
-        !this.heard &&
-        (this.state === "arming" || this.state === "listening")
-      )
-        this.fail(new VoiceError("nothing heard"));
-    });
-    this.later(
-      this.timing.maxMs,
-      () => live() && this.state === "listening" && this.finish(),
-    );
-    this.session = (this.o.start ?? startSession)({
-      creds: this.o.creds,
-      source: this.o.source ?? micSource,
-      ...this.config,
-      onReady: () => {
-        if (!live() || this.state !== "arming") return;
-        this.sessionAccepted = true;
-        this.setState("listening");
-      },
-      onInterim: (segment) => {
-        if (!live()) return;
-        this.speechHeard();
-        this.pendingInterim = segment;
-        this.o.sink.interim(segment);
-      },
-      onFinal: (segment) => {
-        if (!live()) return;
-        this.speechHeard();
-        this.pendingInterim = "";
-        this.finals++;
-        this.o.sink.final(segment);
-        this.o.onChange();
-      },
-      onLevel: (rms) => live() && this.level(rms),
-      onError: (err) => live() && this.fail(err),
-    });
+    else if (capturing(this.state)) this.finish();
   }
 
   /** Stop and keep: capture a short tail, then drain the finals. */
   finish(): void {
-    if (this.state !== "arming" && this.state !== "listening") return;
+    const d = this.d;
+    if (!d || !capturing(this.state)) return;
     // nothing said and nothing shown: changing your mind is not an error
-    if (!this.heard) {
-      this.session?.cancel();
-      this.done();
+    if (!d.heard) {
+      d.session.cancel();
+      this.end(d);
+      this.o.sink.end();
+      this.setState("idle");
       return;
     }
-    const gen = this.generation;
-    const session = this.session;
-    const wasArming = this.state === "arming";
-    if (this.flushTimer) this.cancelTimer(this.flushTimer);
+    const tailMs = this.state === "arming" ? 0 : this.timing.tailMs;
+    if (d.flush) this.cancelTimer(d, d.flush);
     this.setState("transcribing");
-    this.later(wasArming ? 0 : this.timing.tailMs, () => {
-      if (gen !== this.generation || !session) return;
-      this.mic = "closed";
-      session.stop().then(() => {
-        if (gen !== this.generation || this.state !== "transcribing") return;
+    this.later(d, tailMs, () => {
+      d.mic = "closed";
+      d.session.stop().then(() => {
+        if (d !== this.d) return;
+        if (!kept(d)) return this.fail(d, new VoiceError("nothing heard"));
         // a segment whose final never came is still better kept than lost
-        if (this.pendingInterim) this.o.sink.final(this.pendingInterim);
-        else if (this.finals === 0)
-          return this.fail(new VoiceError("nothing heard"));
-        this.done();
+        if (d.interim) this.o.sink.final(d.interim);
+        this.end(d);
+        this.o.sink.end();
+        this.setState("idle");
       });
     });
   }
 
   /** Esc: stop everything and restore the editor. */
   cancel(): void {
-    if (!this.active) return;
-    this.generation++;
-    this.session?.cancel();
-    this.session = undefined;
-    this.clearTimers();
+    const d = this.d;
+    if (!d) return;
+    d.session.cancel();
+    this.end(d);
     this.o.sink.end();
     this.o.sink.revert();
     this.setState("idle");
@@ -257,89 +218,131 @@ export class DictationController {
   /** Any keypress clears an error line early. */
   dismiss(): void {
     if (this.state !== "error") return;
-    this.clearTimers();
+    this.clearHold();
     this.setState("idle");
   }
 
   /** session_shutdown: no callbacks, no timers, nothing on screen. */
   dispose(): void {
-    this.generation++;
-    this.session?.cancel();
-    this.session = undefined;
-    this.clearTimers();
+    const d = this.d;
+    if (d) {
+      d.session.cancel();
+      this.end(d);
+    }
+    this.clearHold();
     this.state = "idle";
   }
 
-  private done(): void {
-    this.generation++;
-    this.session = undefined;
-    this.clearTimers();
-    this.o.sink.end();
-    this.setState("idle");
-  }
-
-  private fail(err: VoiceError): void {
-    this.generation++;
-    this.session?.cancel();
-    this.session = undefined;
-    this.clearTimers();
-    // words the user watched appear are kept, as a stop would keep them, and the line says so
-    const kept = this.finals > 0 || this.pendingInterim !== "";
-    if (this.pendingInterim) this.o.sink.final(this.pendingInterim);
-    this.o.sink.end();
-    this.message = kept ? `${err.message} · words kept` : err.message;
-    this.setState("error");
-    const gen = this.generation;
-    this.later(this.timing.errorHoldMs, () => {
-      if (gen === this.generation && this.state === "error")
-        this.setState("idle");
+  private start(): void {
+    this.clearHold();
+    // the session never calls back before it returns, so its callbacks can close over `d`
+    const d: Dictation = {
+      session: (this.o.start ?? startSession)({
+        creds: this.o.creds,
+        source: this.o.source ?? micSource,
+        ...this.config,
+        onReady: () => {
+          if (d !== this.d || this.state !== "arming") return;
+          d.accepted = true;
+          this.setState("listening");
+        },
+        onInterim: (segment) => {
+          if (d !== this.d) return;
+          d.heard = true;
+          d.interim = segment;
+          this.o.sink.interim(segment);
+        },
+        onFinal: (segment) => {
+          if (d !== this.d) return;
+          d.heard = true;
+          d.interim = "";
+          d.finals++;
+          this.o.sink.final(segment);
+          this.o.onChange();
+        },
+        onLevel: (rms) => this.level(d, rms),
+        onError: (err) => this.fail(d, err),
+      }),
+      startedAt: Date.now(),
+      mic: "waiting",
+      accepted: false,
+      heard: false,
+      finals: 0,
+      interim: "",
+      zeroChunks: 0,
+      lastChunkAt: 0,
+      timers: new Set(),
+    };
+    this.d = d;
+    this.o.sink.begin();
+    this.setState("arming");
+    this.later(d, this.timing.armTimeoutMs, () => {
+      if (this.state === "arming")
+        this.fail(d, new VoiceError("Corti didn't answer"));
+    });
+    this.later(d, this.timing.noSpeechMs, () => {
+      if (capturing(this.state) && !d.heard)
+        this.fail(d, new VoiceError("nothing heard"));
+    });
+    this.later(d, this.timing.maxMs, () => {
+      if (this.state === "listening") this.finish();
     });
   }
 
-  private level(rms: number): void {
+  /** One chunk from d's recorder: the meter, the stall and blocked-mic checks, the early flush. */
+  private level(d: Dictation, rms: number): void {
+    if (d !== this.d) return;
     this.o.onLevel?.(rms);
-    if (this.mic === "waiting") this.mic = "open";
-    this.lastChunkAt = Date.now();
-    if (this.state !== "listening" && this.state !== "arming") return;
-    if (this.stallTimer) this.cancelTimer(this.stallTimer);
-    const capturing = this.generation;
-    this.stallTimer = this.later(this.timing.stallMs, () =>
+    if (d.mic === "waiting") d.mic = "open";
+    d.lastChunkAt = Date.now();
+    if (!capturing(this.state)) return;
+    const { stallMs, flushMs } = this.timing;
+    if (d.stall) this.cancelTimer(d, d.stall);
+    d.stall = this.later(d, stallMs, () =>
       // after a long block the timer can run before queued chunks are read; one turn lets them land
       setImmediate(() => {
-        if (
-          capturing === this.generation &&
-          (this.state === "listening" || this.state === "arming") &&
-          Date.now() - this.lastChunkAt >= this.timing.stallMs
-        )
-          this.fail(new VoiceError("microphone stopped"));
+        if (capturing(this.state) && Date.now() - d.lastChunkAt >= stallMs)
+          this.fail(d, new VoiceError("microphone stopped"));
       }),
     );
     if (rms === 0) {
-      if (++this.zeroChunks >= ZERO_CHUNKS_BLOCKED && !this.heard) {
+      if (++d.zeroChunks >= ZERO_CHUNKS_BLOCKED && !d.heard)
         this.fail(
+          d,
           new VoiceError("microphone blocked · System Settings › Privacy"),
         );
-      }
       return;
     }
-    this.zeroChunks = -Infinity;
+    d.zeroChunks = Number.NEGATIVE_INFINITY;
     if (dbfs(rms) <= SPEECH_DBFS) return;
-    this.speechHeard();
-    if (this.state === "listening") {
-      const gen = this.generation;
-      if (this.flushTimer) this.cancelTimer(this.flushTimer);
-      this.flushTimer = this.later(this.timing.flushMs, () => {
-        if (gen === this.generation && this.state === "listening")
-          this.session?.flush?.();
-      });
-    }
+    d.heard = true;
+    if (this.state !== "listening") return;
+    if (d.flush) this.cancelTimer(d, d.flush);
+    d.flush = this.later(d, flushMs, () => {
+      if (this.state === "listening") d.session.flush?.();
+    });
   }
 
-  /** A loud chunk and a transcript are the same evidence: nothing-heard can no longer fire. */
-  private speechHeard(): void {
-    this.heard = true;
-    if (this.quietStartTimer) this.cancelTimer(this.quietStartTimer);
-    this.quietStartTimer = undefined;
+  /** d failed: words already shown stay, and the error line says so. */
+  private fail(d: Dictation, err: VoiceError): void {
+    if (d !== this.d) return;
+    d.session.cancel();
+    this.end(d);
+    if (d.interim) this.o.sink.final(d.interim);
+    this.o.sink.end();
+    this.message = kept(d) ? `${err.message} · words kept` : err.message;
+    this.setState("error");
+    this.hold = setTimeout(() => {
+      this.hold = undefined;
+      this.setState("idle");
+    }, this.timing.errorHoldMs);
+  }
+
+  /** From here on, no timer of d's fires and no callback of d's has any effect. */
+  private end(d: Dictation): void {
+    for (const t of d.timers) clearTimeout(t);
+    d.timers.clear();
+    this.d = undefined;
   }
 
   private setState(s: VoiceState): void {
@@ -348,25 +351,23 @@ export class DictationController {
     this.o.onChange();
   }
 
-  private later(ms: number, fn: () => void): ReturnType<typeof setTimeout> {
+  /** A timer that dies with d: `end(d)` clears it, so `fn` runs only while d is running. */
+  private later(d: Dictation, ms: number, fn: () => void): Timer {
     const t = setTimeout(() => {
-      this.timers.delete(t);
+      d.timers.delete(t);
       fn();
     }, ms);
-    this.timers.add(t);
+    d.timers.add(t);
     return t;
   }
 
-  private cancelTimer(t: ReturnType<typeof setTimeout>): void {
+  private cancelTimer(d: Dictation, t: Timer): void {
     clearTimeout(t);
-    this.timers.delete(t);
+    d.timers.delete(t);
   }
 
-  private clearTimers(): void {
-    for (const t of this.timers) clearTimeout(t);
-    this.timers.clear();
-    this.quietStartTimer = undefined;
-    this.flushTimer = undefined;
-    this.stallTimer = undefined;
+  private clearHold(): void {
+    if (this.hold) clearTimeout(this.hold);
+    this.hold = undefined;
   }
 }

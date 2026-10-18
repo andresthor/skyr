@@ -127,6 +127,7 @@ export function prewarmToken(
   getSttToken(creds, doFetch).catch(() => {});
 }
 
+/** Opens the mic and a Corti session. No callback in `o` runs before this returns. */
 export function startSession(o: SessionOptions): SttSession {
   const Socket = o.WebSocket ?? WebSocket;
   const transcript = new TranscriptAssembler();

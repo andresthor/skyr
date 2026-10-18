@@ -3,12 +3,18 @@
  * seam that replaces Corti and the microphone is reachable only there; one test registers
  * through `registerSkyr`, and one loads skyr into a real Pi session.
  */
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { parseColor } from "@earendil-works/pi-tui";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
+// Pi builds its app bindings with this class but does not export it from its root
+import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import type { SessionOptions } from "../src/voice/client.js";
 import type { VoiceEditorLike } from "../src/voice/editor.js";
 import { VoiceError } from "../src/voice/errors.js";
 import { startRefusal, VOICE_SHORTCUT, voiceMode } from "../src/voice/index.js";
+import { parentSession } from "./session.js";
 import {
   agentDirWith,
   CREDS,
@@ -377,4 +383,40 @@ describe("registerSkyr", () => {
     expect([...pi.shortcuts.keys()]).toEqual([VOICE_SHORTCUT]);
     expect(VOICE_SHORTCUT).toBe("ctrl+space");
   });
+});
+
+test("in a real Pi session the shortcut is accepted without a diagnostic, and a reload runs voice's shutdown and start cleanly", async () => {
+  withCreds();
+  const parent = await parentSession({
+    respond: () => fauxAssistantMessage("ok"),
+  });
+  const errors: string[] = [];
+  await parent.session.bindExtensions({
+    onError: (e) => errors.push(`${e.event}: ${e.error}`),
+  });
+  // Pi resolves extension shortcuts against its app bindings (interactive-mode.js:1715)
+  const bindings = KeybindingsManager.create(
+    parent.agentDir,
+  ).getEffectiveConfig();
+  const accepted = () => {
+    const runner = parent.session.extensionRunner;
+    const shortcuts = runner.getShortcuts(bindings);
+    return {
+      has: shortcuts.has(VOICE_SHORTCUT),
+      diagnostics: runner.getShortcutDiagnostics(),
+    };
+  };
+  expect(accepted()).toEqual({ has: true, diagnostics: [] });
+  // reload runs session_shutdown on the old registration, then session_start on the new one,
+  // which re-reads skyr.json and says what it found
+  writeFileSync(
+    join(parent.agentDir, "skyr.json"),
+    '{"voice": {"frobnicate": true}}',
+  );
+  await parent.session.reload();
+  expect(parent.notices.filter((n) => n.includes("frobnicate"))).toHaveLength(
+    1,
+  );
+  expect(accepted()).toEqual({ has: true, diagnostics: [] });
+  expect(errors).toEqual([]);
 });

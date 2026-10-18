@@ -238,21 +238,36 @@ test("more than 995 replacements is cut with one problem", () => {
   ]);
 });
 
-test("mergeVocabulary appends the user terms over the built-ins, built-ins winning case dups", () => {
+test("mergeVocabulary: a user term replaces the built-in it matches, in either case", () => {
   const config = {
     ...VOICE_DEFAULTS,
-    keyterms: ["npm", "Skýr"],
+    keyterms: ["Skýr", "NPM"],
     replacements: [
-      { find: "async await", replace: "duplicating" },
+      { find: "type script", replace: "TS! " }, // the built-in's letters, all lower
+      { find: "get hub", replace: "GH" }, // the built-in's find, all lower
       { find: "vitst", replace: "vitest" },
     ],
   };
   const merged = mergeVocabulary(config);
-  expect(merged.keyterms).toEqual([...CODING_KEYTERMS, "Skýr"]);
-  expect(merged.replacements.map((r) => r.find)).toEqual([
-    ...CODING_REPLACEMENTS.map((r) => r.find),
-    "vitst",
-  ]);
+  expect(merged.keyterms).toContain("NPM");
+  expect(merged.keyterms).not.toContain("npm");
+  expect(merged.keyterms).toContain("Skýr");
+  expect(merged.keyterms).toHaveLength(CODING_KEYTERMS.length + 1);
+  expect(merged.replacements).toContainEqual({
+    find: "type script",
+    replace: "TS! ",
+  });
+  expect(merged.replacements).toContainEqual({
+    find: "get hub",
+    replace: "GH",
+  });
+  expect(merged.replacements).not.toContainEqual({
+    find: "Get Hub",
+    replace: "GitHub",
+  });
+  // one-for-one: every replacement removed a built-in instead of growing the list,
+  // so the merged counts stay inside Corti's 1,000 cap
+  expect(merged.replacements).toHaveLength(CODING_REPLACEMENTS.length + 1);
 });
 
 test("mergeVocabulary leaves count and content untouched when the user adds nothing", () => {

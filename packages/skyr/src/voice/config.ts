@@ -241,28 +241,38 @@ export function parseVoiceSection(raw: unknown): {
   return { config, problems };
 }
 
-/** Merges user terms over the built-ins (built-ins win the case-duplicate check; counts were
- * capped during parsing, so the merged lists stay inside Corti's 1,000). */
+/** Last-write-wins merge by a case-insensitive key: a matching earlier entry is dropped, so
+ * a user rule never sits beside the one it replaces. */
+function mergeList<T>(
+  builtins: readonly T[],
+  user: readonly T[],
+  key: (t: T) => string,
+): T[] {
+  const out = [...builtins];
+  for (const item of user) {
+    const k = key(item);
+    const at = out.findIndex((existing) => key(existing) === k);
+    if (at >= 0) out.splice(at, 1);
+    out.push(item);
+  }
+  return out;
+}
+
+/** Merges the user's terms with the built-ins: a user rule that matches a built-in (ignoring
+ * case) replaces it — sending both would be CONFIG_DENIED. The swap is one-for-one, and the
+ * user lists were capped against the built-ins during parsing, so each merged list stays
+ * inside Corti's 1,000. */
 export function mergeVocabulary(
   config: VoiceConfig,
 ): Pick<SttConfig, "keyterms" | "replacements"> {
-  const seen = new Set(CODING_KEYTERMS.map((t) => t.toLowerCase()));
-  const keyterms = [...CODING_KEYTERMS];
-  for (const term of config.keyterms) {
-    const key = term.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    keyterms.push(term);
-  }
-  const replaced = new Set(
-    CODING_REPLACEMENTS.map((r) => r.find.toLowerCase()),
-  );
-  const replacements = [...CODING_REPLACEMENTS].map((r) => ({ ...r }));
-  for (const r of config.replacements) {
-    const key = r.find.toLowerCase();
-    if (replaced.has(key)) continue;
-    replaced.add(key);
-    replacements.push({ ...r });
-  }
-  return { keyterms, replacements };
+  return {
+    keyterms: mergeList(CODING_KEYTERMS, config.keyterms, (t) =>
+      t.toLowerCase(),
+    ),
+    replacements: mergeList(
+      CODING_REPLACEMENTS.map((r) => ({ ...r })),
+      config.replacements,
+      (r) => r.find.toLowerCase(),
+    ),
+  };
 }

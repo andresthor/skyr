@@ -13,6 +13,7 @@ import {
   startSession,
 } from "../src/voice/client.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
+import { VoiceError } from "../src/voice/errors.js";
 import { CREDS } from "./voice.js";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -140,23 +141,32 @@ test("getSttToken caches per env\\0tenant\\0clientId, with the 60 s margin", asy
   expect(e).toHaveLength(2);
 });
 
-test("auth failures and network drops surface as auth / network errors, one token per fetch body", async () => {
-  const rejected: number[] = [];
-  await expect(
-    getSttToken(
-      { ...CREDS, clientId: "c" },
-      (async () =>
-        new Response("no", { status: 403 })) as unknown as typeof fetch,
-    ),
-  ).rejects.toMatchObject({ kind: "auth" });
-  await expect(
-    getSttToken(
-      { ...CREDS, clientId: "c" },
-      (async () =>
-        new Response("no", { status: 500 })) as unknown as typeof fetch,
-    ),
-  ).rejects.toMatchObject({ kind: "network" });
-  expect(rejected).toHaveLength(0);
+/** A fetch that answers every request with `status`. */
+const answering = (status: number) =>
+  (async () => new Response("no", { status })) as unknown as typeof fetch;
+
+test.each([400, 401, 403])(
+  "a sign-in refused with %i reads as rejected credentials",
+  async (status) => {
+    await expect(getSttToken(creds(), answering(status))).rejects.toThrow(
+      "credentials rejected",
+    );
+  },
+);
+
+test("a failing sign-in server reads as Corti unavailable, never as rejected credentials", async () => {
+  await expect(getSttToken(creds(), answering(500))).rejects.toThrow(
+    "Corti auth unavailable (500)",
+  );
+});
+
+test("a sign-in request that never gets an answer reads as can't reach Corti", async () => {
+  const offline = (async () => {
+    throw new TypeError("fetch failed");
+  }) as unknown as typeof fetch;
+  await expect(getSttToken(creds(), offline)).rejects.toThrow(
+    "can't reach Corti",
+  );
 });
 
 test("CONFIG_ACCEPTED opens the pump at the 8,000 B chunk boundary, with the config per the union", async () => {
@@ -198,19 +208,21 @@ test("the default punctuation union is automatic, no spoken key, and no keyterms
   h.session.cancel();
 });
 
-test("other CONFIG_* frames are a config failure: no further audio, error told once", async () => {
+test("other CONFIG_* frames are a config failure: the mic and socket close, and the error is told once", async () => {
   const h = await drive();
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_DENIED", reason: "tenant not found" });
-  await vi.waitFor(() =>
-    expect(h.onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "config",
-        message: "Corti rejected the session",
-      }),
-    ),
+  expect(h.onError).toHaveBeenCalledWith(
+    expect.objectContaining({
+      kind: "config",
+      message: "Corti rejected the session",
+    }),
   );
-  h.session.cancel();
+  expect(h.source.destroyed).toBe(true);
+  expect(h.sock.readyState).toBe(3);
+  // the server's own close afterwards is not a second failure
+  h.sock.onclose?.();
+  expect(h.onError).toHaveBeenCalledTimes(1);
 });
 
 test("transcripts route finals and interims", async () => {
@@ -402,4 +414,115 @@ test("the interim Corti re-sends after a final is dropped, so a stop never commi
   const stop = h.session.stop();
   h.sock.server({ type: "ended" });
   await expect(stop).resolves.toBe("hello there");
+});
+
+test("a Corti error frame ends the session with an error", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  h.sock.server({ type: "error", error: "boom" });
+  expect(h.onError).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "Corti transcription error" }),
+  );
+  expect(h.sock.readyState).toBe(3);
+});
+
+test("a failure while a stop drains is not reported: the stop resolves with what was committed", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  h.sock.server({
+    type: "transcript",
+    data: { text: "kept words", start: 0, isFinal: true },
+  });
+  const stop = h.session.stop();
+  h.sock.server({ type: "error" });
+  await expect(stop).resolves.toBe("kept words");
+  expect(h.onError).not.toHaveBeenCalled();
+});
+
+test("a close while a stop drains resolves the committed text, with no error", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  h.sock.server({
+    type: "transcript",
+    data: { text: "kept words", start: 0, isFinal: true },
+  });
+  const stop = h.session.stop();
+  h.sock.onclose?.();
+  await expect(stop).resolves.toBe("kept words");
+  expect(h.onError).not.toHaveBeenCalled();
+});
+
+test("after cancel no callback fires, whatever the server still sends", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  h.session.cancel();
+  h.sock.server({
+    type: "transcript",
+    data: { text: "late interim", start: 0, isFinal: false },
+  });
+  h.sock.server({
+    type: "transcript",
+    data: { text: "late final", start: 0, isFinal: true },
+  });
+  h.sock.server({ type: "error" });
+  h.sock.onclose?.();
+  expect(h.interim).not.toHaveBeenCalled();
+  expect(h.final).not.toHaveBeenCalled();
+  expect(h.onError).not.toHaveBeenCalled();
+});
+
+test("when Corti never sends ended, a stop still resolves with the committed text after the end timeout", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  h.sock.server({
+    type: "transcript",
+    data: { text: "kept words", start: 0, isFinal: true },
+  });
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  let resolved: string | undefined;
+  void h.session.stop().then((text) => {
+    resolved = text;
+  });
+  await vi.advanceTimersByTimeAsync(2_499);
+  expect(resolved).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(resolved).toBe("kept words");
+  expect(h.onError).not.toHaveBeenCalled();
+});
+
+test("a flush before Corti accepts the config sends nothing", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  writePcm(h.source, 5_000);
+  await vi.waitFor(() => expect(h.source.readableLength).toBe(0));
+  h.session.flush?.();
+  expect(h.sock.audio()).toEqual([]);
+  expect(h.sock.control().map((c) => c.type)).toEqual(["config"]);
+  h.session.cancel();
+});
+
+test("a recorder that fails with its own reason reports that reason", async () => {
+  const onError = vi.fn();
+  startSession({
+    creds: creds(),
+    source: () => {
+      throw new VoiceError("recorder", "needs sox · brew install sox");
+    },
+    onInterim: () => {},
+    onFinal: () => {},
+    onError,
+    fetch: tokenFetch([], "tok", 3600),
+    WebSocket: SocketMaker,
+  });
+  await tick();
+  expect(onError).toHaveBeenCalledTimes(1);
+  expect(onError).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "needs sox · brew install sox" }),
+  );
 });

@@ -475,6 +475,22 @@ test("/voice on while a dictation runs leaves it running", async () => {
   expect(bottomRow(h.ed)).toContain("listening");
 });
 
+test("a new dictation starts with an empty meter, not the last one's tail", async () => {
+  const h = await mounted();
+  await h.toggle();
+  h.starts[0]!.onReady?.();
+  const fresh = bottomRow(h.ed);
+  for (let i = 0; i < 4; i++) {
+    h.starts[0]!.onLevel?.(0.1);
+    await vi.advanceTimersByTimeAsync(50);
+  }
+  expect(bottomRow(h.ed)).toMatch(/[=#]/);
+  await h.pi.commands.get("voice")!.handler("off", h.ctx);
+  await h.toggle();
+  h.starts[1]!.onReady?.();
+  expect(bottomRow(h.ed)).toBe(fresh);
+});
+
 test("the command and shortcut descriptions say what they do", async () => {
   withCreds();
   agentDirWith();

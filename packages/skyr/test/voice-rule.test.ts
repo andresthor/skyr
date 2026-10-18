@@ -31,7 +31,7 @@ const draw = (
     rule,
     keys: HINT_KEYS,
     paint: testPaint(o.mode),
-    hiddenBelow: o.hiddenBelow,
+    hiddenBelow: o.hiddenBelow ?? 0,
   });
 const plain = (s: Partial<VoiceSnapshot>, o = {}) =>
   stripTerminalSequences(draw(s, o) ?? "");
@@ -133,6 +133,7 @@ test("short bars recede toward the background on a light theme, as on a dark one
   const light = meterLightness(
     renderRule(snap({ bars }), {
       width: 72,
+      hiddenBelow: 0,
       rule,
       keys: HINT_KEYS,
       paint: testPaint("color", testTheme({ appearance: "light" })),
@@ -178,6 +179,7 @@ test("advisories ride with the word they qualify", () => {
 test("the rule keeps Pi's colour: every rule cell goes through the editor's own border colour", () => {
   const row = renderRule(snap({ bars: SILENCE }), {
     width: 40,
+    hiddenBelow: 0,
     rule: (s) => `<${s}>`,
     keys: HINT_KEYS,
     paint: testPaint(),
@@ -237,6 +239,7 @@ test("when not even the mic light fits, voice draws nothing and Pi's own rule, s
 test("an unbound key draws no hint at all, so nothing pretends to name a key that isn't there", () => {
   const half = renderRule(snap(), {
     width: 72,
+    hiddenBelow: 0,
     rule,
     keys: { submit: "", cancel: "escape", undo: "ctrl+-" },
     paint: testPaint(),
@@ -246,6 +249,7 @@ test("an unbound key draws no hint at all, so nothing pretends to name a key tha
   expect(stripTerminalSequences(half)).not.toMatch(/· ·/);
   const none = renderRule(snap(), {
     width: 72,
+    hiddenBelow: 0,
     rule,
     keys: { submit: "", cancel: "", undo: "" },
     paint: testPaint(),
@@ -281,6 +285,7 @@ test("TERM=dumb marks are ASCII; NO_COLOR keeps the glyphs without colour; 256-c
   expect(mono).toContain("●");
   const indexed = renderRule(snap({}), {
     width: 72,
+    hiddenBelow: 0,
     rule,
     keys: HINT_KEYS,
     paint: testPaint("color", testTheme({ colorMode: "256color" })),

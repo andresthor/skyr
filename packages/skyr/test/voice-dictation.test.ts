@@ -95,7 +95,7 @@ function harness(
       ...o.sinkOverride,
     },
     onChange: () => states.push(controller.state),
-    onLevel: o.onLevel,
+    onLevel: o.onLevel ?? (() => {}),
     source: () => new PassThrough(),
     start: (opts) => {
       options.push(opts);

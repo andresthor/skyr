@@ -9,6 +9,7 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import {
   getSttToken,
   type SessionOptions,
+  type SttConfig,
   type SttSession,
   startSession,
   TOKEN_TIMEOUT_MS,
@@ -70,6 +71,15 @@ class FakeSocket {
 const sockets = () => FakeSocket.instances;
 const SocketMaker = FakeSocket as unknown as typeof WebSocket;
 
+/** English, interims on, automatic punctuation and no vocabulary: what a test's session asks Corti for. */
+const CONFIG: SttConfig = {
+  language: "en",
+  interims: true,
+  punctuation: "automatic",
+  keyterms: [],
+  replacements: [],
+};
+
 let salt = 0;
 /** A fresh identity per call, so the module's token cache never carries over between tests. */
 const creds = (): SttCredentials => ({ ...CREDS, clientId: `id${++salt}` });
@@ -105,8 +115,10 @@ async function drive(o: Partial<SessionOptions> = {}): Promise<Drive> {
   const final = vi.fn();
   const interim = vi.fn();
   const session = startSession({
+    ...CONFIG,
     creds: creds(),
-    language: "en",
+    onReady: () => {},
+    onLevel: () => {},
     source: () => source,
     onInterim: interim,
     onFinal: final,
@@ -114,7 +126,7 @@ async function drive(o: Partial<SessionOptions> = {}): Promise<Drive> {
     fetch: tokenFetch([], "tok", 3600),
     WebSocket: SocketMaker,
     ...o,
-  } as SessionOptions);
+  });
   onTestFinished(() => void source.destroy());
   await tick();
   await tick();
@@ -214,8 +226,10 @@ test("DNS naming the sign-in host as unknown points at a mistyped environment", 
 test("a plain recorder failure reads as microphone unavailable", async () => {
   const onError = vi.fn();
   startSession({
+    ...CONFIG,
     creds: creds(),
-    language: "en",
+    onReady: () => {},
+    onLevel: () => {},
     source: () => {
       throw new Error("spawn went wrong");
     },
@@ -265,13 +279,13 @@ test("the voice settings reach Corti's config with exactly one punctuation mode"
   h.session.cancel();
 });
 
-test("fields left out take Corti's defaults, and the language always comes from the caller", async () => {
-  const h = await drive({ interims: undefined });
+test("interims off is sent as off, automatic punctuation as its one flag, and an empty vocabulary not at all", async () => {
+  const h = await drive({ interims: false });
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_ACCEPTED" });
   const config = h.sock.control()[0]!.configuration as Record<string, unknown>;
   expect(config.primaryLanguage).toBe("en");
-  expect(config.interimResults).toBe(true);
+  expect(config.interimResults).toBe(false);
   expect(config.automaticPunctuation).toBe(true);
   expect(config.spokenPunctuation).toBeUndefined();
   expect(config.keyterms).toBeUndefined();
@@ -476,8 +490,10 @@ test("a recorder that fails to start, reported to an onError that throws, never 
   process.on("uncaughtException", record);
   onTestFinished(() => void process.off("uncaughtException", record));
   const session = startSession({
+    ...CONFIG,
     creds: creds(),
-    language: "en",
+    onReady: () => {},
+    onLevel: () => {},
     source: () => {
       throw new Error("spawn failed");
     },
@@ -613,7 +629,7 @@ test("a flush before Corti accepts the config sends nothing", async () => {
   writePcm(h.source, 5_000);
   // the chunk reached the client: it is buffered, waiting for Corti's answer
   expect(onLevel).toHaveBeenCalledTimes(1);
-  h.session.flush?.();
+  h.session.flush();
   expect(h.sock.audio()).toEqual([]);
   expect(h.sock.control().map((c) => c.type)).toEqual(["config"]);
   h.session.cancel();
@@ -631,8 +647,10 @@ test("each recorder chunk's level reaches onLevel in dBFS", async () => {
 test("a recorder that fails with its own reason reports that reason", async () => {
   const onError = vi.fn();
   startSession({
+    ...CONFIG,
     creds: creds(),
-    language: "en",
+    onReady: () => {},
+    onLevel: () => {},
     source: () => {
       throw new VoiceError("sox not found · brew install sox");
     },

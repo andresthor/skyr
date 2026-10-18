@@ -44,19 +44,15 @@ export interface SttConfig {
   replacements: readonly Replacement[];
 }
 
-/** Fields left out take Corti's defaults: interims on, automatic punctuation, no vocabulary.
- * `language` is not one of them — the controller always carries one, from voice/config.ts's
- * defaults, so this interface never spells "en" a second time. */
-export interface SessionOptions extends Partial<Omit<SttConfig, "language">> {
-  language: string;
+export interface SessionOptions extends SttConfig {
   creds: SttCredentials;
   source: () => Readable;
   /** Server accepted the config; audio is flowing. */
-  onReady?: () => void;
+  onReady: () => void;
   onInterim: (segment: string) => void;
   onFinal: (segment: string) => void;
   /** Each captured chunk's level in dBFS, −Infinity for digital silence, roughly every 64 ms. */
-  onLevel?: (dbfs: number) => void;
+  onLevel: (dbfs: number) => void;
   onError: (err: VoiceError) => void;
   fetch?: typeof fetch;
   WebSocket?: typeof WebSocket;
@@ -68,7 +64,7 @@ export interface SttSession {
   /** Drop everything now. No more callbacks fire. */
   cancel(): void;
   /** Ask for the pending segment's final now (about 1 s) instead of at the next pause or `end`. */
-  flush?(): void;
+  flush(): void;
 }
 
 let cached: { key: string; token: string; exp: number } | undefined;
@@ -256,7 +252,7 @@ export function startSession(o: SessionOptions): SttSession {
     queueMicrotask(
       guard(() => fail(e instanceof VoiceError ? e : micFailed())),
     );
-    return { stop: () => done, cancel: () => {} };
+    return { stop: () => done, cancel: () => {}, flush: () => {} };
   }
   audio.on(
     "error",
@@ -266,7 +262,7 @@ export function startSession(o: SessionOptions): SttSession {
     "data",
     guard((d: Buffer) => {
       if (closed || stopping) return;
-      o.onLevel?.(pcmDbfs(d));
+      o.onLevel(pcmDbfs(d));
       pending = Buffer.concat([pending, d]);
       pump();
     }),
@@ -290,16 +286,16 @@ export function startSession(o: SessionOptions): SttSession {
             type: "config",
             configuration: {
               primaryLanguage: o.language,
-              interimResults: o.interims !== false,
+              interimResults: o.interims,
               // spokenPunctuation silently wins if both are set, so encode exactly one
               ...(o.punctuation === "spoken"
                 ? { spokenPunctuation: true, automaticPunctuation: false }
                 : { automaticPunctuation: true }),
               audioFormat: PCM,
-              ...(o.keyterms?.length
+              ...(o.keyterms.length
                 ? { keyterms: { terms: o.keyterms.map((term) => ({ term })) } }
                 : {}),
-              ...(o.replacements?.length
+              ...(o.replacements.length
                 ? { replacements: o.replacements }
                 : {}),
             },
@@ -317,7 +313,7 @@ export function startSession(o: SessionOptions): SttSession {
         const m = frame as Record<string, unknown>;
         if (m.type === "CONFIG_ACCEPTED") {
           accepted = true;
-          o.onReady?.();
+          o.onReady();
           if (stopping) sendEnd(sock);
           else pump();
         } else if (typeof m.type === "string" && m.type.startsWith("CONFIG_")) {

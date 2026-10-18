@@ -107,16 +107,16 @@ interface DryingSpan {
 interface GhostInput {
   width: number;
   /** The editor's horizontal padding (`editorPaddingX`). */
-  paddingX?: number;
-  /** Interim text, drawn after the cursor. */
-  ghost?: string;
+  paddingX: number;
+  /** Interim text, drawn after the cursor; "" draws none. */
+  ghost: string;
   /**
    * Freshly committed spans, newest first. The newest ends at the cursor; each span is `chars`
    * long, `lead` characters separate it from the older one before it, and it landed `age` ms ago.
    */
-  drying?: readonly DryingSpan[];
+  drying: readonly DryingSpan[];
   /** Rows the editor drew under its bottom rule (the autocomplete list). */
-  below?: number;
+  below: number;
   paint: Paint;
 }
 
@@ -128,14 +128,7 @@ interface GhostInput {
  */
 export function spliceGhost(
   lines: string[],
-  {
-    width,
-    paddingX = 0,
-    ghost = "",
-    drying = [],
-    below = 0,
-    paint,
-  }: GhostInput,
+  { width, paddingX, ghost, drying, below, paint }: GhostInput,
 ): string[] {
   const out = lines.slice();
   // `ascii` (TERM=dumb) draws no decoration at all; `mono` keeps the ghost as italic faint text

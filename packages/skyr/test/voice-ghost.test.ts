@@ -22,6 +22,9 @@ import {
 
 const PLAIN_RUN = { bold: false, dim: false, italic: false };
 
+/** What the editor hands over with nothing to decorate: no padding, interim, drying span or autocomplete. */
+const UNDECORATED = { paddingX: 0, ghost: "", drying: [], below: 0 };
+
 /** [top rule, ...text rows, bottom rule], as Pi's editor renders it around the plain text. */
 const editorBase = (
   text: string,
@@ -35,6 +38,7 @@ const editorBase = (
 
 test("the ghost lands right after the cursor cell, on the cursor's own row", () => {
   const lines = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
+    ...UNDECORATED,
     width: 40,
     paddingX: 2,
     ghost: "world",
@@ -53,6 +57,7 @@ test("a ghost too wide for the cursor row wraps below it and never passes the bo
   const width = 16;
   const paddingX = 2;
   const lines = spliceGhost(editorBase("hi", width, { paddingX }), {
+    ...UNDECORATED,
     width,
     paddingX,
     ghost: "one two three four five",
@@ -82,6 +87,7 @@ test("a cursor row with room only in the padding still keeps every row within wi
   const paddingX = 2;
   const ghost = "你好🎉🙂 e\u0301xtraaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const lines = spliceGhost(editorBase("ok", width, { paddingX }), {
+    ...UNDECORATED,
     width,
     paddingX,
     ghost,
@@ -99,6 +105,7 @@ test("a cursor row with room only in the padding still keeps every row within wi
 test("escape bytes in the ghost text never reach any rendered row", () => {
   const ghost = "hi \x1b[31mred\x1b[0m \x1b_pi:evil\x07 \x1b[2J\u202etail";
   const lines = spliceGhost(editorBase("x", 30, { paddingX: 1 }), {
+    ...UNDECORATED,
     width: 30,
     paddingX: 1,
     ghost,
@@ -115,6 +122,7 @@ test("escape bytes in the ghost text never reach any rendered row", () => {
 
 test("a newline or tab in the ghost never reaches a row: the ghost is one display line", () => {
   const lines = spliceGhost(editorBase("x", 30), {
+    ...UNDECORATED,
     width: 30,
     ghost: "first line\nsecond\tthird",
     paint: testPaint(),
@@ -131,10 +139,16 @@ test("a newline or tab in the ghost never reaches a row: the ghost is one displa
 test("an editor without the cursor cell draws no ghost and no wet colouring", () => {
   const base = editorBase("hello", 20, { focused: false });
   expect(
-    spliceGhost(base, { width: 20, ghost: "ghost", paint: testPaint() }),
+    spliceGhost(base, {
+      ...UNDECORATED,
+      width: 20,
+      ghost: "ghost",
+      paint: testPaint(),
+    }),
   ).toEqual(base);
   expect(
     spliceGhost(base, {
+      ...UNDECORATED,
       width: 20,
       ghost: "ghost",
       drying: [{ chars: 2, lead: 0, age: 10 }],
@@ -145,8 +159,11 @@ test("an editor without the cursor cell draws no ghost and no wet colouring", ()
 
 test("an idle buffer is returned exactly, and the rules stay Pi's: the ghost never recolours them", () => {
   const base = editorBase("hello", 20);
-  expect(spliceGhost(base, { width: 20, paint: testPaint() })).toEqual(base);
+  expect(
+    spliceGhost(base, { ...UNDECORATED, width: 20, paint: testPaint() }),
+  ).toEqual(base);
   const decorated = spliceGhost(base, {
+    ...UNDECORATED,
     width: 20,
     ghost: "more",
     drying: [{ chars: 3, lead: 0, age: 10 }],
@@ -156,6 +173,7 @@ test("an idle buffer is returned exactly, and the rules stay Pi's: the ghost nev
   expect(decorated.at(-1)).toBe(base.at(-1));
   // a span past its drying window colours nothing
   const dried = spliceGhost(base, {
+    ...UNDECORATED,
     width: 20,
     drying: [{ chars: 3, lead: 0, age: DRY_MS }],
     paint: testPaint(),
@@ -165,6 +183,7 @@ test("an idle buffer is returned exactly, and the rules stay Pi's: the ghost nev
 
 test("a committed span is born in the accent colour and dries colourless after DRY_MS", () => {
   const wet = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
+    ...UNDECORATED,
     width: 40,
     paddingX: 2,
     drying: [{ chars: 5, lead: 0, age: 0 }],
@@ -178,6 +197,7 @@ test("a committed span is born in the accent colour and dries colourless after D
   expect(styledRuns(row).filter((r) => r.fg)).toHaveLength(1);
   expect(row).toContain(CURSOR_CELL);
   const dried = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
+    ...UNDECORATED,
     width: 40,
     paddingX: 2,
     drying: [{ chars: 5, lead: 0, age: DRY_MS }],
@@ -188,6 +208,7 @@ test("a committed span is born in the accent colour and dries colourless after D
 
 test("a 256-colour terminal gets 256-colour escapes from the theme, never 24-bit ones", () => {
   const lines = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
+    ...UNDECORATED,
     width: 40,
     paddingX: 2,
     ghost: "world",
@@ -202,6 +223,7 @@ test("a 256-colour terminal gets 256-colour escapes from the theme, never 24-bit
 
 test("NO_COLOR keeps the ghost as italic and faint text, with no colour anywhere", () => {
   const lines = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
+    ...UNDECORATED,
     width: 40,
     paddingX: 2,
     ghost: "world",
@@ -219,6 +241,7 @@ test("TERM=dumb draws no decoration at all: the rows come back unchanged", () =>
   const base = editorBase("hello", 40, { paddingX: 2 });
   expect(
     spliceGhost(base, {
+      ...UNDECORATED,
       width: 40,
       paddingX: 2,
       ghost: "world",
@@ -232,6 +255,7 @@ test("the ghost and a fresh commit draw in the theme's own dim and accent", () =
   const dim = parseColor("#72727d");
   const row =
     spliceGhost(editorBase("hello", 40), {
+      ...UNDECORATED,
       width: 40,
       ghost: "world",
       drying: [{ chars: 5, lead: 0, age: 0 }],
@@ -248,6 +272,7 @@ test("the ghost and a fresh commit draw in the theme's own dim and accent", () =
 test("two finals landing 100 ms apart dry on their own clocks, and the space between them stays plain", () => {
   const row =
     spliceGhost(editorBase("one two", 40), {
+      ...UNDECORATED,
       width: 40,
       drying: [
         { chars: 3, lead: 1, age: 50 },
@@ -269,6 +294,7 @@ test("a theme whose accent is close to its text still gets a visible flash, in t
   });
   const row =
     spliceGhost(editorBase("hello", 40), {
+      ...UNDECORATED,
       width: 40,
       drying: [{ chars: 5, lead: 0, age: 0 }],
       paint: testPaint("color", sequoia),
@@ -291,6 +317,7 @@ test("a theme whose accent is close to its text still gets a visible flash, in t
 
 test("under NO_COLOR a fresh commit is bold until it dries, with no colour", () => {
   const wet = spliceGhost(editorBase("hello", 40), {
+    ...UNDECORATED,
     width: 40,
     drying: [{ chars: 5, lead: 0, age: 100 }],
     paint: testPaint("mono"),
@@ -302,6 +329,7 @@ test("under NO_COLOR a fresh commit is bold until it dries, with no colour", () 
   });
   expect(styledRuns(wet.join("")).filter((r) => r.fg)).toEqual([]);
   const dry = spliceGhost(editorBase("hello", 40), {
+    ...UNDECORATED,
     width: 40,
     drying: [{ chars: 5, lead: 0, age: DRY_MS }],
     paint: testPaint("mono"),
@@ -315,6 +343,7 @@ test("emoji with a variation selector never push a ghost or drying row past the 
     const lines = spliceGhost(
       editorBase("see ▶️ here", width, { paddingX: 1 }),
       {
+        ...UNDECORATED,
         width,
         paddingX: 1,
         ghost: `${"▶️ ".repeat(12)}©️®️‼️ done`,

@@ -123,7 +123,7 @@ export interface DictationControllerOptions {
    * without it, reaching the screen on the display's own tick instead. */
   onChange: () => void;
   /** Each chunk's level in dBFS, −Infinity for digital silence. */
-  onLevel?: (dbfs: number) => void;
+  onLevel: (dbfs: number) => void;
   source?: () => Readable;
   timing?: Partial<DictationTiming>;
   start?: (o: SessionOptions) => SttSession;
@@ -336,7 +336,7 @@ export class DictationController {
   /** One chunk from d's recorder: the meter, the stall and blocked-mic checks, the early flush. */
   private level(d: Dictation, dbfs: number): void {
     if (d !== this.d) return;
-    this.o.onLevel?.(dbfs);
+    this.o.onLevel(dbfs);
     if (d.mic === "waiting") d.mic = "open";
     d.lastChunkAt = Date.now();
     if (!capturing(this.curState)) return;
@@ -365,7 +365,7 @@ export class DictationController {
     if (this.curState !== "listening") return;
     if (d.flush) this.cancelTimer(d, d.flush);
     d.flush = this.later(d, flushMs, () => {
-      if (this.curState === "listening") d.session.flush?.();
+      if (this.curState === "listening") d.session.flush();
     });
   }
 

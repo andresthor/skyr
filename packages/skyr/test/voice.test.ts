@@ -53,6 +53,7 @@ function recording() {
       cancel: () => {
         end.cancelled++;
       },
+      flush: () => {},
     };
   };
   return { starts, ends, start };

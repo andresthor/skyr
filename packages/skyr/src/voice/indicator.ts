@@ -264,7 +264,7 @@ export interface VoiceKeys {
 interface RuleOptions {
   width: number;
   /** Text rows scrolled out below the editor: Pi's `↓ N more` label sits on the right, in place of any hints. */
-  hiddenBelow?: number;
+  hiddenBelow: number;
   /** The editor's `borderColor`: Pi colours its rules by thinking level and bash mode. */
   rule: (s: string) => string;
   keys: VoiceKeys;
@@ -279,7 +279,7 @@ interface RuleOptions {
  */
 export function renderRule(
   s: VoiceSnapshot,
-  { width, hiddenBelow = 0, rule, keys, paint }: RuleOptions,
+  { width, hiddenBelow, rule, keys, paint }: RuleOptions,
 ): string | undefined {
   const T = paint.theme.colors;
   const fg = (c: Color, text: string) => styled(paint, text, { fg: c });

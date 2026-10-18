@@ -141,19 +141,27 @@ export function elapsed(context: {
 }
 
 /**
- * For `renderResult`: on a final result, or an error, stops the clock and returns the time taken;
+ * For `renderResult`: on a final result, or an error, stops the clock and returns the time taken,
+ * Pi's recorded `durationMs` when it has one, so a row rebuilt from a saved session shows it too;
  * a partial result is mid-stream, so it keeps the clock running.
  */
 export function took(context: {
   state: Timing;
   isError?: boolean;
   isPartial?: boolean;
+  durationMs?: number | undefined;
 }): Segment[] {
   const { state } = context;
-  if (state.startedAt === undefined) return [];
   if (context.isPartial && !context.isError)
-    return seconds(Date.now() - state.startedAt);
-  state.endedAt ??= Date.now();
-  stopTicking(state);
-  return seconds(state.endedAt - state.startedAt);
+    return state.startedAt === undefined
+      ? []
+      : seconds(Date.now() - state.startedAt);
+  if (state.startedAt !== undefined) {
+    state.endedAt ??= Date.now();
+    stopTicking(state);
+  }
+  if (context.durationMs !== undefined) return seconds(context.durationMs);
+  return state.startedAt === undefined || state.endedAt === undefined
+    ? []
+    : seconds(state.endedAt - state.startedAt);
 }

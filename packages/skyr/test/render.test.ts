@@ -151,10 +151,22 @@ describe("row timing", () => {
     invalidate,
   });
 
-  test("a row rebuilt from a saved session is never timed", () => {
+  test("a row rebuilt from a saved session never ticks, and shows the duration Pi recorded", () => {
     const state: Timing = {};
     expect(elapsed(call(state, false))).toEqual([]);
-    expect(took({ state })).toEqual([]);
+    expect(took({ state, durationMs: 4_200 })).toEqual([["muted", " · 4.2s"]]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("a row rebuilt from a session saved without durations shows no time", () => {
+    expect(took({ state: {}, durationMs: undefined })).toEqual([]);
+  });
+
+  test("a final result shows Pi's recorded duration over the row's own clock", () => {
+    const state: Timing = {};
+    elapsed(call(state, true));
+    vi.advanceTimersByTime(2_300);
+    expect(took({ state, durationMs: 2_000 })).toEqual([["muted", " · 2.0s"]]);
     expect(vi.getTimerCount()).toBe(0);
   });
 

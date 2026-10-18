@@ -184,7 +184,7 @@ test("speech heard but nothing transcribed still fails with nothing heard, and t
   h.controller.toggle();
   await vi.advanceTimersByTimeAsync(TIMING.tailMs);
   expect(h.controller.state).toBe("error");
-  expect(h.controller.message).toBe("nothing heard");
+  expect(h.controller.facts().message).toBe("nothing heard");
   await vi.advanceTimersByTimeAsync(TIMING.errorHoldMs);
   expect(h.controller.state).toBe("idle");
 });
@@ -197,14 +197,14 @@ test("a failure keeps the words on screen and says so", () => {
   h.opts().onInterim?.("and the second");
   h.opts().onError?.(new VoiceError("connection lost"));
   expect(h.controller.state).toBe("error");
-  expect(h.controller.message).toBe("connection lost · words kept");
+  expect(h.controller.facts().message).toBe("connection lost · words kept");
   // the interim the user watched appear is committed, not dropped
   expect(h.events).toContainEqual({ op: "final", arg: "and the second" });
   // a failure before any words says only what went wrong
   h.controller.dismiss();
   h.controller.toggle();
   h.opts().onError?.(new VoiceError("connection lost"));
-  expect(h.controller.message).toBe("connection lost");
+  expect(h.controller.facts().message).toBe("connection lost");
 });
 
 test("the hard cap stops like Enter does, keeping the tail so the last word isn't clipped", async () => {
@@ -216,7 +216,7 @@ test("the hard cap stops like Enter does, keeping the tail so the last word isn'
   expect(h.controller.state).toBe("transcribing");
   // the tail is still recording
   expect(h.sessions[0]?.stopCalls).toBe(0);
-  expect(h.controller.micOpen).toBe(true);
+  expect(h.controller.facts().micOpen).toBe(true);
   await vi.advanceTimersByTimeAsync(TIMING.tailMs);
   expect(h.sessions[0]?.stopCalls).toBe(1);
 });
@@ -258,7 +258,7 @@ test("silence from a blocked microphone surfaces as the mic error after ~24 zero
   h.controller.toggle();
   for (let i = 0; i < 24; i++) h.opts().onLevel?.(0);
   expect(h.controller.state).toBe("error");
-  expect(h.controller.message).toBe(
+  expect(h.controller.facts().message).toBe(
     "microphone blocked · System Settings › Privacy",
   );
   await vi.advanceTimersByTimeAsync(TIMING.errorHoldMs);
@@ -272,7 +272,7 @@ test("never hearing speech at all fails with nothing heard", async () => {
   expect(h.controller.state).toBe("arming");
   await vi.advanceTimersByTimeAsync(1);
   expect(h.controller.state).toBe("error");
-  expect(h.controller.message).toBe("nothing heard");
+  expect(h.controller.facts().message).toBe("nothing heard");
   await vi.advanceTimersByTimeAsync(TIMING.errorHoldMs);
   expect(h.controller.state).toBe("idle");
 });
@@ -287,7 +287,7 @@ test("text arriving while the meter stays under the speech gate keeps the dictat
   await chunks(h, TIMING.noSpeechMs, QUIET);
   expect(h.controller.state).toBe("listening");
   expect(h.states).not.toContain("error");
-  expect(h.controller.heardSpeech).toBe(true);
+  expect(h.controller.facts().heardSpeech).toBe(true);
   h.controller.cancel();
 });
 
@@ -296,7 +296,7 @@ test("a session that never accepts fails with didn't answer", async () => {
   h.controller.toggle();
   await vi.advanceTimersByTimeAsync(TIMING.armTimeoutMs);
   expect(h.controller.state).toBe("error");
-  expect(h.controller.message).toBe("Corti didn't answer");
+  expect(h.controller.facts().message).toBe("Corti didn't answer");
   h.controller.dismiss();
 });
 
@@ -328,22 +328,22 @@ test("after dispose, no late session callback reaches the sink and no timer is l
 test("the mic counts as open from its first chunk until the tail ends, whatever the server is doing", async () => {
   const h = harness();
   h.controller.toggle();
-  expect(h.controller.micOpen).toBe(false);
-  expect(h.controller.accepted).toBe(false);
+  expect(h.controller.facts().micOpen).toBe(false);
+  expect(h.controller.facts().accepted).toBe(false);
   // audio flows before the server accepts: it is buffered, and the mic is open
   h.opts().onLevel?.(QUIET);
-  expect(h.controller.micOpen).toBe(true);
-  expect(h.controller.accepted).toBe(false);
+  expect(h.controller.facts().micOpen).toBe(true);
+  expect(h.controller.facts().accepted).toBe(false);
   h.opts().onReady?.();
-  expect(h.controller.accepted).toBe(true);
+  expect(h.controller.facts().accepted).toBe(true);
   h.opts().onLevel?.(SPEECH);
   h.controller.finish();
   // Enter moved the state on, but the tail is still recording
   expect(h.controller.state).toBe("transcribing");
-  expect(h.controller.micOpen).toBe(true);
+  expect(h.controller.facts().micOpen).toBe(true);
   await vi.advanceTimersByTimeAsync(TIMING.tailMs);
   expect(h.sessions[0]?.stopCalls).toBe(1);
-  expect(h.controller.micOpen).toBe(false);
+  expect(h.controller.facts().micOpen).toBe(false);
 });
 
 test("heardSpeech latches on the first chunk above the speech threshold, and resets per dictation", () => {
@@ -351,12 +351,12 @@ test("heardSpeech latches on the first chunk above the speech threshold, and res
   h.controller.toggle();
   h.opts().onReady?.();
   h.opts().onLevel?.(QUIET);
-  expect(h.controller.heardSpeech).toBe(false);
+  expect(h.controller.facts().heardSpeech).toBe(false);
   h.opts().onLevel?.(SPEECH);
-  expect(h.controller.heardSpeech).toBe(true);
+  expect(h.controller.facts().heardSpeech).toBe(true);
   h.controller.cancel();
   h.controller.toggle();
-  expect(h.controller.heardSpeech).toBe(false);
+  expect(h.controller.facts().heardSpeech).toBe(false);
 });
 
 test("listeners get each chunk's raw RMS", () => {
@@ -373,9 +373,9 @@ test("speech starts at SPEECH_DBFS: a chunk just under it is not heard, one just
   h.controller.toggle();
   h.opts().onReady?.();
   h.opts().onLevel?.(atDb(SPEECH_DBFS - 0.1));
-  expect(h.controller.heardSpeech).toBe(false);
+  expect(h.controller.facts().heardSpeech).toBe(false);
   h.opts().onLevel?.(atDb(SPEECH_DBFS + 0.1));
-  expect(h.controller.heardSpeech).toBe(true);
+  expect(h.controller.facts().heardSpeech).toBe(true);
   h.controller.cancel();
 });
 
@@ -390,7 +390,7 @@ test("an open mic that stops delivering fails as microphone stopped, keeping wha
   // then nothing at all: the recorder is gone
   await vi.advanceTimersByTimeAsync(TIMING.stallMs);
   expect(h.controller.state).toBe("error");
-  expect(h.controller.message).toBe("microphone stopped · words kept");
+  expect(h.controller.facts().message).toBe("microphone stopped · words kept");
 });
 
 test("a drain that outlasts the stall window is not a dead mic: the mic closed on purpose", async () => {
@@ -410,12 +410,12 @@ test("a drain that outlasts the stall window is not a dead mic: the mic closed o
 test("the time left before the cap counts from this dictation's start", async () => {
   const h = harness();
   h.controller.toggle();
-  expect(h.controller.capLeftMs).toBe(TIMING.maxMs);
+  expect(h.controller.facts().capLeftMs).toBe(TIMING.maxMs);
   await vi.advanceTimersByTimeAsync(60);
-  expect(h.controller.capLeftMs).toBe(TIMING.maxMs - 60);
+  expect(h.controller.facts().capLeftMs).toBe(TIMING.maxMs - 60);
   h.controller.cancel();
   h.controller.toggle();
-  expect(h.controller.capLeftMs).toBe(TIMING.maxMs);
+  expect(h.controller.facts().capLeftMs).toBe(TIMING.maxMs);
   h.controller.cancel();
 });
 
@@ -472,7 +472,7 @@ test("a sink that throws while a failure is reported still leaves the error line
   d.opts().onInterim?.("words");
   d.opts().onError?.(new VoiceError("connection lost"));
   expect(d.controller.state).toBe("error");
-  expect(d.controller.message).toBe("connection lost · words kept");
+  expect(d.controller.facts().message).toBe("connection lost · words kept");
   d.controller.dismiss();
   d.controller.toggle();
   expect(d.controller.state).toBe("arming");

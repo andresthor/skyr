@@ -81,7 +81,9 @@ test("the footer is set only when its row changes", () => {
 test("the footer row names voice first, so a neighbouring status can't claim its marks", () => {
   expect(
     stripAnsi(
-      renderStatus(snap({ state: "arming", micOpen: false, sinceStart: 300 }))!,
+      renderStatus(
+        snap({ state: "arming", micOpen: false, sinceStartMs: 300 }),
+      )!,
     ),
   ).toBe("voice ○ starting ────────");
   expect(
@@ -139,7 +141,7 @@ test("the footer carries the rule's advisories, so a hidden editor still hears a
   expect(
     stripAnsi(
       renderStatus(
-        snap({ state: "arming", micOpen: false, sinceStart: 2000 }),
+        snap({ state: "arming", micOpen: false, sinceStartMs: 2000 }),
       )!,
     ),
   ).toBe("voice ○ starting · no audio yet ────────");

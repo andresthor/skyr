@@ -12,6 +12,7 @@ import { type Mock, onTestFinished, vi } from "vitest";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { registerSkyr } from "../src/index.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
+import { DEFAULT_TIMING } from "../src/voice/dictation.js";
 import type { createVoiceEditorClass } from "../src/voice/editor.js";
 import { registerVoice, type VoiceOptions } from "../src/voice/index.js";
 import {
@@ -48,11 +49,13 @@ const PHRASE = [-30, -22, -40, -26, -45, -20, -35, -28].map(atDb);
 /** A listening snapshot with speech on the meter, overridden by `s`. */
 export const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({
   state: "listening",
-  t: 0,
-  sinceStart: 2000,
+  stateMs: 0,
+  sinceStartMs: 2_000,
+  capLeftMs: DEFAULT_TIMING.maxMs,
   micOpen: true,
   accepted: true,
   heardSpeech: true,
+  noSpeechMs: DEFAULT_TIMING.noSpeechMs,
   bars: PHRASE,
   message: "",
   ...s,

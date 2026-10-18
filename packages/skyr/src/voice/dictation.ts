@@ -112,6 +112,8 @@ const kept = (d: Dictation) => d.finals > 0 || d.interim !== "";
 export interface DictationControllerOptions {
   creds: SttCredentials;
   sink: DictationSink;
+  /** Fires when the state changes or a final lands. micOpen and heardSpeech move
+   * without it, reaching the screen on the display's own tick instead. */
   onChange: () => void;
   /** Each chunk's raw RMS, 0..1 of full scale. */
   onLevel?: (rms: number) => void;
@@ -120,14 +122,36 @@ export interface DictationControllerOptions {
   start?: (o: SessionOptions) => SttSession;
 }
 
+/** What the displays need to know at one moment, read off one clock and one dictation. */
+export interface DictationFacts {
+  state: VoiceState;
+  /** ms since the current state began: the finishing ellipsis steps on it. */
+  stateMs: number;
+  /** ms since this dictation started; 0 while none is running. */
+  sinceStartMs: number;
+  /** ms before the hard cap stops a running dictation, as the controller enforces it. */
+  capLeftMs: number;
+  /** The recorder is delivering audio: from its first chunk until the stop that ends the tail. */
+  micOpen: boolean;
+  /** The server took the session; before that, audio is only buffered. */
+  accepted: boolean;
+  /** This dictation has heard someone: a chunk above SPEECH_DBFS, or any text from Corti. */
+  heardSpeech: boolean;
+  /** The window this dictation fails with "nothing heard" in, so "no voice yet" can be set against it. */
+  noSpeechMs: number;
+  /** The error line while `state` is "error". */
+  message: string;
+}
+
 export class DictationController {
   /** What each `start` configures Corti with; registerVoice sets it from skyr.json per session. */
   config: SttConfig = VOICE_DEFAULTS;
-  state: VoiceState = "idle";
+  /** The state machine's current state; written only through `setState`. */
+  private curState: VoiceState = "idle";
   /** When the current state began, for the indicator's state-relative animation. */
-  stateSince = 0;
-  /** The error line while `state` is "error". */
-  message = "";
+  private stateSince = 0;
+  /** The error line while the state is "error". */
+  private message = "";
 
   private readonly timing: DictationTiming;
   /** The running dictation; undefined from the moment it ends. A callback holding another is stale. */
@@ -139,29 +163,8 @@ export class DictationController {
     this.timing = { ...DEFAULT_TIMING, ...o.timing };
   }
 
-  /** The recorder is delivering audio: from its first chunk until the stop that ends the tail. */
-  get micOpen(): boolean {
-    return this.d?.mic === "open";
-  }
-
-  /** The server took the session; before that, audio is only buffered. */
-  get accepted(): boolean {
-    return this.d?.accepted ?? false;
-  }
-
-  /** ms since this dictation started. */
-  get sinceStartMs(): number {
-    return this.d ? Date.now() - this.d.startedAt : 0;
-  }
-
-  /** ms before the hard cap stops this dictation, as the controller enforces it. */
-  get capLeftMs(): number {
-    return this.timing.maxMs - this.sinceStartMs;
-  }
-
-  /** This dictation has heard someone: a chunk above SPEECH_DBFS, or any text from Corti. */
-  get heardSpeech(): boolean {
-    return this.d?.heard ?? false;
+  get state(): VoiceState {
+    return this.curState;
   }
 
   /** A dictation is running: arming, listening or transcribing. */
@@ -169,16 +172,33 @@ export class DictationController {
     return this.d !== undefined;
   }
 
+  /** One consistent read of every fact the displays need: one clock, one dictation. */
+  facts(): DictationFacts {
+    const now = Date.now();
+    const sinceStartMs = this.d ? now - this.d.startedAt : 0;
+    return {
+      state: this.curState,
+      stateMs: now - this.stateSince,
+      sinceStartMs,
+      capLeftMs: this.timing.maxMs - sinceStartMs,
+      micOpen: this.d?.mic === "open",
+      accepted: this.d?.accepted ?? false,
+      heardSpeech: this.d?.heard ?? false,
+      noSpeechMs: this.timing.noSpeechMs,
+      message: this.message,
+    };
+  }
+
   /** The trigger: start when idle, stop-and-keep when capturing, ignored while draining. */
   toggle(): void {
-    if (this.state === "idle" || this.state === "error") this.start();
-    else if (capturing(this.state)) this.finish();
+    if (this.curState === "idle" || this.curState === "error") this.start();
+    else if (capturing(this.curState)) this.finish();
   }
 
   /** Stop and keep: capture a short tail, then drain the finals. */
   finish(): void {
     const d = this.d;
-    if (!d || !capturing(this.state)) return;
+    if (!d || !capturing(this.curState)) return;
     // nothing said and nothing shown: changing your mind is not an error
     if (!d.heard) {
       d.session.cancel();
@@ -187,7 +207,7 @@ export class DictationController {
       this.o.sink.end();
       return;
     }
-    const tailMs = this.state === "arming" ? 0 : this.timing.tailMs;
+    const tailMs = this.curState === "arming" ? 0 : this.timing.tailMs;
     if (d.flush) this.cancelTimer(d, d.flush);
     this.setState("transcribing");
     this.later(d, tailMs, () => {
@@ -225,7 +245,7 @@ export class DictationController {
 
   /** Any keypress clears an error line early. */
   dismiss(): void {
-    if (this.state !== "error") return;
+    if (this.curState !== "error") return;
     this.clearHold();
     this.setState("idle");
   }
@@ -238,7 +258,7 @@ export class DictationController {
       this.end(d);
     }
     this.clearHold();
-    this.state = "idle";
+    this.curState = "idle";
   }
 
   private start(): void {
@@ -252,7 +272,7 @@ export class DictationController {
         source: this.o.source ?? micSource,
         ...this.config,
         onReady: () => {
-          if (d !== this.d || this.state !== "arming") return;
+          if (d !== this.d || this.curState !== "arming") return;
           d.accepted = true;
           this.setState("listening");
         },
@@ -286,15 +306,15 @@ export class DictationController {
     this.d = d;
     this.setState("arming");
     this.later(d, this.timing.armTimeoutMs, () => {
-      if (this.state === "arming")
+      if (this.curState === "arming")
         this.fail(d, new VoiceError("Corti didn't answer"));
     });
     this.later(d, this.timing.noSpeechMs, () => {
-      if (capturing(this.state) && !d.heard)
+      if (capturing(this.curState) && !d.heard)
         this.fail(d, new VoiceError("nothing heard"));
     });
     this.later(d, this.timing.maxMs, () => {
-      if (this.state === "listening") this.finish();
+      if (this.curState === "listening") this.finish();
     });
   }
 
@@ -304,13 +324,13 @@ export class DictationController {
     this.o.onLevel?.(rms);
     if (d.mic === "waiting") d.mic = "open";
     d.lastChunkAt = Date.now();
-    if (!capturing(this.state)) return;
+    if (!capturing(this.curState)) return;
     const { stallMs, flushMs } = this.timing;
     if (d.stall) this.cancelTimer(d, d.stall);
     d.stall = this.later(d, stallMs, () =>
       // after a long block the timer can run before queued chunks are read; one turn lets them land
       setImmediate(() => {
-        if (capturing(this.state) && Date.now() - d.lastChunkAt >= stallMs)
+        if (capturing(this.curState) && Date.now() - d.lastChunkAt >= stallMs)
           this.fail(d, new VoiceError("microphone stopped"));
       }),
     );
@@ -325,10 +345,10 @@ export class DictationController {
     d.zeroChunks = Number.NEGATIVE_INFINITY;
     if (dbfs(rms) <= SPEECH_DBFS) return;
     d.heard = true;
-    if (this.state !== "listening") return;
+    if (this.curState !== "listening") return;
     if (d.flush) this.cancelTimer(d, d.flush);
     d.flush = this.later(d, flushMs, () => {
-      if (this.state === "listening") d.session.flush?.();
+      if (this.curState === "listening") d.session.flush?.();
     });
   }
 
@@ -363,7 +383,7 @@ export class DictationController {
   }
 
   private setState(s: VoiceState): void {
-    this.state = s;
+    this.curState = s;
     this.stateSince = Date.now();
     this.o.onChange();
   }

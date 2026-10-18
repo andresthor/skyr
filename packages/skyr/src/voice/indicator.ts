@@ -22,7 +22,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { sanitize } from "../tools/render.js";
-import { SPEECH_DBFS, type VoiceState } from "./dictation.js";
+import { type DictationFacts, SPEECH_DBFS } from "./dictation.js";
 import { dbfs } from "./mic.js";
 
 export const TICK_MS = 50;
@@ -170,6 +170,13 @@ const pad = (n: number) => " ".repeat(Math.max(0, n));
 /** A status row with a message needs room; pi truncates further to the terminal's width. */
 const ERROR_COLS = 60;
 
+/** Warn this long before the hard cap, so the cap is first advisory, then fact. */
+const CAP_WARN_MS = 15_000;
+/** The slow-start advisories wait this long, so an ordinary start never flickers them. */
+const SLOW_START_MS = 1_500;
+/** One step of the finishing ellipsis per this many ms. */
+const ELLIPSIS_MS = 300;
+
 /**
  * The footer row, for when the editor's rule can't carry voice: another extension owns the
  * editor, or a card hides it. The rule's marks without its key hints, led by `voice` so a
@@ -236,19 +243,26 @@ function marks(
   );
   if (phase === "tail" || phase === "finishing") {
     // server work is a slow textual ellipsis, never motion in the meter
-    const n = (Math.floor(s.t / 300) % 3) + 1;
+    const n = (Math.floor(s.stateMs / ELLIPSIS_MS) % 3) + 1;
     word += fg(T.dim, (ascii ? "." : "·").repeat(n));
     if (steady) word += " ".repeat(3 - n);
   }
   const advisories: string[] = [];
-  if (phase === "starting" && s.sinceStart > 1500)
+  if (phase === "starting" && s.sinceStartMs > SLOW_START_MS)
     advisories.push(fg(T.warning, "no audio yet"));
-  if (s.state === "arming" && s.micOpen && s.sinceStart > 1500)
+  if (s.state === "arming" && s.micOpen && s.sinceStartMs > SLOW_START_MS)
     advisories.push(fg(T.muted, "connecting"));
-  if (phase === "listening" && !s.heardSpeech && s.sinceStart > 4000)
+  // half the failure window, so "no voice yet" can never appear after the "nothing heard" failure
+  if (
+    phase === "listening" &&
+    !s.heardSpeech &&
+    s.sinceStartMs > s.noSpeechMs / 2
+  )
     advisories.push(fg(T.warning, "no voice yet"));
-  if (phase === "listening" && s.capLeftMs !== undefined)
-    advisories.push(fg(T.warning, `${Math.ceil(s.capLeftMs / 1000)}s left`));
+  if (s.state === "listening" && s.capLeftMs <= CAP_WARN_MS)
+    advisories.push(
+      fg(T.warning, `${Math.ceil(Math.max(0, s.capLeftMs) / 1000)}s left`),
+    );
   return { light, word, advisories };
 }
 
@@ -436,25 +450,13 @@ export function spliceGhost(
   return out;
 }
 
-/** What a voice display needs to know at one moment; the controller and editor own the facts. */
-export interface VoiceSnapshot {
-  state: VoiceState;
-  /** ms since this state began: the finishing ellipsis steps on it. */
-  t: number;
-  /** ms since the dictation started: the slow-start and silence advisories wait on it. */
-  sinceStart: number;
-  micOpen: boolean;
-  accepted: boolean;
-  heardSpeech: boolean;
+/** What a voice display needs to know at one moment: the controller's facts plus the meter bars. */
+export type VoiceSnapshot = DictationFacts & {
   /** Committed meter bars in `meterUnit`s, newest first. */
   bars: readonly number[];
-  /** The error line while `state` is `error`. */
-  message: string;
   /** Committed text was just reverted: offer the undo, briefly. */
   discarded?: boolean;
-  /** ms left before the dictation's hard cap, while it is close. */
-  capLeftMs?: number;
-}
+};
 
 const METER_FLOOR_DB = -60;
 const METER_SPAN_DB = 50;

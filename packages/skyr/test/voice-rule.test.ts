@@ -34,14 +34,14 @@ const plain = (s: Partial<VoiceSnapshot>, o = {}) =>
   stripAnsi(draw(s, o) ?? "");
 
 const STATES: Partial<VoiceSnapshot>[] = [
-  { state: "arming", micOpen: false, sinceStart: 300 },
-  { state: "arming", micOpen: false, sinceStart: 2000 },
-  { state: "arming", accepted: false, heardSpeech: false, sinceStart: 2000 },
+  { state: "arming", micOpen: false, sinceStartMs: 300 },
+  { state: "arming", micOpen: false, sinceStartMs: 2000 },
+  { state: "arming", accepted: false, heardSpeech: false, sinceStartMs: 2000 },
   { state: "listening" },
-  { state: "listening", bars: SILENCE, heardSpeech: false, sinceStart: 5000 },
+  { state: "listening", bars: SILENCE, heardSpeech: false, sinceStartMs: 5000 },
   { state: "listening", capLeftMs: 9_500 },
-  { state: "transcribing", t: 100 },
-  { state: "transcribing", micOpen: false, t: 700 },
+  { state: "transcribing", stateMs: 100 },
+  { state: "transcribing", micOpen: false, stateMs: 700 },
   { state: "error", message: "connection lost · words kept" },
   { state: "error", message: "x".repeat(200) },
   { state: "idle", discarded: true },
@@ -66,7 +66,11 @@ test("idle draws nothing, so Pi's own rule stands", () => {
 
 test("a thinking pause and waiting on the server never look alike", () => {
   const pause = plain({ state: "listening", bars: SILENCE });
-  const finishing = plain({ state: "transcribing", micOpen: false, t: 700 });
+  const finishing = plain({
+    state: "transcribing",
+    micOpen: false,
+    stateMs: 700,
+  });
   expect(pause).toContain("● listening");
   expect(finishing).toContain("○ finishing");
   expect(pause).not.toBe(finishing);
@@ -78,15 +82,19 @@ test("Enter is offered only once speech was heard on an accepted session", () =>
   expect(plain({ accepted: false })).not.toContain("keep");
   expect(plain({})).toContain("enter keep · escape discard");
   // finishing swallows Enter, so only the discard is offered
-  expect(plain({ state: "transcribing", t: 50 })).toMatch(/escape discard ──$/);
-  expect(plain({ state: "transcribing", t: 50 })).not.toContain("keep");
+  expect(plain({ state: "transcribing", stateMs: 50 })).toMatch(
+    /escape discard ──$/,
+  );
+  expect(plain({ state: "transcribing", stateMs: 50 })).not.toContain("keep");
 });
 
 test("the mic light stays on through the tail after Enter, and goes out when the mic closes", () => {
-  expect(plain({ state: "transcribing", t: 50 })).toContain("● finishing·");
-  expect(plain({ state: "transcribing", micOpen: false, t: 50 })).toContain(
-    "○ finishing·",
+  expect(plain({ state: "transcribing", stateMs: 50 })).toContain(
+    "● finishing·",
   );
+  expect(
+    plain({ state: "transcribing", micOpen: false, stateMs: 50 }),
+  ).toContain("○ finishing·");
 });
 
 test("silence is the rule itself: no meter cell rises for anything below the speech gate", () => {
@@ -106,7 +114,8 @@ test("speech spans the full ramp against its own recent peak, so syllables stand
 });
 
 test("the finishing ellipsis steps every 300 ms and keeps the row from shifting", () => {
-  const at = (t: number) => plain({ state: "transcribing", micOpen: false, t });
+  const at = (stateMs: number) =>
+    plain({ state: "transcribing", micOpen: false, stateMs });
   expect(at(0)).toContain("finishing·   ");
   expect(at(300)).toContain("finishing··  ");
   expect(at(600)).toContain("finishing··· ");
@@ -115,14 +124,14 @@ test("the finishing ellipsis steps every 300 ms and keeps the row from shifting"
 
 test("advisories ride with the word they qualify", () => {
   expect(
-    plain({ state: "arming", micOpen: false, sinceStart: 2000 }),
+    plain({ state: "arming", micOpen: false, sinceStartMs: 2000 }),
   ).toContain("○ starting · no audio yet");
   expect(
-    plain({ bars: SILENCE, heardSpeech: false, sinceStart: 5000 }),
+    plain({ bars: SILENCE, heardSpeech: false, sinceStartMs: 5000 }),
   ).toContain("● listening · no voice yet");
   expect(plain({ capLeftMs: 9_500 })).toContain("● listening · 10s left");
   expect(
-    plain({ state: "arming", accepted: false, sinceStart: 2000 }),
+    plain({ state: "arming", accepted: false, sinceStartMs: 2000 }),
   ).toContain("● listening · connecting");
 });
 
@@ -152,7 +161,10 @@ test("the meter drops before an advisory: a narrow rule still says time is runni
   for (let width = 33; width <= 43; width++) {
     expect(plain({ capLeftMs: 14_000 }, { width })).toContain("14s left");
     expect(
-      plain({ bars: SILENCE, heardSpeech: false, sinceStart: 5000 }, { width }),
+      plain(
+        { bars: SILENCE, heardSpeech: false, sinceStartMs: 5000 },
+        { width },
+      ),
     ).toContain("no voice yet");
   }
 });

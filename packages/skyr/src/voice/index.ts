@@ -45,8 +45,6 @@ import { type VoicePresenter, voicePresenter } from "./presenter.js";
 
 export const VOICE_SHORTCUT = "ctrl+space";
 
-/** How long before the hard cap the rule counts the time left. */
-const CAP_WARN_MS = 15_000;
 /** How long the rule offers the undo after Esc reverted committed words. */
 const DISCARD_NOTICE_MS = 2000;
 
@@ -141,25 +139,11 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     !!editor?.decor.drying.some((s) => Date.now() - s.at < DRY_MS);
   const discarded = () =>
     controller.state === "idle" && Date.now() < discardedUntil;
-  const snapshot = (): VoiceSnapshot => {
-    const now = Date.now();
-    const capLeft = controller.capLeftMs;
-    return {
-      state: controller.state,
-      t: now - controller.stateSince,
-      sinceStart: controller.sinceStartMs,
-      micOpen: controller.micOpen,
-      accepted: controller.accepted,
-      heardSpeech: controller.heardSpeech,
-      bars,
-      message: controller.message,
-      discarded: discarded(),
-      capLeftMs:
-        controller.state === "listening" && capLeft <= CAP_WARN_MS
-          ? Math.max(0, capLeft)
-          : undefined,
-    };
-  };
+  const snapshot = (): VoiceSnapshot => ({
+    ...controller.facts(),
+    bars,
+    discarded: discarded(),
+  });
   const pushPresenter = () => presenter?.update(snapshot());
   const tick = () => {
     if (controller.state === "idle" && !drying() && !discarded()) {

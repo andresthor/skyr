@@ -49,7 +49,7 @@ const STATES: Partial<VoiceSnapshot>[] = [
   { state: "listening", capLeftMs: 9_500 },
   { state: "transcribing", stateMs: 100 },
   { state: "transcribing", micOpen: false, stateMs: 700 },
-  { state: "error", message: "connection lost · words kept" },
+  { state: "error", message: "connection to Corti lost · words kept" },
   { state: "error", message: "x".repeat(200) },
   { state: "discarded" },
 ];
@@ -209,8 +209,11 @@ test("a scrolled editor's ↓ N more takes the hints' place, ahead of any adviso
     /^── discarded ─+ ↓ 3 more ──$/,
   );
   expect(
-    plain({ state: "error", message: "connection lost" }, { hiddenBelow: 3 }),
-  ).toMatch(/^── ✗ connection lost ─+ ↓ 3 more ──$/);
+    plain(
+      { state: "error", message: "connection to Corti lost" },
+      { hiddenBelow: 3 },
+    ),
+  ).toMatch(/^── ✗ connection to Corti lost ─+ ↓ 3 more ──$/);
 });
 
 test('"no voice yet" appears at half the no-speech window, never after its failure', () => {
@@ -270,9 +273,9 @@ test("after Esc reverted committed words, the rule says so and names the undo", 
 });
 
 test("an error names its cause on the rule, truncated by whole columns", () => {
-  expect(plain({ state: "error", message: "connection lost" })).toMatch(
-    /^── ✗ connection lost ─+$/,
-  );
+  expect(
+    plain({ state: "error", message: "connection to Corti lost" }),
+  ).toMatch(/^── ✗ connection to Corti lost ─+$/);
   expect(
     plain({ state: "error", message: "x".repeat(200) }, { width: 30 }),
   ).toContain("…");

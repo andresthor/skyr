@@ -15,7 +15,7 @@ import {
 } from "../src/voice/client.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
 import { DEFAULT_TIMING } from "../src/voice/dictation.js";
-import { VoiceError } from "../src/voice/errors.js";
+import { soxMissing } from "../src/voice/errors.js";
 import { CREDS } from "./voice.js";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -154,17 +154,25 @@ const answering = (status: number) =>
   (async () => new Response("no", { status })) as unknown as typeof fetch;
 
 test.each([400, 401, 403])(
-  "a sign-in refused with %i reads as rejected credentials",
+  "a sign-in refused with %i names the client credentials and their fix",
   async (status) => {
     await expect(
       getSttToken(creds(), { fetch: answering(status) }),
-    ).rejects.toThrow("credentials rejected");
+    ).rejects.toThrow(
+      "Corti refused the client · check CORTI_CLIENT_ID and CORTI_CLIENT_SECRET",
+    );
   },
 );
 
-test("a failing sign-in server reads as Corti unavailable, never as rejected credentials", async () => {
+test("a 404 at sign-in is an unknown tenant, not an outage", async () => {
+  await expect(getSttToken(creds(), { fetch: answering(404) })).rejects.toThrow(
+    "unknown Corti tenant · check CORTI_TENANT_NAME",
+  );
+});
+
+test("any other sign-in status is named with its HTTP code", async () => {
   await expect(getSttToken(creds(), { fetch: answering(500) })).rejects.toThrow(
-    "Corti auth unavailable (500)",
+    "Corti sign-in failed (HTTP 500)",
   );
 });
 
@@ -174,6 +182,41 @@ test("a sign-in request that never gets an answer reads as can't reach Corti", a
   }) as unknown as typeof fetch;
   await expect(getSttToken(creds(), { fetch: offline })).rejects.toThrow(
     "can't reach Corti",
+  );
+});
+
+test("DNS naming the sign-in host as unknown points at a mistyped environment", async () => {
+  const offline = (async () => {
+    throw new TypeError("fetch failed", {
+      cause: Object.assign(
+        new Error("getaddrinfo ENOTFOUND auth.eux.corti.app"),
+        {
+          code: "ENOTFOUND",
+        },
+      ),
+    });
+  }) as unknown as typeof fetch;
+  await expect(getSttToken(creds(), { fetch: offline })).rejects.toThrow(
+    "can't reach Corti (ENOTFOUND) · check CORTI_ENVIRONMENT",
+  );
+});
+
+test("a plain recorder failure reads as microphone unavailable", async () => {
+  const onError = vi.fn();
+  startSession({
+    creds: creds(),
+    source: () => {
+      throw new Error("spawn went wrong");
+    },
+    onInterim: () => {},
+    onFinal: () => {},
+    onError,
+    fetch: tokenFetch([], "tok", 3600),
+    WebSocket: SocketMaker,
+  });
+  await tick();
+  expect(onError).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "microphone unavailable" }),
   );
 });
 
@@ -221,7 +264,10 @@ test("other CONFIG_* frames are a config failure: the mic and socket close, and 
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_DENIED", reason: "tenant not found" });
   expect(h.onError).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "Corti rejected the session" }),
+    expect.objectContaining({
+      message:
+        "Corti refused the settings · check skyr.json voice: tenant not found",
+    }),
   );
   expect(h.source.destroyed).toBe(true);
   expect(h.sock.readyState).toBe(3);
@@ -300,7 +346,7 @@ test("a premature close is a network failure", async () => {
   h.sock.onclose?.();
   await vi.waitFor(() =>
     expect(h.onError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "connection lost" }),
+      expect.objectContaining({ message: "connection to Corti lost" }),
     ),
   );
   await expect(h.session.stop()).resolves.toBeUndefined();
@@ -428,7 +474,7 @@ test("a Corti error frame ends the session with an error", async () => {
   h.sock.server({ type: "CONFIG_ACCEPTED" });
   h.sock.server({ type: "error", error: "boom" });
   expect(h.onError).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "Corti transcription error" }),
+    expect.objectContaining({ message: "Corti error: boom" }),
   );
   expect(h.sock.readyState).toBe(3);
 });
@@ -523,7 +569,7 @@ test("a recorder that fails with its own reason reports that reason", async () =
   startSession({
     creds: creds(),
     source: () => {
-      throw new VoiceError("needs sox · brew install sox");
+      throw soxMissing();
     },
     onInterim: () => {},
     onFinal: () => {},
@@ -534,20 +580,20 @@ test("a recorder that fails with its own reason reports that reason", async () =
   await tick();
   expect(onError).toHaveBeenCalledTimes(1);
   expect(onError).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "needs sox · brew install sox" }),
+    expect.objectContaining({ message: "sox not found · brew install sox" }),
   );
 });
 
-test("a hung sign-in gives up on its own deadline and reads as can't reach Corti", async () => {
+test("a hung sign-in times out by name, with the deadline it was given", async () => {
   const hung: typeof fetch = (_url, init) =>
     new Promise<never>((_resolve, reject) =>
       init?.signal?.addEventListener("abort", () =>
-        reject(new Error("This operation was aborted")),
+        reject(new DOMException("The operation was aborted", "TimeoutError")),
       ),
     );
   await expect(
-    getSttToken(creds(), { fetch: hung, timeoutMs: 30 }),
-  ).rejects.toThrow("can't reach Corti");
+    getSttToken(creds(), { fetch: hung, timeoutMs: 100 }),
+  ).rejects.toThrow("Corti sign-in didn't answer in 0.1 s");
 });
 
 test("the sign-in deadline is shorter than the arm window, so a dead auth is named first", () => {

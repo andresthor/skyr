@@ -2,7 +2,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { PassThrough, type Readable } from "node:stream";
-import { VoiceError } from "./errors.js";
+import {
+  micFailed,
+  recorderExited,
+  recorderSpawnFailed,
+  soxMissing,
+} from "./errors.js";
 
 /** The capture format everything else derives: chunk arithmetic, the speech gate, the PCM string. */
 export const SAMPLE_RATE_HZ = 16_000;
@@ -59,13 +64,13 @@ function findBinary(
 /**
  * Spawns sox `rec` (ffmpeg as a fallback) and returns its stdout. Destroying the
  * stream kills the recorder. A recorder that exits on its own before it is
- * stopped surfaces as a "no microphone found" error, which is how a missing or busy device shows.
+ * stopped surfaces as a "microphone unavailable" error, which is how a busy device
+ * or a permission problem shows.
  */
 export function micSource(): Readable {
   const rec = findBinary("rec");
   const recorder = rec || findBinary("ffmpeg");
-  if (recorder === undefined)
-    throw new VoiceError("needs sox · brew install sox");
+  if (recorder === undefined) throw soxMissing();
   const [cmd, args] =
     recorder === rec ? [recorder, REC_ARGS] : [recorder, FFMPEG_ARGS];
 
@@ -75,10 +80,13 @@ export function micSource(): Readable {
   const out = new PassThrough();
   let stopped = false;
   child.stdout?.pipe(out);
-  child.on("error", () => out.destroy(new VoiceError("no microphone found")));
+  child.on("error", (error: unknown) =>
+    out.destroy(recorderSpawnFailed(cmd, error)),
+  );
   child.on("exit", (code) => {
+    // a signal, not a status code, leaves nothing to name
     if (!stopped && code !== 0)
-      out.destroy(new VoiceError("no microphone found"));
+      out.destroy(code === null ? micFailed() : recorderExited(cmd, code));
   });
   const destroy = out.destroy.bind(out);
   out.destroy = (err?: Error) => {

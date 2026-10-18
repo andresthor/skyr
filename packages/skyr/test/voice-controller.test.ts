@@ -180,7 +180,7 @@ test("a stop before any speech or text ends quietly: changing your mind is not a
   expect(h.states).not.toContain("error");
 });
 
-test("speech heard but nothing transcribed still fails with nothing heard, and the error auto-dismisses", async () => {
+test("speech heard but nothing transcribed still fails with no words recognised, and the error auto-dismisses", async () => {
   const h = harness();
   h.controller.toggle();
   h.opts().onReady?.();
@@ -188,7 +188,7 @@ test("speech heard but nothing transcribed still fails with nothing heard, and t
   h.controller.toggle();
   await vi.advanceTimersByTimeAsync(TIMING.tailMs);
   expect(h.controller.state).toBe("error");
-  expect(h.controller.facts().message).toBe("nothing heard");
+  expect(h.controller.facts().message).toBe("no words recognised");
   await vi.advanceTimersByTimeAsync(TIMING.errorHoldMs);
   expect(h.controller.state).toBe("idle");
 });
@@ -199,16 +199,18 @@ test("a failure keeps the words on screen and says so", () => {
   h.opts().onReady?.();
   h.opts().onFinal?.("first sentence");
   h.opts().onInterim?.("and the second");
-  h.opts().onError?.(new VoiceError("connection lost"));
+  h.opts().onError?.(new VoiceError("connection to Corti lost"));
   expect(h.controller.state).toBe("error");
-  expect(h.controller.facts().message).toBe("connection lost · words kept");
+  expect(h.controller.facts().message).toBe(
+    "connection to Corti lost · words kept",
+  );
   // the interim the user watched appear is committed, not dropped
   expect(h.events).toContainEqual({ op: "final", arg: "and the second" });
   // a failure before any words says only what went wrong
   h.controller.dismiss();
   h.controller.toggle();
-  h.opts().onError?.(new VoiceError("connection lost"));
-  expect(h.controller.facts().message).toBe("connection lost");
+  h.opts().onError?.(new VoiceError("connection to Corti lost"));
+  expect(h.controller.facts().message).toBe("connection to Corti lost");
 });
 
 test("the hard cap stops like Enter does, keeping the tail so the last word isn't clipped", async () => {
@@ -296,20 +298,22 @@ test("silence from a blocked microphone surfaces as the mic error after ~24 zero
   for (let i = 0; i < 24; i++) h.opts().onLevel?.(0);
   expect(h.controller.state).toBe("error");
   expect(h.controller.facts().message).toBe(
-    "microphone blocked · System Settings › Privacy",
+    "microphone blocked · allow it in System Settings › Privacy",
   );
   await vi.advanceTimersByTimeAsync(TIMING.errorHoldMs);
   expect(h.controller.state).toBe("idle");
 });
 
-test("never hearing speech at all fails with nothing heard", async () => {
+test("never hearing speech at all fails with no speech", async () => {
   const h = harness();
   h.controller.toggle();
   await vi.advanceTimersByTimeAsync(TIMING.noSpeechMs - 1);
   expect(h.controller.state).toBe("arming");
   await vi.advanceTimersByTimeAsync(1);
   expect(h.controller.state).toBe("error");
-  expect(h.controller.facts().message).toBe("nothing heard");
+  expect(h.controller.facts().message).toBe(
+    `no speech in ${TIMING.noSpeechMs / 1000} s`,
+  );
   await vi.advanceTimersByTimeAsync(TIMING.errorHoldMs);
   expect(h.controller.state).toBe("idle");
 });
@@ -333,14 +337,16 @@ test("a session that never accepts fails with didn't answer", async () => {
   h.controller.toggle();
   await vi.advanceTimersByTimeAsync(TIMING.armTimeoutMs);
   expect(h.controller.state).toBe("error");
-  expect(h.controller.facts().message).toBe("Corti didn't answer");
+  expect(h.controller.facts().message).toBe(
+    `Corti didn't answer in ${TIMING.armTimeoutMs / 1000} s`,
+  );
   h.controller.dismiss();
 });
 
 test("any keypress clears an error early, the hold timer gone", async () => {
   const h = harness();
   h.controller.toggle();
-  h.opts().onError?.(new VoiceError("connection lost"));
+  h.opts().onError?.(new VoiceError("connection to Corti lost"));
   expect(h.controller.state).toBe("error");
   h.controller.dismiss();
   expect(h.controller.state).toBe("idle");
@@ -507,9 +513,11 @@ test("a sink that throws while a failure is reported still leaves the error line
   d.controller.toggle();
   d.opts().onReady?.();
   d.opts().onInterim?.("words");
-  d.opts().onError?.(new VoiceError("connection lost"));
+  d.opts().onError?.(new VoiceError("connection to Corti lost"));
   expect(d.controller.state).toBe("error");
-  expect(d.controller.facts().message).toBe("connection lost · words kept");
+  expect(d.controller.facts().message).toBe(
+    "connection to Corti lost · words kept",
+  );
   d.controller.dismiss();
   d.controller.toggle();
   expect(d.controller.state).toBe("arming");

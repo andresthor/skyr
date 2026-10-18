@@ -45,6 +45,12 @@ export function clip(text: string, max = 120): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
+/** Server- or vendor-written text bound for a one-line message: sanitized, trimmed, clipped. */
+export function oneLine(text: string, max = 120): string {
+  const line = sanitize(text).trim();
+  return line.length <= max ? line : `${line.slice(0, max)}…`;
+}
+
 export function toolRow(theme: Theme, segments: Segment[]): TruncatedText {
   const line = segments
     .map(([color, raw, bold]) => {

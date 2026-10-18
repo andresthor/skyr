@@ -33,6 +33,7 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
+import { startBlocked } from "./errors.js";
 import {
   createLevelHistory,
   meterUnit,
@@ -92,7 +93,7 @@ export function startRefusal(
 ): string | undefined {
   if (active) return undefined;
   if (!editor || editor.focused) return undefined;
-  return "can't start voice · a card or selector has the keyboard — close it, then try again";
+  return startBlocked(VOICE_SHORTCUT);
 }
 
 export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {

@@ -130,12 +130,15 @@ test("the error row names the cause, truncated by whole columns", () => {
   const row = renderStatus(
     snap({
       state: "error",
-      message: "microphone blocked · System Settings › Privacy",
+      message: "microphone blocked · allow it in System Settings › Privacy",
     }),
   )!;
-  expect(stripAnsi(row)).toBe(
-    "voice ✗ microphone blocked · System Settings › Privacy",
-  );
+  // the footer's 52 message columns cut the fix before the terminal does; the cause stays whole
+  expect(stripAnsi(row)).toMatch(/^voice ✗ microphone blocked · allow it in /);
+  const short = renderStatus(
+    snap({ state: "error", message: "microphone blocked" }),
+  )!;
+  expect(stripAnsi(short)).toBe("voice ✗ microphone blocked");
   const long = renderStatus(snap({ state: "error", message: "x".repeat(90) }))!;
   expect(visibleWidth(long)).toBeLessThanOrEqual(60);
 });

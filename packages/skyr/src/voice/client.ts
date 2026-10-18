@@ -8,7 +8,20 @@ import type { Readable } from "node:stream";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { stripInvisible } from "../tools/render.js";
 import type { SttCredentials } from "./credentials.js";
-import { VoiceError } from "./errors.js";
+import {
+  connectionLost,
+  cortiError,
+  credentialsRefused,
+  internalError,
+  micFailed,
+  settingsRefused,
+  signInFailed,
+  signInNoAnswer,
+  signInUnreachable,
+  signInUnreadable,
+  unknownTenant,
+  VoiceError,
+} from "./errors.js";
 import { pcmRms, SAMPLE_RATE_HZ } from "./mic.js";
 
 const PCM = `audio/pcm; rate=${SAMPLE_RATE_HZ}; channels=1; bits=16; endian=little; encoding=sint`;
@@ -16,6 +29,9 @@ const PCM = `audio/pcm; rate=${SAMPLE_RATE_HZ}; channels=1; bits=16; endian=litt
 const CHUNK_BYTES = 8_000;
 /** Past this after `end` the caller keeps the last interim; flushing on quiet usually has the final in already. */
 const END_TIMEOUT_MS = 2_500;
+
+/** A frame field read as Corti documents it, or undefined; frames are untrusted input. */
+const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
 /** Corti's two punctuation modes: inferred from the audio, or only where the speaker says it. */
 export type Punctuation = "automatic" | "spoken";
@@ -97,19 +113,23 @@ export async function getSttToken(
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
-    throw new VoiceError("can't reach Corti");
+  } catch (error) {
+    // AbortSignal.timeout rejects as a TimeoutError; every other failure is a reachability one
+    throw error instanceof Error && error.name === "TimeoutError"
+      ? signInNoAnswer(timeoutMs)
+      : signInUnreachable(error);
   }
   if (res.status === 400 || res.status === 401 || res.status === 403)
-    throw new VoiceError("credentials rejected");
-  if (!res.ok) throw new VoiceError(`Corti auth unavailable (${res.status})`);
+    throw credentialsRefused();
+  if (res.status === 404) throw unknownTenant();
+  if (!res.ok) throw signInFailed(res.status);
   const body: unknown = await res.json().catch(() => undefined);
   const { access_token: token, expires_in: expiresIn } =
     typeof body === "object" && body !== null
       ? (body as Record<string, unknown>)
       : {};
   if (typeof token !== "string" || typeof expiresIn !== "number")
-    throw new VoiceError("Corti sign-in sent an unreadable answer");
+    throw signInUnreadable();
   // a token only has to be valid at connect time; the margin keeps a session from starting on a dying one
   cached = {
     key,
@@ -135,6 +155,7 @@ function transcriptData(
 
 /** Token fetch is the slowest step of arming; do it early when voice is likely. */
 export function prewarmToken(creds: SttCredentials, deps?: TokenDeps): void {
+  // a failed prewarm is retried, and reported, by the session's own sign-in
   getSttToken(creds, deps).catch(() => {});
 }
 
@@ -159,9 +180,8 @@ export function startSession(o: SessionOptions): SttSession {
     if (closed) return;
     closed = true;
     audio?.destroy();
-    try {
-      ws?.close();
-    } catch {}
+    // close() without a code never throws, per the WHATWG spec Node's WebSocket implements
+    ws?.close();
     resolveStop();
   };
   const fail = (err: VoiceError) => {
@@ -178,7 +198,7 @@ export function startSession(o: SessionOptions): SttSession {
         fn(...a);
       } catch {
         try {
-          fail(new VoiceError("internal error"));
+          fail(internalError());
         } catch {} // onError itself threw: the session is already torn down, and a throw here would exit Pi
       }
     };
@@ -199,19 +219,13 @@ export function startSession(o: SessionOptions): SttSession {
     audio = o.source();
   } catch (e) {
     queueMicrotask(
-      guard(() =>
-        fail(
-          e instanceof VoiceError ? e : new VoiceError("no microphone found"),
-        ),
-      ),
+      guard(() => fail(e instanceof VoiceError ? e : micFailed())),
     );
     return { stop: () => done, cancel: () => {} };
   }
   audio.on(
     "error",
-    guard((e: unknown) =>
-      fail(e instanceof VoiceError ? e : new VoiceError("no microphone found")),
-    ),
+    guard((e: unknown) => fail(e instanceof VoiceError ? e : micFailed())),
   );
   audio.on(
     "data",
@@ -272,7 +286,7 @@ export function startSession(o: SessionOptions): SttSession {
           pump();
         } else if (typeof m.type === "string" && m.type.startsWith("CONFIG_")) {
           // after CONFIG_DENIED the server holds the socket open until its 10 s timeout
-          fail(new VoiceError("Corti rejected the session"));
+          fail(settingsRefused(str(m.reason)));
         } else if (m.type === "transcript") {
           const data = transcriptData(m.data);
           if (!data) return;
@@ -285,7 +299,7 @@ export function startSession(o: SessionOptions): SttSession {
             o.onInterim(text);
           }
         } else if (m.type === "error") {
-          fail(new VoiceError("Corti transcription error"));
+          fail(cortiError(str(m.reason) ?? str(m.error)));
         } else if (m.type === "ended") {
           ended = true;
           teardown();
@@ -293,15 +307,14 @@ export function startSession(o: SessionOptions): SttSession {
       });
       // the server drops TCP (1006) right after "ended"; that close is success
       ws.onclose = guard(() =>
-        ended || stopping
-          ? teardown()
-          : fail(new VoiceError("connection lost")),
+        ended || stopping ? teardown() : fail(connectionLost()),
       );
+      // every error is followed by close, which reports it
       ws.onerror = () => {};
     })
     .catch(
       guard((e: unknown) =>
-        fail(e instanceof VoiceError ? e : new VoiceError("can't reach Corti")),
+        fail(e instanceof VoiceError ? e : signInUnreachable(e)),
       ),
     );
 

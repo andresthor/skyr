@@ -23,7 +23,14 @@ import {
 } from "./client.js";
 import { VOICE_DEFAULTS } from "./config.js";
 import type { SttCredentials } from "./credentials.js";
-import { VoiceError } from "./errors.js";
+import {
+  micBlocked,
+  micStopped,
+  noAnswer,
+  noSpeech,
+  noWords,
+  type VoiceError,
+} from "./errors.js";
 import { dbfs, FULL_SCALE, micSource } from "./mic.js";
 
 export type VoiceState =
@@ -52,7 +59,7 @@ export interface DictationTiming {
   tailMs: number;
   /** Ask for the segment's final after this much quiet, so a stop has little left to drain. */
   flushMs: number;
-  /** Give up with "nothing heard" when no speech arrives this long after start. */
+  /** Give up with no speech and no words this long after start. */
   noSpeechMs: number;
   /** Hard cap on one dictation; stops and keeps, as if toggled. */
   maxMs: number;
@@ -143,7 +150,7 @@ export interface DictationFacts {
   accepted: boolean;
   /** This dictation has heard someone: a chunk above SPEECH_DBFS, or any text from Corti. */
   heardSpeech: boolean;
-  /** The window this dictation fails with "nothing heard" in, so "no voice yet" can be set against it. */
+  /** The window this dictation fails with no speech in, so "no voice yet" can be set against it. */
   noSpeechMs: number;
   /** The error line while `state` is "error". */
   message: string;
@@ -225,7 +232,7 @@ export class DictationController {
       d.mic = "closed";
       d.session.stop().then(() => {
         if (d !== this.d) return;
-        if (!kept(d)) return this.fail(d, new VoiceError("nothing heard"));
+        if (!kept(d)) return this.fail(d, noWords());
         // settled before the sink runs, and a sink throw has nowhere to go
         // but an unhandled rejection: the promise chain ends here
         this.end(d);
@@ -319,11 +326,11 @@ export class DictationController {
     this.setState("arming");
     this.later(d, this.timing.armTimeoutMs, () => {
       if (this.curState === "arming")
-        this.fail(d, new VoiceError("Corti didn't answer"));
+        this.fail(d, noAnswer(this.timing.armTimeoutMs));
     });
     this.later(d, this.timing.noSpeechMs, () => {
       if (capturing(this.curState) && !d.heard)
-        this.fail(d, new VoiceError("nothing heard"));
+        this.fail(d, noSpeech(this.timing.noSpeechMs));
     });
     this.later(d, this.timing.maxMs, () => {
       if (this.curState === "listening") this.finish();
@@ -343,15 +350,12 @@ export class DictationController {
       // after a long block the timer can run before queued chunks are read; one turn lets them land
       setImmediate(() => {
         if (capturing(this.curState) && Date.now() - d.lastChunkAt >= stallMs)
-          this.fail(d, new VoiceError("microphone stopped"));
+          this.fail(d, micStopped());
       }),
     );
     if (rms === 0) {
       if (++d.zeroChunks >= ZERO_CHUNKS_BLOCKED && !d.heard)
-        this.fail(
-          d,
-          new VoiceError("microphone blocked · System Settings › Privacy"),
-        );
+        this.fail(d, micBlocked());
       return;
     }
     d.zeroChunks = Number.NEGATIVE_INFINITY;

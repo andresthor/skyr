@@ -305,8 +305,8 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
   test("any key clears an error line and still reaches the editor", async () => {
     const h = await mounted();
     await h.toggle();
-    h.starts[0]!.onError(new VoiceError("connection lost"));
-    expect(bottomRow(h.ed)).toContain("connection lost");
+    h.starts[0]!.onError(new VoiceError("connection to Corti lost"));
+    expect(bottomRow(h.ed)).toContain("connection to Corti lost");
     h.ed.handleInput("a");
     expect(bottomRow(h.ed)).toBe("─".repeat(72));
     expect(h.ed.getText()).toBe("a");
@@ -319,7 +319,7 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
     expect(h.starts).toHaveLength(0);
     expect(h.ctx.ui.notify).toHaveBeenCalledTimes(1);
     expect(h.ctx.ui.notify).toHaveBeenCalledWith(
-      expect.stringMatching(/a card or selector has the keyboard — close it/),
+      "voice: a card or selector has the keyboard; close it, then press ctrl+space again",
       "warning",
     );
   });

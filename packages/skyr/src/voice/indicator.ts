@@ -198,8 +198,8 @@ export function renderStatus(
     return `${label} ${fg(T.error, ascii ? "x" : "✗")}${fg(T.muted, ` ${text}`)}`;
   }
   const phase = phaseOf(s);
-  if (!phase)
-    return s.discarded ? `${label} ${fg(T.muted, "discarded")}` : undefined;
+  if (s.state === "discarded") return `${label} ${fg(T.muted, "discarded")}`;
+  if (!phase) return undefined;
   const { light, word, advisories } = marks(s, phase, palette, mode, false);
   const sep = ascii ? ", " : fg(T.dim, " · ");
   // the footer collapses runs of spaces, so silence is dim rule cells rather than padding
@@ -454,8 +454,6 @@ export function spliceGhost(
 export type VoiceSnapshot = DictationFacts & {
   /** Committed meter bars in `meterUnit`s, newest first. */
   bars: readonly number[];
-  /** Committed text was just reverted: offer the undo, briefly. */
-  discarded?: boolean;
 };
 
 const METER_FLOOR_DB = -60;
@@ -559,14 +557,14 @@ export function renderRule(
     const cause = `${mark}${fg(T.muted, ` ${text}`)}`;
     return first([compose(cause, more ?? ""), compose(cause, "")]);
   }
-  if (!phase) {
-    return s.discarded
-      ? first([
-          compose(fg(T.muted, "discarded"), more ?? key(keys.undo, "undo")),
-          compose(fg(T.muted, "discarded"), ""),
-        ])
-      : undefined;
+  if (s.state === "discarded") {
+    const notice = fg(T.muted, "discarded");
+    return first([
+      compose(notice, more ?? key(keys.undo, "undo")),
+      compose(notice, ""),
+    ]);
   }
+  if (!phase) return undefined;
 
   const { light, word, advisories } = marks(s, phase, palette, mode, true);
 

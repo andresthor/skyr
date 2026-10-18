@@ -303,7 +303,7 @@ describe("editorSink", () => {
     expect(editor.text).toBe("previous words typed more stuff");
     sink.end();
     expect(editor.text).toBe("previous words typed more stuff");
-    sink.revert();
+    expect(sink.revert()).toBe(true);
     expect(editor.text).toBe("previous words typed");
     expect(editor.decor.drying).toEqual([]);
   });
@@ -316,7 +316,7 @@ describe("editorSink", () => {
     sink.begin();
     sink.final("hidden words");
     expect(editor.text).toBe("start"); // still buffered
-    sink.revert();
+    expect(sink.revert()).toBe(false);
     editor.focused = true;
     expect(editor.text).toBe("start");
   });
@@ -340,7 +340,8 @@ describe("editorSink", () => {
     ]);
     sink.end();
     expect(edits.at(-1)).toBe(`${snap} tree data structures`);
-    sink.revert();
+    // the buffer changed, but the fallback falls to plain text: no undo is on offer
+    expect(sink.revert()).toBe(false);
     expect(edits.at(-1)).toBe(snap);
   });
 });

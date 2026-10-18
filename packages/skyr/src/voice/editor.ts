@@ -238,14 +238,20 @@ export function editorSink(
       else fallback.set(committed);
       repaint();
     },
-    revert() {
+    revert(): boolean {
       const ed = target();
       if (ed) {
         ed.decor = { ...ed.decor, ghost: "", drying: [] };
         ed.discardPending();
-        if (ed.getText() !== snapshot) ed.setText(snapshot);
-      } else fallback.set(snapshot);
+        const changed = ed.getText() !== snapshot;
+        if (changed) ed.setText(snapshot);
+        repaint();
+        return changed;
+      }
+      fallback.set(snapshot);
       repaint();
+      // the fallback's writes are each their own undo step, so there is no one undo to offer
+      return false;
     },
   };
 }

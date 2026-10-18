@@ -44,7 +44,7 @@ const STATES: Partial<VoiceSnapshot>[] = [
   { state: "transcribing", micOpen: false, stateMs: 700 },
   { state: "error", message: "connection lost · words kept" },
   { state: "error", message: "x".repeat(200) },
-  { state: "idle", discarded: true },
+  { state: "discarded" },
 ];
 
 test("every row is exactly the width, at every width, in every state and mode", () => {
@@ -149,12 +149,24 @@ test("a scrolled editor's ↓ N more takes the hints' place, ahead of any adviso
   const row = plain({ capLeftMs: 9_500 }, { width: 72, hiddenBelow: 3 });
   expect(row).toMatch(/● listening · 10s left ─+ ↓ 3 more ──$/);
   expect(row).not.toContain("escape");
-  expect(plain({ state: "idle", discarded: true }, { hiddenBelow: 3 })).toMatch(
+  expect(plain({ state: "discarded" }, { hiddenBelow: 3 })).toMatch(
     /^── discarded ─+ ↓ 3 more ──$/,
   );
   expect(
     plain({ state: "error", message: "connection lost" }, { hiddenBelow: 3 }),
   ).toMatch(/^── ✗ connection lost ─+ ↓ 3 more ──$/);
+});
+
+test('"no voice yet" appears at half the no-speech window, never after its failure', () => {
+  const quiet = (sinceStartMs: number) =>
+    plain({
+      bars: SILENCE,
+      heardSpeech: false,
+      sinceStartMs,
+      noSpeechMs: 6_000,
+    });
+  expect(quiet(2_900)).not.toContain("no voice yet");
+  expect(quiet(3_100)).toContain("no voice yet");
 });
 
 test("the meter drops before an advisory: a narrow rule still says time is running out", () => {
@@ -175,7 +187,7 @@ test("when not even the mic light fits, voice draws nothing and Pi's own rule, s
 });
 
 test("after Esc reverted committed words, the rule says so and names the undo", () => {
-  expect(plain({ state: "idle", discarded: true })).toMatch(
+  expect(plain({ state: "discarded" })).toMatch(
     /^── discarded ─+ ctrl\+- undo ──$/,
   );
 });

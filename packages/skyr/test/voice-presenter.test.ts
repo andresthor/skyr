@@ -89,9 +89,9 @@ test("the footer row names voice first, so a neighbouring status can't claim its
   expect(
     stripAnsi(renderStatus(snap({ state: "transcribing", micOpen: false }))!),
   ).toBe("voice ○ finishing· ────────");
-  expect(
-    stripAnsi(renderStatus(snap({ state: "idle", discarded: true }))!),
-  ).toBe("voice discarded");
+  expect(stripAnsi(renderStatus(snap({ state: "discarded" }))!)).toBe(
+    "voice discarded",
+  );
   // the footer collapses runs of spaces, so the row never relies on them
   expect(renderStatus(snap())!).not.toMatch(/ {2}/);
 });

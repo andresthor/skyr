@@ -5,8 +5,9 @@
  *                     └─────────────── toggle / enter ───────────────↗
  *
  *   arming, listening       ─toggle / enter before any speech or text→ idle, quietly
- *   arming … transcribing   ─Esc→ idle, the buffer put back
- *   arming … transcribing   ─any failure→ error ─hold or any key→ idle; toggle starts afresh
+ *   arming … transcribing   ─Esc→ the buffer put back ─committed words reverted→ discarded
+ *   arming … transcribing   ─any failure→ error
+ *   error, discarded        ─hold expired or any key→ idle; toggle starts afresh
  *
  * Quiet never stops a dictation: people pause to think. It only asks the server for
  * the pending final early, so a stop has little left to wait for.
@@ -30,7 +31,8 @@ export type VoiceState =
   | "arming"
   | "listening"
   | "transcribing"
-  | "error";
+  | "error"
+  | "discarded";
 
 export interface DictationSink {
   /** A dictation is starting; remember whatever is needed to undo it. */
@@ -41,8 +43,8 @@ export interface DictationSink {
   final(segment: string): void;
   /** Dictation over; drop any provisional text. */
   end(): void;
-  /** Esc: put the buffer back the way `begin()` found it. */
-  revert(): void;
+  /** Esc: put the buffer back the way `begin()` found it. True when the buffer changed. */
+  revert(): boolean;
 }
 
 export interface DictationTiming {
@@ -58,6 +60,8 @@ export interface DictationTiming {
   armTimeoutMs: number;
   /** How long an error line stays up. */
   errorHoldMs: number;
+  /** How long the discarded notice offers its undo. */
+  discardHoldMs: number;
   /** Fail when an open mic delivers nothing for this long: silence still arrives as chunks, a dead mic doesn't. */
   stallMs: number;
 }
@@ -69,6 +73,7 @@ export const DEFAULT_TIMING: DictationTiming = {
   maxMs: 120_000,
   armTimeoutMs: 10_000,
   errorHoldMs: 4000,
+  discardHoldMs: 2000,
   stallMs: 1500,
 };
 
@@ -156,7 +161,7 @@ export class DictationController {
   private readonly timing: DictationTiming;
   /** The running dictation; undefined from the moment it ends. A callback holding another is stale. */
   private d: Dictation | undefined;
-  /** Ends the error line. */
+  /** Ends the notice currently up, error or discarded. */
   private hold: Timer | undefined;
 
   constructor(private readonly o: DictationControllerOptions) {
@@ -189,9 +194,14 @@ export class DictationController {
     };
   }
 
-  /** The trigger: start when idle, stop-and-keep when capturing, ignored while draining. */
+  /** The trigger: start when idle or a notice is up, stop-and-keep when capturing, ignored while draining. */
   toggle(): void {
-    if (this.curState === "idle" || this.curState === "error") this.start();
+    if (
+      this.curState === "idle" ||
+      this.curState === "error" ||
+      this.curState === "discarded"
+    )
+      this.start();
     else if (capturing(this.curState)) this.finish();
   }
 
@@ -232,20 +242,21 @@ export class DictationController {
     });
   }
 
-  /** Esc: stop everything and restore the editor. */
+  /** Esc: stop everything and put the editor back the way `begin()` found it. */
   cancel(): void {
     const d = this.d;
     if (!d) return;
     d.session.cancel();
     this.end(d);
     this.o.sink.end();
-    this.o.sink.revert();
-    this.setState("idle");
+    // true means committed words went; their undo offer is the notice for that
+    if (this.o.sink.revert()) this.held("discarded", this.timing.discardHoldMs);
+    else this.setState("idle");
   }
 
-  /** Any keypress clears an error line early. */
+  /** Any keypress clears an error line or the discarded notice early. */
   dismiss(): void {
-    if (this.curState !== "error") return;
+    if (this.curState !== "error" && this.curState !== "discarded") return;
     this.clearHold();
     this.setState("idle");
   }
@@ -360,11 +371,7 @@ export class DictationController {
     // settled before the sink runs: a broken editor must not strand a live dictation,
     // and a throw here would exit Pi, because fail is also called from timers
     this.message = kept(d) ? `${err.message} · words kept` : err.message;
-    this.setState("error");
-    this.hold = setTimeout(() => {
-      this.hold = undefined;
-      this.setState("idle");
-    }, this.timing.errorHoldMs);
+    this.held("error", this.timing.errorHoldMs);
     // guarded one by one: the error line is already up, and a throw here would
     // exit Pi, because fail is also called from timers
     try {
@@ -401,6 +408,15 @@ export class DictationController {
   private cancelTimer(d: Dictation, t: Timer): void {
     clearTimeout(t);
     d.timers.delete(t);
+  }
+
+  /** Shows notice `s` for `holdMs`, then idle; dismiss() or a toggle ends it early. */
+  private held(s: "error" | "discarded", holdMs: number): void {
+    this.setState(s);
+    this.hold = setTimeout(() => {
+      this.hold = undefined;
+      this.setState("idle");
+    }, holdMs);
   }
 
   private clearHold(): void {

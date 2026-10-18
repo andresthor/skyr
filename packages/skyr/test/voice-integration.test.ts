@@ -233,11 +233,11 @@ test("during dictation the rule rides our focused editor, and discarding committ
   expect(ed.getText()).toBe("hello there");
   await pi.commands.get("voice")!.handler("off", ctx);
   expect(ed.getText()).toBe("");
-  expect(ed.decor.rule?.discarded).toBe(true);
+  expect(ed.decor.rule?.state).toBe("discarded");
   // with nothing committed, a cancel offers no undo: it would undo the user's own edit
   await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
   await pi.commands.get("voice")!.handler("off", ctx);
-  expect(ed.decor.rule?.discarded).toBe(false);
+  expect(ed.decor.rule?.state).toBe("idle");
 });
 
 const TAIL_MS = 400;
@@ -293,7 +293,11 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
     expect(h.ed.getText()).toBe("draft");
     expect(h.ends[0]).toEqual({ stopped: 0, cancelled: 1 });
     expect(h.escaped).not.toHaveBeenCalled();
-    expect(h.ed.decor.rule?.discarded).toBe(true);
+    expect(h.ed.decor.rule?.state).toBe("discarded");
+    // any key ends the undo offer and still reaches the editor
+    h.ed.handleInput("a");
+    expect(h.ed.decor.rule?.state).toBe("idle");
+    expect(h.ed.getText()).toBe("drafta");
   });
 
   test("any key clears an error line and still reaches the editor", async () => {

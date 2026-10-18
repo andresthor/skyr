@@ -45,9 +45,6 @@ import { type VoicePresenter, voicePresenter } from "./presenter.js";
 
 export const VOICE_SHORTCUT = "ctrl+space";
 
-/** How long the rule offers the undo after Esc reverted committed words. */
-const DISCARD_NOTICE_MS = 2000;
-
 export interface VoiceOptions {
   /** What the terminal can show; read from the environment when not given. */
   mode?: VoiceMode;
@@ -123,7 +120,6 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   let timer: ReturnType<typeof setInterval> | undefined;
   const history = createLevelHistory();
   let bars: number[] = [];
-  let discardedUntil = 0;
 
   const repaint = () => tui?.requestRender();
   const sink = editorSink(
@@ -137,16 +133,13 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
 
   const drying = () =>
     !!editor?.decor.drying.some((s) => Date.now() - s.at < DRY_MS);
-  const discarded = () =>
-    controller.state === "idle" && Date.now() < discardedUntil;
   const snapshot = (): VoiceSnapshot => ({
     ...controller.facts(),
     bars,
-    discarded: discarded(),
   });
   const pushPresenter = () => presenter?.update(snapshot());
   const tick = () => {
-    if (controller.state === "idle" && !drying() && !discarded()) {
+    if (controller.state === "idle" && !drying()) {
       if (editor) editor.decor.drying = [];
       stopTimer();
     }
@@ -171,8 +164,6 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       if (controller.state === "arming") {
         history.reset();
         bars = [];
-        // a new dictation ends the previous undo offer: the undo now belongs to newer text
-        discardedUntil = 0;
       }
       if (controller.state !== "idle" || drying()) startTimer();
       pushPresenter();
@@ -181,26 +172,12 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     ...opts.controller,
   });
 
-  // Esc and `/voice off`: a reverted buffer means committed words went, so offer the undo
-  const cancel = () => {
-    const before = editor?.getText();
-    controller.cancel();
-    if (editor && editor.getText() !== before) {
-      discardedUntil = Date.now() + DISCARD_NOTICE_MS;
-      startTimer();
-      pushPresenter();
-      repaint();
-    }
-  };
+  // Esc and `/voice off`: the controller puts the buffer back and shows the undo notice itself
+  const cancel = () => controller.cancel();
 
   const keyHook = (data: string, keys: KeybindingsManager): boolean => {
-    // after any edit one undo would remove that edit, not the dictation, so the offer ends here
-    if (discardedUntil) {
-      discardedUntil = 0;
-      pushPresenter();
-      repaint();
-    }
-    if (controller.state === "error") {
+    // any key ends the undo offer: an edit after it would undo that edit, not the revert
+    if (controller.state === "error" || controller.state === "discarded") {
       controller.dismiss();
       return false;
     }
@@ -296,7 +273,6 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   pi.on("session_shutdown", () => {
     controller.dispose();
     stopTimer();
-    discardedUntil = 0;
     presenter?.update(snapshot());
     presenter = undefined;
   });

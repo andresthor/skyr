@@ -22,6 +22,7 @@ const TIMING: DictationTiming = {
   maxMs: 120_000,
   armTimeoutMs: 10_000,
   errorHoldMs: 4_000,
+  discardHoldMs: 2_000,
   stallMs: 1_500,
 };
 
@@ -74,7 +75,10 @@ function harness(
       interim: (s) => events.push({ op: "interim", arg: s }),
       final: (s) => events.push({ op: "final", arg: s }),
       end: () => events.push({ op: "end" }),
-      revert: () => events.push({ op: "revert" }),
+      revert: () => {
+        events.push({ op: "revert" });
+        return false;
+      },
       ...o.sinkOverride,
     },
     onChange: () => states.push(controller.state),
@@ -235,6 +239,39 @@ test("Enter's stop through finish() drains the tail the same way as the toggle",
   expect(h.controller.state).toBe("idle");
   expect(h.events).toContainEqual({ op: "final", arg: "word" });
   expect(h.sessions[0]?.stopCalls).toBe(1);
+});
+
+test("Esc after committed words were reverted shows the discarded notice, ended by any key", () => {
+  const h = harness({}, { sinkOverride: { revert: () => true } });
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.opts().onFinal?.("spoken words");
+  h.controller.cancel();
+  expect(h.controller.state).toBe("discarded");
+  h.controller.dismiss();
+  expect(h.controller.state).toBe("idle");
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("the discarded notice holds for its own window, then goes quiet", async () => {
+  const h = harness({}, { sinkOverride: { revert: () => true } });
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.controller.cancel();
+  await vi.advanceTimersByTimeAsync(TIMING.discardHoldMs - 1);
+  expect(h.controller.state).toBe("discarded");
+  await vi.advanceTimersByTimeAsync(1);
+  expect(h.controller.state).toBe("idle");
+});
+
+test("a toggle from the discarded notice starts a fresh dictation and drops the offer", () => {
+  const h = harness({}, { sinkOverride: { revert: () => true } });
+  h.controller.toggle();
+  h.controller.cancel();
+  expect(h.controller.state).toBe("discarded");
+  h.controller.toggle();
+  expect(h.controller.state).toBe("arming");
+  expect(h.sessions).toHaveLength(2);
 });
 
 test("Esc cancels on the spot, puts the buffer back, and late session callbacks are dead", () => {

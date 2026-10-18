@@ -1,12 +1,12 @@
 /** Assembles Corti's transcript stream into committed segments plus one live interim. */
 
-export interface TranscriptMessage {
+interface TranscriptMessage {
   text: string;
   start: number;
   isFinal: boolean;
 }
 
-export type TranscriptUpdate =
+type TranscriptUpdate =
   | { kind: "final"; segment: string }
   | { kind: "interim"; segment: string }
   | { kind: "stale" };

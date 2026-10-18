@@ -38,7 +38,7 @@ const FFMPEG_ARGS = [
 ];
 
 /** GUI-launched terminals often lack Homebrew on PATH, so absolute locations are probed first. */
-export function findBinary(
+function findBinary(
   bin: string,
   path = process.env.PATH ?? "",
 ): string | undefined {

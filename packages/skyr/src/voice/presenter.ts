@@ -15,7 +15,7 @@ import {
 export const VOICE_STATUS_KEY = "voice";
 
 /** The narrowest shape of the host's status surface the presenter needs. */
-export interface StatusUI {
+interface StatusUI {
   setStatus(key: string, text: string | undefined): void;
 }
 

@@ -295,7 +295,7 @@ interface DryingSpan {
   age: number;
 }
 
-export interface GhostInput {
+interface GhostInput {
   width: number;
   /** The editor's horizontal padding (`editorPaddingX`). */
   paddingX?: number;

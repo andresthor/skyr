@@ -42,7 +42,7 @@ export function spacedSegment(
 }
 
 /** What a VoiceEditor draws on top of Pi's editor. */
-export interface VoiceDecor {
+interface VoiceDecor {
   ghost: string;
   /** Recent commits, newest first; `at` is when each landed. */
   drying: { chars: number; lead: number; at: number }[];

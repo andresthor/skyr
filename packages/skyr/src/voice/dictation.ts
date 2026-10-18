@@ -57,7 +57,7 @@ export interface DictationTiming {
   stallMs: number;
 }
 
-export const DEFAULT_TIMING: DictationTiming = {
+const DEFAULT_TIMING: DictationTiming = {
   tailMs: 400,
   flushMs: 900,
   noSpeechMs: 8000,
@@ -168,7 +168,7 @@ export class DictationController {
       this.finish();
   }
 
-  start(): void {
+  private start(): void {
     this.clearTimers();
     const gen = ++this.generation;
     this.startedAt = Date.now();

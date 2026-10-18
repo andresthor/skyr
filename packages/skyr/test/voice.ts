@@ -76,7 +76,7 @@ export const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({
   micOpen: true,
   accepted: true,
   heardSpeech: true,
-  noSpeechMs: 8_000,
+  noSpeechLeftMs: 6_000,
   bars: PHRASE,
   message: "",
   ...s,

@@ -48,7 +48,12 @@ const STATES: Partial<VoiceSnapshot>[] = [
   { state: "arming", micOpen: false, sinceStartMs: 2000 },
   { state: "arming", accepted: false, heardSpeech: false, sinceStartMs: 2000 },
   { state: "listening" },
-  { state: "listening", bars: SILENCE, heardSpeech: false, sinceStartMs: 5000 },
+  {
+    state: "listening",
+    bars: SILENCE,
+    heardSpeech: false,
+    noSpeechLeftMs: 3_000,
+  },
   { state: "listening", capLeftMs: 9_500 },
   { state: "transcribing", stateMs: 100 },
   { state: "transcribing", micOpen: false, stateMs: 700 },
@@ -168,7 +173,7 @@ test("advisories ride with the word they qualify", () => {
     plain({ state: "arming", micOpen: false, sinceStartMs: 2000 }),
   ).toContain("○ starting · no audio yet");
   expect(
-    plain({ bars: SILENCE, heardSpeech: false, sinceStartMs: 5000 }),
+    plain({ bars: SILENCE, heardSpeech: false, noSpeechLeftMs: 3_000 }),
   ).toContain("● listening · no voice yet");
   expect(plain({ capLeftMs: 9_500 })).toContain("● listening · 10s left");
   expect(
@@ -201,16 +206,21 @@ test("a scrolled editor's ↓ N more takes the hints' place, ahead of any adviso
   ).toMatch(/^── ✗ connection to Corti lost ─+ ↓ 3 more ──$/);
 });
 
-test('"no voice yet" appears at half the no-speech window, never after its failure', () => {
-  const quiet = (sinceStartMs: number) =>
+test('"no voice yet" appears in the last 4 s before silence fails the dictation, and not while Corti connects', () => {
+  const quiet = (noSpeechLeftMs: number | undefined) =>
+    plain({ bars: SILENCE, heardSpeech: false, noSpeechLeftMs });
+  expect(quiet(4_100)).not.toContain("no voice yet");
+  expect(quiet(3_900)).toContain("no voice yet");
+  expect(
     plain({
+      state: "arming",
+      accepted: false,
       bars: SILENCE,
       heardSpeech: false,
-      sinceStartMs,
-      noSpeechMs: 6_000,
-    });
-  expect(quiet(2_900)).not.toContain("no voice yet");
-  expect(quiet(3_100)).toContain("no voice yet");
+      noSpeechLeftMs: undefined,
+      sinceStartMs: 9_000,
+    }),
+  ).not.toContain("no voice yet");
 });
 
 test("the meter drops before an advisory: a narrow rule still says time is running out", () => {
@@ -218,7 +228,7 @@ test("the meter drops before an advisory: a narrow rule still says time is runni
     expect(plain({ capLeftMs: 14_000 }, { width })).toContain("14s left");
     expect(
       plain(
-        { bars: SILENCE, heardSpeech: false, sinceStartMs: 5000 },
+        { bars: SILENCE, heardSpeech: false, noSpeechLeftMs: 3_000 },
         { width },
       ),
     ).toContain("no voice yet");

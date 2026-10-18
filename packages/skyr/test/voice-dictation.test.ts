@@ -309,11 +309,13 @@ test("a mic that delivers only digital silence is reported as blocked in privacy
   expect(h.controller.state).toBe("idle");
 });
 
-test("never hearing speech at all fails with no speech", async () => {
+test("never hearing speech fails with no speech, counted from when Corti accepted", async () => {
   const h = harness();
   h.controller.toggle();
+  await vi.advanceTimersByTimeAsync(TIMING.armTimeoutMs - 1);
+  h.opts().onReady?.();
   await vi.advanceTimersByTimeAsync(TIMING.noSpeechMs - 1);
-  expect(h.controller.state).toBe("arming");
+  expect(h.controller.state).toBe("listening");
   await vi.advanceTimersByTimeAsync(1);
   expect(h.controller.state).toBe("error");
   expect(h.controller.facts().message).toBe(
@@ -337,8 +339,8 @@ test("text arriving while the meter stays under the speech gate keeps the dictat
   h.controller.cancel();
 });
 
-test("a session that never accepts fails with didn't answer", async () => {
-  const h = harness({ noSpeechMs: 20_000 });
+test("silence while Corti never accepts fails as Corti not answering, never as no speech", async () => {
+  const h = harness();
   h.controller.toggle();
   await vi.advanceTimersByTimeAsync(TIMING.armTimeoutMs);
   expect(h.controller.state).toBe("error");

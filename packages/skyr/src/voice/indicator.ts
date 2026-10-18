@@ -77,6 +77,8 @@ const ERROR_ROW_MARGIN = 9;
 
 /** Warn this long before the hard cap, so the cap is first advisory, then fact. */
 const CAP_WARN_MS = 15_000;
+/** Say "no voice yet" this long before silence fails the dictation. */
+const NO_VOICE_WARN_MS = 4_000;
 /** The slow-start advisories wait this long, so an ordinary start never flickers them. */
 const SLOW_START_MS = 1_500;
 /** One step of the finishing ellipsis per this many ms. */
@@ -177,11 +179,11 @@ function voiceView(s: VoiceSnapshot): VoiceView {
     advisories.push({ text: "no audio yet", tone: "warning" });
   if (s.state === "arming" && s.micOpen && s.sinceStartMs > SLOW_START_MS)
     advisories.push({ text: "connecting", tone: "muted" });
-  // half the failure window, so "no voice yet" can never appear after the no-speech failure
   if (
     phase === "listening" &&
     !s.heardSpeech &&
-    s.sinceStartMs > s.noSpeechMs / 2
+    s.noSpeechLeftMs !== undefined &&
+    s.noSpeechLeftMs <= NO_VOICE_WARN_MS
   )
     advisories.push({ text: "no voice yet", tone: "warning" });
   if (s.state === "listening" && s.capLeftMs <= CAP_WARN_MS)

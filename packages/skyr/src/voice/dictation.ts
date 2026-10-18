@@ -60,7 +60,7 @@ export interface DictationTiming {
   tailMs: number;
   /** Ask for the segment's final after this much quiet, so a stop has little left to drain. */
   flushMs: number;
-  /** Give up with no speech and no words this long after start. */
+  /** Give up with no speech and no words this long after Corti accepts the session. */
   noSpeechMs: number;
   /** Hard cap on one dictation; stops and keeps, as if toggled. */
   maxMs: number;
@@ -106,8 +106,8 @@ interface Dictation {
   readonly startedAt: number;
   /** Waiting for the recorder's first chunk, then open until the tail after a stop ends. */
   mic: "waiting" | "open" | "closed";
-  /** The server took the session; before that, audio is only buffered. */
-  accepted: boolean;
+  /** When the server took the session; until then audio is only buffered. */
+  acceptedAt: number | undefined;
   /** Someone spoke: a chunk above SPEECH_DBFS, or any text from Corti. */
   heard: boolean;
   finals: number;
@@ -155,8 +155,8 @@ export interface DictationFacts {
   accepted: boolean;
   /** This dictation has heard someone: a chunk above SPEECH_DBFS, or any text from Corti. */
   heardSpeech: boolean;
-  /** The window this dictation fails with no speech in, so "no voice yet" can be set against it. */
-  noSpeechMs: number;
+  /** ms before silence fails this dictation; undefined until the server accepts, which starts the window. */
+  noSpeechLeftMs: number | undefined;
   /** The error line while `state` is "error". */
   message: string;
 }
@@ -200,9 +200,12 @@ export class DictationController {
       sinceStartMs,
       capLeftMs: this.timing.maxMs - sinceStartMs,
       micOpen: this.d?.mic === "open",
-      accepted: this.d?.accepted ?? false,
+      accepted: this.d?.acceptedAt !== undefined,
       heardSpeech: this.d?.heard ?? false,
-      noSpeechMs: this.timing.noSpeechMs,
+      noSpeechLeftMs:
+        this.d?.acceptedAt === undefined
+          ? undefined
+          : this.timing.noSpeechMs - (now - this.d.acceptedAt),
       message: this.message,
     };
   }
@@ -307,8 +310,13 @@ export class DictationController {
         ...this.config,
         onReady: () => {
           if (d !== this.d || this.curState !== "arming") return;
-          d.accepted = true;
+          d.acceptedAt = Date.now();
           this.setState("listening");
+          // from acceptance, not start: silence while Corti connects is Corti's delay, not the user's
+          this.later(d, this.timing.noSpeechMs, () => {
+            if (capturing(this.curState) && !d.heard)
+              this.fail(d, noSpeech(this.timing.noSpeechMs));
+          });
         },
         onInterim: (segment) => {
           if (d !== this.d) return;
@@ -329,7 +337,7 @@ export class DictationController {
       }),
       startedAt: Date.now(),
       mic: "waiting",
-      accepted: false,
+      acceptedAt: undefined,
       heard: false,
       finals: 0,
       interim: "",
@@ -342,10 +350,6 @@ export class DictationController {
     this.later(d, this.timing.armTimeoutMs, () => {
       if (this.curState === "arming")
         this.fail(d, noAnswer(this.timing.armTimeoutMs));
-    });
-    this.later(d, this.timing.noSpeechMs, () => {
-      if (capturing(this.curState) && !d.heard)
-        this.fail(d, noSpeech(this.timing.noSpeechMs));
     });
     this.later(d, this.timing.maxMs, () => {
       if (this.curState === "listening") this.finish();

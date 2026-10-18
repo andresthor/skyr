@@ -267,9 +267,10 @@ test("an error names its cause on the rule, truncated by whole columns", () => {
   expect(
     plain({ state: "error", message: "connection to Corti lost" }),
   ).toMatch(/^── ✗ connection to Corti lost ─+$/);
+  // clipped to exactly the one rule cell a row keeps
   expect(
     plain({ state: "error", message: "x".repeat(200) }, { width: 30 }),
-  ).toContain("…");
+  ).toMatch(/^── ✗ x+… ───$/);
 });
 
 test("TERM=dumb marks are ASCII; NO_COLOR keeps the glyphs without colour; 256-colour stays indexed", () => {

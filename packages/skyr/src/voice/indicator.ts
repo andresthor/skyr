@@ -70,9 +70,6 @@ export function createLevelHistory(): LevelHistory {
 /** The footer's whole error row: the `voice ✗` prefix plus the message;
  * pi truncates further to the terminal's width. */
 const ERROR_COLS = 60;
-const ERROR_PREFIX_COLS = 8;
-/** Non-message columns in the rule's `── ✗ <message> ──`, plus one spare as compose keeps. */
-const ERROR_ROW_MARGIN = 9;
 
 /** Warn this long before the hard cap, so the cap is first advisory, then fact. */
 const CAP_WARN_MS = 15_000;
@@ -99,12 +96,8 @@ export function renderStatus(
   const m = marks(paint);
   const view = voiceView(s);
   if (view.kind === "error") {
-    const text = sliceByColumn(
-      view.message,
-      0,
-      ERROR_COLS - ERROR_PREFIX_COLS,
-      true,
-    );
+    const prefix = visibleWidth(`${label} ${m.cause("")}`);
+    const text = sliceByColumn(view.message, 0, ERROR_COLS - prefix, true);
     return `${label} ${m.cause(text)}`;
   }
   if (view.kind === "off") return undefined;
@@ -301,24 +294,32 @@ export function renderRule(
   const key = (k: string, what: string) =>
     k ? `${fg(T.dim, k)}${fg(T.muted, ` ${what}`)}` : "";
 
-  // `── left ──…── right ──`, or undefined when it can't fit
-  const compose = (left: string, right: string, meter = "") => {
+  // the ends of `── left ──…── right ──`, and the rule cells left between them at this width
+  const ends = (left: string, right: string, meter = "") => {
     const head = meter
       ? `${line(2)}${meter}${line(1)} ${left}`
       : `${line(2)} ${left}`;
     const tail = right ? ` ${right} ${line(2)}` : line(2);
-    const n = width - visibleWidth(head) - visibleWidth(tail) - 1;
-    if (n < 1) return undefined;
-    return `${head} ${line(n)}${tail}`;
+    return {
+      head,
+      tail,
+      fill: width - visibleWidth(head) - visibleWidth(tail) - 1,
+    };
+  };
+  // the whole row, or undefined when not one rule cell fits between the ends
+  const compose = (left: string, right: string, meter = "") => {
+    const { head, tail, fill } = ends(left, right, meter);
+    if (fill < 1) return undefined;
+    return `${head} ${line(fill)}${tail}`;
   };
   const first = (rows: (string | undefined)[]) =>
     rows.find((r) => r !== undefined);
   const more = hiddenBelow > 0 ? rule(`↓ ${hiddenBelow} more`) : undefined;
 
   if (view.kind === "error") {
-    // as wide as `── ✗ ` before the message, ` ──` after it, plus compose's spare column
-    const room = Math.max(0, width - ERROR_ROW_MARGIN);
     const full = view.message;
+    // the columns a message may take, keeping one rule cell
+    const room = ends(m.cause(""), "").fill - 1;
     const text =
       visibleWidth(full) <= room
         ? full

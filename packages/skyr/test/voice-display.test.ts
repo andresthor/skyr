@@ -138,7 +138,7 @@ test("mic levels reach the meter on the tick, and clearMeter empties it for the 
   const empty = footer(ui);
   // a −20 dBFS syllable, held for two bars
   for (let i = 0; i < 4; i++) {
-    display.level(0.1);
+    display.level(-20);
     vi.advanceTimersByTime(50);
   }
   expect(footer(ui)).not.toBe(empty);

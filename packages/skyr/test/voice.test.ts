@@ -476,7 +476,7 @@ test("a new dictation starts with an empty meter, not the last one's tail", asyn
   h.starts[0]!.onReady?.();
   const fresh = bottomRow(h.ed);
   for (let i = 0; i < 4; i++) {
-    h.starts[0]!.onLevel?.(0.1);
+    h.starts[0]!.onLevel?.(-20);
     await vi.advanceTimersByTimeAsync(50);
   }
   expect(bottomRow(h.ed)).toMatch(/[=#]/);

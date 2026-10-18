@@ -13,7 +13,6 @@ import {
 import { expect, test } from "vitest";
 import { SPEECH_DBFS } from "../src/voice/dictation.js";
 import {
-  meterUnit,
   renderRule,
   renderStatus,
   type VoiceSnapshot,
@@ -22,8 +21,7 @@ import type { VoiceMode } from "../src/voice/palette.js";
 import { HINT_KEYS, snap, styledRuns, testPaint, testTheme } from "./voice.js";
 
 const rule = (s: string) => s;
-const atDb = (db: number) => meterUnit(10 ** (db / 20));
-const SILENCE = Array.from({ length: 8 }, () => atDb(-58));
+const SILENCE = Array.from({ length: 8 }, () => -58);
 const draw = (
   s: Partial<VoiceSnapshot>,
   o: { width?: number; mode?: VoiceMode; hiddenBelow?: number } = {},
@@ -114,7 +112,7 @@ test("the mic light stays on through the tail after Enter, and goes out when the
 });
 
 test("silence is the rule itself: no meter cell rises for anything below the speech gate", () => {
-  const quiet = SILENCE.map(() => atDb(SPEECH_DBFS - 0.5));
+  const quiet = SILENCE.map(() => SPEECH_DBFS - 0.5);
   expect(plain({ bars: quiet })).toMatch(/^─{11} ● listening/);
 });
 
@@ -130,7 +128,7 @@ function meterLightness(row: string): Record<string, number> {
 
 test("short bars recede toward the background on a light theme, as on a dark one", () => {
   // a bar at the speech gate (▂) against one near full height (█)
-  const bars = [atDb(SPEECH_DBFS + 0.1), atDb(-20)];
+  const bars = [SPEECH_DBFS + 0.1, -20];
   const dark = meterLightness(draw({ bars }, { mode: "color" })!);
   const light = meterLightness(
     renderRule(snap({ bars }), {
@@ -151,7 +149,7 @@ test("speech spans the full ramp against its own recent peak, so syllables stand
   expect(meter).toMatch(/[▂▃]/);
   expect(new Set(meter).size).toBeGreaterThanOrEqual(4);
   // a quiet room can't stretch near-gate noise to full height
-  const soft = SILENCE.map(() => atDb(SPEECH_DBFS + 2));
+  const soft = SILENCE.map(() => SPEECH_DBFS + 2);
   expect(plain({ bars: soft }).slice(2, 10)).not.toContain("█");
 });
 

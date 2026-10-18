@@ -15,7 +15,6 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { type DictationFacts, SPEECH_DBFS } from "./dictation.js";
-import { dbfs } from "./mic.js";
 import { clamp01, type Paint, styled } from "./palette.js";
 
 /** One smoothed bar cell per this many ms of recording. */
@@ -25,9 +24,13 @@ const HISTORY_BARS = 48;
 /** The share of the gap to the newest level closed per tick, rising and falling. */
 const ATTACK = 0.8;
 const DECAY = 0.5;
+/** The meter holds levels within −60…−10 dBFS, so close-mic speech never clips. */
+const METER_FLOOR_DB = -60;
+const METER_CEILING_DB = -10;
 
 interface LevelHistory {
-  push(level: number): void;
+  /** A chunk's level in dBFS, held within the meter's range. */
+  push(dbfs: number): void;
   /** Advance `dt` ms; returns the committed bars, newest first. */
   sample(dt: number): number[];
   reset(): void;
@@ -36,17 +39,17 @@ interface LevelHistory {
 /** Fast attack, quick decay, so syllables stand apart instead of merging. */
 export function createLevelHistory(): LevelHistory {
   const bars: number[] = [];
-  let pending = 0;
-  let cur = 0;
-  let held = 0;
+  let pending = METER_FLOOR_DB;
+  let cur = METER_FLOOR_DB;
+  let held = METER_FLOOR_DB;
   let since = 0;
   return {
-    push(level) {
-      pending = Math.max(pending, clamp01(level));
+    push(dbfs) {
+      pending = Math.max(pending, Math.min(METER_CEILING_DB, dbfs));
     },
     sample(dt) {
       cur += (pending - cur) * (pending > cur ? ATTACK : DECAY);
-      pending = 0;
+      pending = METER_FLOOR_DB;
       held = Math.max(held, cur);
       since += dt;
       if (since >= BAR_MS) {
@@ -59,9 +62,9 @@ export function createLevelHistory(): LevelHistory {
     },
     reset() {
       bars.length = 0;
-      pending = 0;
-      cur = 0;
-      held = 0;
+      pending = METER_FLOOR_DB;
+      cur = METER_FLOOR_DB;
+      held = METER_FLOOR_DB;
       since = 0;
     },
   };
@@ -222,17 +225,9 @@ function voiceView(s: VoiceSnapshot): VoiceView {
 
 /** What a voice display needs to know at one moment: the controller's facts plus the meter bars. */
 export type VoiceSnapshot = DictationFacts & {
-  /** Committed meter bars in `meterUnit`s, newest first. */
+  /** Committed meter bars in dBFS, newest first. */
   bars: readonly number[];
 };
-
-const METER_FLOOR_DB = -60;
-const METER_SPAN_DB = 50;
-
-/** A chunk's RMS as the meter's 0..1 unit: −60…−10 dBFS, so close-mic speech never clips. */
-export function meterUnit(rms: number): number {
-  return clamp01((dbfs(rms) - METER_FLOOR_DB) / METER_SPAN_DB);
-}
 
 const METER_CELLS = 8;
 const RISE = "▂▃▄▅▆▇█";
@@ -370,13 +365,11 @@ function meterCells(
   rule: (s: string) => string,
   paint: Paint,
 ): string {
-  const toDb = (u: number) => METER_FLOOR_DB + u * METER_SPAN_DB;
   const lo = SPEECH_DBFS;
-  const hi = Math.max(lo + MIN_RANGE_DB, ...bars.map(toDb));
+  const hi = Math.max(lo + MIN_RANGE_DB, ...bars);
   let out = "";
   for (let i = METER_CELLS - 1; i >= 0; i--) {
-    const u = bars[i];
-    const db = u === undefined ? Number.NEGATIVE_INFINITY : toDb(u);
+    const db = bars[i] ?? Number.NEGATIVE_INFINITY;
     if (db < lo) {
       out += rule("─");
       continue;

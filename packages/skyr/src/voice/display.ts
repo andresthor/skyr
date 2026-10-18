@@ -7,7 +7,6 @@ import type { DictationFacts } from "./dictation.js";
 import type { VoiceEditorLike } from "./editor.js";
 import {
   createLevelHistory,
-  meterUnit,
   renderStatus,
   type VoiceSnapshot,
 } from "./indicator.js";
@@ -31,8 +30,8 @@ interface VoiceDisplayOptions {
 }
 
 interface VoiceDisplay {
-  /** A mic chunk's raw RMS, 0..1 of full scale; the meter takes it in on the next tick. */
-  level(rms: number): void;
+  /** A mic chunk's level in dBFS; the meter takes it in on the next tick. */
+  level(dbfs: number): void;
   /** Empties the meter, so a dictation starting now does not show the last one's tail. */
   clearMeter(): void;
   /** Shows the current facts now, and starts or stops the tick to match. */
@@ -102,7 +101,7 @@ export function createVoiceDisplay({
   };
 
   return {
-    level: (rms) => history.push(meterUnit(rms)),
+    level: (dbfs) => history.push(dbfs),
     clearMeter() {
       history.reset();
       bars = [];

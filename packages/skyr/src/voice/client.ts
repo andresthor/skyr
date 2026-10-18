@@ -9,7 +9,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { errnoOf, oneLine, stripInvisible } from "../tools/render.js";
 import type { SttCredentials } from "./credentials.js";
 import { micFailed, VoiceError } from "./errors.js";
-import { pcmRms, SAMPLE_RATE_HZ } from "./mic.js";
+import { pcmDbfs, SAMPLE_RATE_HZ } from "./mic.js";
 
 const PCM = `audio/pcm; rate=${SAMPLE_RATE_HZ}; channels=1; bits=16; endian=little; encoding=sint`;
 /** 250 ms at 16 kHz s16le, Corti's recommended chunk; the hard cap is 64 000 B. */
@@ -55,8 +55,8 @@ export interface SessionOptions extends Partial<Omit<SttConfig, "language">> {
   onReady?: () => void;
   onInterim: (segment: string) => void;
   onFinal: (segment: string) => void;
-  /** RMS 0..1 of each captured chunk, roughly every 64 ms. */
-  onLevel?: (rms: number) => void;
+  /** Each captured chunk's level in dBFS, −Infinity for digital silence, roughly every 64 ms. */
+  onLevel?: (dbfs: number) => void;
   onError: (err: VoiceError) => void;
   fetch?: typeof fetch;
   WebSocket?: typeof WebSocket;
@@ -266,7 +266,7 @@ export function startSession(o: SessionOptions): SttSession {
     "data",
     guard((d: Buffer) => {
       if (closed || stopping) return;
-      o.onLevel?.(pcmRms(d));
+      o.onLevel?.(pcmDbfs(d));
       pending = Buffer.concat([pending, d]);
       pump();
     }),

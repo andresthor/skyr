@@ -24,7 +24,7 @@ import {
 import { VOICE_DEFAULTS } from "./config.js";
 import type { SttCredentials } from "./credentials.js";
 import { VoiceError } from "./errors.js";
-import { dbfs, FULL_SCALE, micSource } from "./mic.js";
+import { micSource } from "./mic.js";
 
 export type VoiceState =
   | "idle"
@@ -81,12 +81,8 @@ export const DEFAULT_TIMING: DictationTiming = {
   stallMs: 1_500,
 };
 
-/**
- * A chunk louder than this is speech, about −49.8 dBFS; room noise sits below it. Written as its
- * derivation, 0.15 on a 0.6-power curve at 2,500/32,768 RMS, so the gate is exact.
- */
-export const SPEECH_DBFS =
-  20 * Math.log10((2500 / FULL_SCALE) * 0.15 ** (1 / 0.6));
+/** A chunk louder than this is speech; room noise sits below it. */
+export const SPEECH_DBFS = -49.813823223897565;
 /** ~1.5 s of chunks that are exactly zero: macOS hands a mic-denied process silence, not an error. */
 const ZERO_CHUNKS_BLOCKED = 24;
 
@@ -125,8 +121,8 @@ export interface DictationControllerOptions {
   /** Fires when the state changes or a final lands. micOpen and heardSpeech move
    * without it, reaching the screen on the display's own tick instead. */
   onChange: () => void;
-  /** Each chunk's raw RMS, 0..1 of full scale. */
-  onLevel?: (rms: number) => void;
+  /** Each chunk's level in dBFS, −Infinity for digital silence. */
+  onLevel?: (dbfs: number) => void;
   source?: () => Readable;
   timing?: Partial<DictationTiming>;
   start?: (o: SessionOptions) => SttSession;
@@ -309,7 +305,7 @@ export class DictationController {
           this.o.sink.final(segment);
           this.o.onChange();
         },
-        onLevel: (rms) => this.level(d, rms),
+        onLevel: (dbfs) => this.level(d, dbfs),
         onError: (err) => this.fail(d, err),
       }),
       startedAt: Date.now(),
@@ -339,9 +335,9 @@ export class DictationController {
   }
 
   /** One chunk from d's recorder: the meter, the stall and blocked-mic checks, the early flush. */
-  private level(d: Dictation, rms: number): void {
+  private level(d: Dictation, dbfs: number): void {
     if (d !== this.d) return;
-    this.o.onLevel?.(rms);
+    this.o.onLevel?.(dbfs);
     if (d.mic === "waiting") d.mic = "open";
     d.lastChunkAt = Date.now();
     if (!capturing(this.curState)) return;
@@ -354,7 +350,7 @@ export class DictationController {
           this.fail(d, new VoiceError("microphone stopped"));
       }),
     );
-    if (rms === 0) {
+    if (dbfs === Number.NEGATIVE_INFINITY) {
       if (++d.zeroChunks >= ZERO_CHUNKS_BLOCKED && !d.heard)
         this.fail(
           d,
@@ -365,7 +361,7 @@ export class DictationController {
       return;
     }
     d.zeroChunks = Number.NEGATIVE_INFINITY;
-    if (dbfs(rms) <= SPEECH_DBFS) return;
+    if (dbfs <= SPEECH_DBFS) return;
     d.heard = true;
     if (this.curState !== "listening") return;
     if (d.flush) this.cancelTimer(d, d.flush);

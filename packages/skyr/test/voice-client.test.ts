@@ -619,6 +619,15 @@ test("a flush before Corti accepts the config sends nothing", async () => {
   h.session.cancel();
 });
 
+test("each recorder chunk's level reaches onLevel in dBFS", async () => {
+  const onLevel = vi.fn();
+  const h = await drive({ onLevel });
+  // every sample is 0x0404: an RMS of 1,028 against 32,768 full scale
+  writePcm(h.source, 5_000);
+  expect(onLevel).toHaveBeenCalledWith(expect.closeTo(-30.07, 2));
+  h.session.cancel();
+});
+
 test("a recorder that fails with its own reason reports that reason", async () => {
   const onError = vi.fn();
   startSession({

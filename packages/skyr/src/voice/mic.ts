@@ -10,10 +10,10 @@ import { PassThrough, type Readable } from "node:stream";
 import { errnoOf } from "../tools/render.js";
 import { micFailed, VoiceError } from "./errors.js";
 
-/** The capture format everything else derives: chunk arithmetic, the speech gate, the PCM string. */
+/** The capture rate: the recorder arguments and the PCM format string derive from it. */
 export const SAMPLE_RATE_HZ = 16_000;
-/** s16le full scale; PCM RMS and the speech gate are fractions of it. */
-export const FULL_SCALE = 32_768;
+/** s16le full scale: 0 dBFS. */
+const FULL_SCALE = 32_768;
 
 const REC_ARGS = [
   "-q",
@@ -107,8 +107,8 @@ export function micSource(): Readable {
   return out;
 }
 
-/** RMS of a 16-bit PCM chunk, 0..1 of full scale. */
-export function pcmRms(buf: Buffer): number {
+/** A 16-bit PCM chunk's RMS level in dBFS; digital silence and an empty chunk are −Infinity. */
+export function pcmDbfs(buf: Buffer): number {
   // readInt16LE rather than an Int16Array view: pooled Buffers can sit at odd offsets
   const n = buf.length >> 1;
   let sum = 0;
@@ -116,10 +116,5 @@ export function pcmRms(buf: Buffer): number {
     const v = buf.readInt16LE(i * 2);
     sum += v * v;
   }
-  return Math.sqrt(sum / (n || 1)) / FULL_SCALE;
-}
-
-/** An RMS that is 0..1 of full scale, in dBFS; silence is −Infinity. */
-export function dbfs(rms: number): number {
-  return 20 * Math.log10(rms);
+  return 20 * Math.log10(Math.sqrt(sum / (n || 1)) / FULL_SCALE);
 }

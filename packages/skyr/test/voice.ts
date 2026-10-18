@@ -31,11 +31,7 @@ import {
   type VoiceEditorOptions,
 } from "../src/voice/editor.js";
 import { registerVoice, type VoiceOptions } from "../src/voice/index.js";
-import {
-  meterUnit,
-  type VoiceKeys,
-  type VoiceSnapshot,
-} from "../src/voice/indicator.js";
+import type { VoiceKeys, VoiceSnapshot } from "../src/voice/indicator.js";
 import type { Paint, VoiceMode, VoiceTheme } from "../src/voice/palette.js";
 import { scratchDir } from "./session.js";
 
@@ -79,9 +75,8 @@ export function keybindings(
   return new KeybindingsManager(user);
 }
 
-const atDb = (db: number) => meterUnit(10 ** (db / 20));
-/** A spoken phrase: syllables between the gate and a −20 dBFS peak, newest first. */
-const PHRASE = [-30, -22, -40, -26, -45, -20, -35, -28].map(atDb);
+/** A spoken phrase in dBFS: syllables between the gate and a −20 dBFS peak, newest first. */
+const PHRASE = [-30, -22, -40, -26, -45, -20, -35, -28];
 
 /** A listening snapshot with speech on the meter, overridden by `s`. */
 export const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({

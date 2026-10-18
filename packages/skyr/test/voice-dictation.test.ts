@@ -26,9 +26,9 @@ const TIMING: DictationTiming = {
   stallMs: 1_500,
 };
 
-/** Chunk RMS values: well above the speech gate, and room noise well below it. */
-const SPEECH = 0.05;
-const QUIET = 0.0005;
+/** Chunk levels in dBFS: well above the speech gate, and room noise well below it. */
+const SPEECH = -26;
+const QUIET = -66;
 
 type SinkEvent =
   | { op: "begin" | "end" | "revert" }
@@ -58,7 +58,7 @@ class FakeSession implements SttSession {
 function harness(
   timing: Partial<DictationTiming> = {},
   o: {
-    onLevel?: (rms: number) => void;
+    onLevel?: (dbfs: number) => void;
     stopNeverResolves?: boolean;
     sinkOverride?: Partial<DictationSink>;
   } = {},
@@ -98,10 +98,10 @@ function harness(
   return { controller, events, states, sessions, opts };
 }
 
-/** The recorder delivering chunks at `rms` for `ms`, one every 500 ms, as an open mic does. */
-async function chunks(h: ReturnType<typeof harness>, ms: number, rms: number) {
+/** The recorder delivering chunks at `dbfs` for `ms`, one every 500 ms, as an open mic does. */
+async function chunks(h: ReturnType<typeof harness>, ms: number, dbfs: number) {
   for (let t = 0; t < ms; t += 500) {
-    h.opts().onLevel?.(rms);
+    h.opts().onLevel?.(dbfs);
     await vi.advanceTimersByTimeAsync(500);
   }
 }
@@ -300,7 +300,7 @@ test("Esc cancels on the spot, puts the buffer back, and late session callbacks 
 test("a mic that delivers only digital silence is reported as blocked in privacy settings", async () => {
   const h = harness();
   h.controller.toggle();
-  for (let i = 0; i < 24; i++) h.opts().onLevel?.(0);
+  for (let i = 0; i < 24; i++) h.opts().onLevel?.(Number.NEGATIVE_INFINITY);
   expect(h.controller.state).toBe("error");
   expect(h.controller.facts().message).toBe(
     "microphone blocked · allow it in System Settings › Privacy",
@@ -406,22 +406,21 @@ test("heardSpeech latches on the first chunk above the speech threshold, and res
   expect(h.controller.facts().heardSpeech).toBe(false);
 });
 
-test("listeners get each chunk's raw RMS", () => {
+test("listeners get each chunk's level as the session measured it", () => {
   const seen: number[] = [];
-  const h = harness({}, { onLevel: (rms) => seen.push(rms) });
+  const h = harness({}, { onLevel: (dbfs) => seen.push(dbfs) });
   h.controller.toggle();
-  h.opts().onLevel?.(0.5);
-  expect(seen).toEqual([0.5]);
+  h.opts().onLevel?.(-6);
+  expect(seen).toEqual([-6]);
 });
 
 test("speech starts at SPEECH_DBFS: a chunk just under it is not heard, one just over it is", () => {
-  const atDb = (db: number) => 10 ** (db / 20);
   const h = harness();
   h.controller.toggle();
   h.opts().onReady?.();
-  h.opts().onLevel?.(atDb(SPEECH_DBFS - 0.1));
+  h.opts().onLevel?.(SPEECH_DBFS - 0.1);
   expect(h.controller.facts().heardSpeech).toBe(false);
-  h.opts().onLevel?.(atDb(SPEECH_DBFS + 0.1));
+  h.opts().onLevel?.(SPEECH_DBFS + 0.1);
   expect(h.controller.facts().heardSpeech).toBe(true);
   h.controller.cancel();
 });

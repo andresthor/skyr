@@ -151,7 +151,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   const controller = new DictationController({
     creds,
     sink,
-    onLevel: (rms) => display.level(rms),
+    onLevel: (dbfs) => display.level(dbfs),
     onChange: () => display.refresh(),
     ...opts.controller,
   });

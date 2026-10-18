@@ -306,7 +306,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     });
     pushPresenter();
     // the token request is the slowest step of arming; a cached one makes ctrl+space feel instant
-    prewarmToken(creds, opts.fetch);
+    prewarmToken(creds, { fetch: opts.fetch });
   });
 
   pi.on("session_shutdown", () => {

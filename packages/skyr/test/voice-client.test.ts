@@ -11,8 +11,10 @@ import {
   type SessionOptions,
   type SttSession,
   startSession,
+  TOKEN_TIMEOUT_MS,
 } from "../src/voice/client.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
+import { DEFAULT_TIMING } from "../src/voice/dictation.js";
 import { VoiceError } from "../src/voice/errors.js";
 import { CREDS } from "./voice.js";
 
@@ -127,17 +129,23 @@ test("getSttToken caches per env\\0tenant\\0clientId, with the 60 s margin", asy
   const b: number[] = [];
   const c = { ...CREDS, clientId: "c-a" };
   const d = { ...CREDS, clientId: "c-b" };
-  expect(await getSttToken(c, tokenFetch(a, "t-a", 3600))).toBe("t-a");
-  expect(await getSttToken(c, tokenFetch(a, "t-a", 3600))).toBe("t-a");
-  expect(await getSttToken(d, tokenFetch(b, "t-b", 3600))).toBe("t-b");
+  expect(await getSttToken(c, { fetch: tokenFetch(a, "t-a", 3600) })).toBe(
+    "t-a",
+  );
+  expect(await getSttToken(c, { fetch: tokenFetch(a, "t-a", 3600) })).toBe(
+    "t-a",
+  );
+  expect(await getSttToken(d, { fetch: tokenFetch(b, "t-b", 3600) })).toBe(
+    "t-b",
+  );
   // same token twice per identity, fresh per identity
   expect(a).toHaveLength(1);
   expect(b).toHaveLength(1);
   // expires_in at the margin leaves nothing to live on: a dying token is refetched
   const e: number[] = [];
   const f = { ...CREDS, clientId: "c-e" };
-  await getSttToken(f, tokenFetch(e, "t-e", 60));
-  await getSttToken(f, tokenFetch(e, "t-e", 60));
+  await getSttToken(f, { fetch: tokenFetch(e, "t-e", 60) });
+  await getSttToken(f, { fetch: tokenFetch(e, "t-e", 60) });
   expect(e).toHaveLength(2);
 });
 
@@ -148,14 +156,14 @@ const answering = (status: number) =>
 test.each([400, 401, 403])(
   "a sign-in refused with %i reads as rejected credentials",
   async (status) => {
-    await expect(getSttToken(creds(), answering(status))).rejects.toThrow(
-      "credentials rejected",
-    );
+    await expect(
+      getSttToken(creds(), { fetch: answering(status) }),
+    ).rejects.toThrow("credentials rejected");
   },
 );
 
 test("a failing sign-in server reads as Corti unavailable, never as rejected credentials", async () => {
-  await expect(getSttToken(creds(), answering(500))).rejects.toThrow(
+  await expect(getSttToken(creds(), { fetch: answering(500) })).rejects.toThrow(
     "Corti auth unavailable (500)",
   );
 });
@@ -164,7 +172,7 @@ test("a sign-in request that never gets an answer reads as can't reach Corti", a
   const offline = (async () => {
     throw new TypeError("fetch failed");
   }) as unknown as typeof fetch;
-  await expect(getSttToken(creds(), offline)).rejects.toThrow(
+  await expect(getSttToken(creds(), { fetch: offline })).rejects.toThrow(
     "can't reach Corti",
   );
 });
@@ -388,10 +396,9 @@ test("a recorder that fails to start, reported to an onError that throws, never 
 test("a sign-in answer without a usable token fails as unreadable, never as a socket with no token", async () => {
   for (const body of ["{}", '{"access_token":7}', "not json"])
     await expect(
-      getSttToken(
-        creds(),
-        (async () => new Response(body)) as unknown as typeof fetch,
-      ),
+      getSttToken(creds(), {
+        fetch: (async () => new Response(body)) as unknown as typeof fetch,
+      }),
     ).rejects.toThrow("Corti sign-in sent an unreadable answer");
 });
 
@@ -529,4 +536,20 @@ test("a recorder that fails with its own reason reports that reason", async () =
   expect(onError).toHaveBeenCalledWith(
     expect.objectContaining({ message: "needs sox · brew install sox" }),
   );
+});
+
+test("a hung sign-in gives up on its own deadline and reads as can't reach Corti", async () => {
+  const hung: typeof fetch = (_url, init) =>
+    new Promise<never>((_resolve, reject) =>
+      init?.signal?.addEventListener("abort", () =>
+        reject(new Error("This operation was aborted")),
+      ),
+    );
+  await expect(
+    getSttToken(creds(), { fetch: hung, timeoutMs: 30 }),
+  ).rejects.toThrow("can't reach Corti");
+});
+
+test("the sign-in deadline is shorter than the arm window, so a dead auth is named first", () => {
+  expect(TOKEN_TIMEOUT_MS).toBeLessThan(DEFAULT_TIMING.armTimeoutMs);
 });

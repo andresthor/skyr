@@ -67,9 +67,19 @@ export interface SttSession {
 
 let cached: { key: string; token: string; exp: number } | undefined;
 
+/** Sign-in deadline: shorter than the controller's 10 s arm window, so a dead auth is
+ * named for what it is before the whole session gives up. */
+export const TOKEN_TIMEOUT_MS = 8_000;
+
+/** Seam for tests: global fetch offline, and a deadline a test can shorten. */
+export interface TokenDeps {
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+}
+
 export async function getSttToken(
   creds: SttCredentials,
-  doFetch: typeof fetch = fetch,
+  { fetch: doFetch = fetch, timeoutMs = TOKEN_TIMEOUT_MS }: TokenDeps = {},
 ): Promise<string> {
   const key = `${creds.environment}\0${creds.tenant}\0${creds.clientId}`;
   if (cached?.key === key && Date.now() < cached.exp) return cached.token;
@@ -85,7 +95,7 @@ export async function getSttToken(
         client_secret: creds.clientSecret,
         scope: "openid transcribe",
       }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     throw new VoiceError("can't reach Corti");
@@ -120,11 +130,8 @@ function transcriptData(
 }
 
 /** Token fetch is the slowest step of arming; do it early when voice is likely. */
-export function prewarmToken(
-  creds: SttCredentials,
-  doFetch?: typeof fetch,
-): void {
-  getSttToken(creds, doFetch).catch(() => {});
+export function prewarmToken(creds: SttCredentials, deps?: TokenDeps): void {
+  getSttToken(creds, deps).catch(() => {});
 }
 
 /** Opens the mic and a Corti session. No callback in `o` runs before this returns. */
@@ -209,7 +216,7 @@ export function startSession(o: SessionOptions): SttSession {
     }),
   );
 
-  getSttToken(o.creds, o.fetch)
+  getSttToken(o.creds, { fetch: o.fetch })
     .then((token) => {
       if (closed) return;
       const q = new URLSearchParams({

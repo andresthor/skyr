@@ -62,7 +62,7 @@ export interface DictationTiming {
   stallMs: number;
 }
 
-const DEFAULT_TIMING: DictationTiming = {
+export const DEFAULT_TIMING: DictationTiming = {
   tailMs: 400,
   flushMs: 900,
   noSpeechMs: 8000,

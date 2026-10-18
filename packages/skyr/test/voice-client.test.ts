@@ -596,6 +596,19 @@ test("a Corti error frame ends the session with an error", async () => {
   expect(h.sock.readyState).toBe(3);
 });
 
+test("an error frame shaped as Corti documents it reports its details", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  h.sock.server({
+    type: "error",
+    error: { requestid: "f00d", details: "invalid audio" },
+  });
+  expect(h.onError).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "Corti error: invalid audio" }),
+  );
+});
+
 test("a failure while a stop drains is not reported: the stop resolves and the finals stand", async () => {
   const h = await drive();
   h.sock.onopen?.();

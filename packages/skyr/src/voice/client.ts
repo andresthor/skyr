@@ -3,6 +3,7 @@
  * `fetch` and `WebSocket` (auth rides in the query string, so no headers are needed).
  * `@corti/sdk` is deliberately not used: its socket reconnects on the server's
  * normal 1006 close after `ended`.
+ * Contract: https://docs.corti.ai/api-reference/transcribe
  */
 import type { Readable } from "node:stream";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
@@ -355,7 +356,13 @@ export function startSession(
             o.onInterim(text);
           }
         } else if (m.type === "error") {
-          const reason = str(m.reason) ?? str(m.error);
+          const e = m.error;
+          // Corti documents the reason as `error.details`
+          const details =
+            typeof e === "object" && e !== null
+              ? str((e as Record<string, unknown>).details)
+              : undefined;
+          const reason = details ?? str(m.reason) ?? str(e);
           fail(
             new VoiceError(
               `Corti error${reason ? `: ${oneLine(reason, REASON_CHARS)}` : ""}`,

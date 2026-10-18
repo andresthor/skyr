@@ -6,6 +6,7 @@
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { SessionOptions, SttSession } from "../src/voice/client.js";
+import type { DictationSink } from "../src/voice/dictation.js";
 import {
   DictationController,
   type DictationTiming,
@@ -55,7 +56,11 @@ class FakeSession implements SttSession {
 
 function harness(
   timing: Partial<DictationTiming> = {},
-  o: { onLevel?: (rms: number) => void; stopNeverResolves?: boolean } = {},
+  o: {
+    onLevel?: (rms: number) => void;
+    stopNeverResolves?: boolean;
+    sinkOverride?: Partial<DictationSink>;
+  } = {},
 ) {
   const events: SinkEvent[] = [];
   const states: string[] = [];
@@ -70,6 +75,7 @@ function harness(
       final: (s) => events.push({ op: "final", arg: s }),
       end: () => events.push({ op: "end" }),
       revert: () => events.push({ op: "revert" }),
+      ...o.sinkOverride,
     },
     onChange: () => states.push(controller.state),
     onLevel: o.onLevel,
@@ -448,4 +454,73 @@ test("the hard cap stops only a listening dictation: one still connecting is lef
   expect(h.controller.state).toBe("arming");
   expect(h.sessions[0]?.stopCalls).toBe(0);
   h.controller.cancel();
+});
+
+test("a sink that throws while a failure is reported still leaves the error line up", () => {
+  const d = harness(
+    {},
+    {
+      sinkOverride: {
+        final: () => {
+          throw new Error();
+        },
+      },
+    },
+  );
+  d.controller.toggle();
+  d.opts().onReady?.();
+  d.opts().onInterim?.("words");
+  d.opts().onError?.(new VoiceError("connection lost"));
+  expect(d.controller.state).toBe("error");
+  expect(d.controller.message).toBe("connection lost · words kept");
+  d.controller.dismiss();
+  d.controller.toggle();
+  expect(d.controller.state).toBe("arming");
+});
+
+test("a sink that throws during the drain still ends the dictation, and nothing escapes", async () => {
+  const d = harness(
+    {},
+    {
+      sinkOverride: {
+        end: () => {
+          throw new Error();
+        },
+      },
+    },
+  );
+  d.controller.toggle();
+  d.opts().onReady?.();
+  d.opts().onFinal?.("finished words");
+  const escaped: unknown[] = [];
+  const record = (e: unknown) => escaped.push(e);
+  process.on("unhandledRejection", record);
+  try {
+    d.controller.finish();
+    await vi.advanceTimersByTimeAsync(TIMING.tailMs);
+  } finally {
+    process.off("unhandledRejection", record);
+  }
+  expect(escaped).toEqual([]);
+  expect(d.controller.state).toBe("idle");
+  d.controller.toggle();
+  expect(d.controller.state).toBe("arming");
+});
+
+test("a begin that throws starts no session and strands nothing", () => {
+  const d = harness(
+    {},
+    {
+      sinkOverride: {
+        begin: () => {
+          throw new Error();
+        },
+      },
+    },
+  );
+  expect(() => d.controller.toggle()).toThrow();
+  expect(d.sessions).toHaveLength(0);
+  expect(d.controller.state).toBe("idle");
+  expect(() => d.controller.toggle()).toThrow();
+  expect(d.sessions).toHaveLength(0);
 });

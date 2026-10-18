@@ -183,8 +183,8 @@ export class DictationController {
     if (!d.heard) {
       d.session.cancel();
       this.end(d);
-      this.o.sink.end();
       this.setState("idle");
+      this.o.sink.end();
       return;
     }
     const tailMs = this.state === "arming" ? 0 : this.timing.tailMs;
@@ -195,11 +195,19 @@ export class DictationController {
       d.session.stop().then(() => {
         if (d !== this.d) return;
         if (!kept(d)) return this.fail(d, new VoiceError("nothing heard"));
-        // a segment whose final never came is still better kept than lost
-        if (d.interim) this.o.sink.final(d.interim);
+        // settled before the sink runs, and a sink throw has nowhere to go
+        // but an unhandled rejection: the promise chain ends here
         this.end(d);
-        this.o.sink.end();
         this.setState("idle");
+        // guarded one by one: idle is up, and this promise chain has no caller left to
+        // report a throw to — escaping here would be an unhandled rejection
+        try {
+          // a segment whose final never came is still better kept than lost
+          if (d.interim) this.o.sink.final(d.interim);
+        } catch {}
+        try {
+          this.o.sink.end();
+        } catch {}
       });
     });
   }
@@ -235,6 +243,8 @@ export class DictationController {
 
   private start(): void {
     this.clearHold();
+    // first, before anything exists that a throw would strand
+    this.o.sink.begin();
     // the session never calls back before it returns, so its callbacks can close over `d`
     const d: Dictation = {
       session: (this.o.start ?? startSession)({
@@ -274,7 +284,6 @@ export class DictationController {
       timers: new Set(),
     };
     this.d = d;
-    this.o.sink.begin();
     this.setState("arming");
     this.later(d, this.timing.armTimeoutMs, () => {
       if (this.state === "arming")
@@ -328,14 +337,22 @@ export class DictationController {
     if (d !== this.d) return;
     d.session.cancel();
     this.end(d);
-    if (d.interim) this.o.sink.final(d.interim);
-    this.o.sink.end();
+    // settled before the sink runs: a broken editor must not strand a live dictation,
+    // and a throw here would exit Pi, because fail is also called from timers
     this.message = kept(d) ? `${err.message} · words kept` : err.message;
     this.setState("error");
     this.hold = setTimeout(() => {
       this.hold = undefined;
       this.setState("idle");
     }, this.timing.errorHoldMs);
+    // guarded one by one: the error line is already up, and a throw here would
+    // exit Pi, because fail is also called from timers
+    try {
+      if (d.interim) this.o.sink.final(d.interim);
+    } catch {}
+    try {
+      this.o.sink.end();
+    } catch {}
   }
 
   /** From here on, no timer of d's fires and no callback of d's has any effect. */

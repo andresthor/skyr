@@ -379,13 +379,10 @@ test("the mic counts as open from its first chunk until the tail ends, whatever 
   const h = harness();
   h.controller.toggle();
   expect(h.controller.facts().micOpen).toBe(false);
-  expect(h.controller.facts().accepted).toBe(false);
   // audio flows before the server accepts: it is buffered, and the mic is open
   h.opts().onLevel?.(QUIET);
   expect(h.controller.facts().micOpen).toBe(true);
-  expect(h.controller.facts().accepted).toBe(false);
   h.opts().onReady?.();
-  expect(h.controller.facts().accepted).toBe(true);
   h.opts().onLevel?.(SPEECH);
   h.controller.finish();
   // Enter moved the state on, but the tail is still recording
@@ -494,6 +491,34 @@ test("a toggle while the last words drain is ignored: it neither restarts nor st
   expect(h.sessions).toHaveLength(1);
   expect(h.sessions[0]?.stopCalls).toBe(1);
   expect(h.sessions[0]?.canceled).toBe(false);
+});
+
+test("Enter after speech while Corti still connects stops the session rather than dropping it, and late acceptance keeps the words", async () => {
+  const h = harness({}, { stopNeverResolves: true });
+  h.controller.toggle();
+  h.opts().onLevel?.(SPEECH);
+  h.controller.finish();
+  expect(h.controller.state).toBe("transcribing");
+  await vi.advanceTimersByTimeAsync(TIMING.tailMs);
+  expect(h.sessions[0]!.stopCalls).toBe(1);
+  expect(h.sessions[0]!.canceled).toBe(false);
+  h.opts().onReady?.();
+  h.opts().onFinal("hello there");
+  await vi.advanceTimersByTimeAsync(TIMING.armTimeoutMs);
+  expect(h.controller.state).toBe("transcribing");
+  expect(h.events).toContainEqual({ op: "final", arg: "hello there" });
+});
+
+test("a stop while Corti still connects fails as Corti not answering if it never accepts", async () => {
+  const h = harness({}, { stopNeverResolves: true });
+  h.controller.toggle();
+  h.opts().onLevel?.(SPEECH);
+  h.controller.finish();
+  await vi.advanceTimersByTimeAsync(TIMING.armTimeoutMs);
+  expect(h.controller.state).toBe("error");
+  expect(h.controller.facts().message).toBe(
+    `Corti didn't answer in ${TIMING.armTimeoutMs / 1000} s`,
+  );
 });
 
 test("the hard cap stops only a listening dictation: one still connecting is left to its own timeout", async () => {

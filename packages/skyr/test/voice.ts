@@ -74,7 +74,6 @@ export const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({
   sinceStartMs: 2_000,
   capLeftMs: 120_000,
   micOpen: true,
-  accepted: true,
   heardSpeech: true,
   noSpeechLeftMs: 6_000,
   bars: PHRASE,

@@ -46,7 +46,7 @@ const plain = (s: Partial<VoiceSnapshot>, o = {}) =>
 const STATES: Partial<VoiceSnapshot>[] = [
   { state: "arming", micOpen: false, sinceStartMs: 300 },
   { state: "arming", micOpen: false, sinceStartMs: 2000 },
-  { state: "arming", accepted: false, heardSpeech: false, sinceStartMs: 2000 },
+  { state: "arming", heardSpeech: false, sinceStartMs: 2000 },
   { state: "listening" },
   {
     state: "listening",
@@ -91,10 +91,10 @@ test("a thinking pause and waiting on the server never look alike", () => {
   expect(pause).not.toBe(finishing);
 });
 
-test("Enter is offered only once speech was heard on an accepted session", () => {
+test("Enter is offered once speech was heard, accepted by Corti or not", () => {
   expect(plain({ heardSpeech: false })).toContain("escape cancel");
   expect(plain({ heardSpeech: false })).not.toContain("keep");
-  expect(plain({ accepted: false })).not.toContain("keep");
+  expect(plain({ state: "arming" })).toContain("enter keep");
   expect(plain({})).toContain("enter keep · escape discard");
   // finishing swallows Enter, so only the discard is offered
   expect(plain({ state: "transcribing", stateMs: 50 })).toMatch(
@@ -176,9 +176,9 @@ test("advisories ride with the word they qualify", () => {
     plain({ bars: SILENCE, heardSpeech: false, noSpeechLeftMs: 3_000 }),
   ).toContain("● listening · no voice yet");
   expect(plain({ capLeftMs: 9_500 })).toContain("● listening · 10s left");
-  expect(
-    plain({ state: "arming", accepted: false, sinceStartMs: 2000 }),
-  ).toContain("● listening · connecting");
+  expect(plain({ state: "arming", sinceStartMs: 2000 })).toContain(
+    "● listening · connecting",
+  );
 });
 
 test("the rule keeps Pi's colour: every rule cell goes through the editor's own border colour", () => {
@@ -214,7 +214,6 @@ test('"no voice yet" appears in the last 4 s before silence fails the dictation,
   expect(
     plain({
       state: "arming",
-      accepted: false,
       bars: SILENCE,
       heardSpeech: false,
       noSpeechLeftMs: undefined,

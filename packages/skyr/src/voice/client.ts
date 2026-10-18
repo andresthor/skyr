@@ -173,9 +173,11 @@ export function prewarmToken(creds: SttCredentials, deps?: TokenDeps): void {
 
 /**
  * Opens the mic and a Corti session. Never throws, and no callback in `o` runs before this
- * returns. Every failure arrives as `onError` and nowhere else; once `stop()` or `cancel()`
- * has been called no failure ever does — `stop()` still lets the remaining finals drain, and
- * its promise resolves even after a failure.
+ * returns. Every failure arrives as `onError` and nowhere else; after `cancel()` none does.
+ * After Corti accepted, `stop()` drains the remaining finals without reporting failures, and
+ * its promise resolves even after one. A `stop()` before acceptance waits for it, reporting a
+ * failure meanwhile, and never resolves if Corti neither accepts nor closes: the caller bounds
+ * that wait.
  */
 export function startSession(o: SessionOptions): SttSession {
   const Socket = o.WebSocket ?? WebSocket;
@@ -205,7 +207,8 @@ export function startSession(o: SessionOptions): SttSession {
     if (closed) return;
     // torn down first, so a listener that throws below still leaves no socket or mic running
     teardown();
-    if (!stopping) o.onError(err);
+    // a stop drains finals Corti already has; before it accepted, there are none to stand on
+    if (!stopping || !accepted) o.onError(err);
   };
   // socket and stream events run outside Pi's handlers, where a throw is an uncaughtException and Pi exits
   const guard =
@@ -219,6 +222,15 @@ export function startSession(o: SessionOptions): SttSession {
         } catch {} // onError itself threw: the session is already torn down, and a throw here would exit Pi
       }
     };
+  /** Sends what the recorder left and `end`, then waits for "ended" no longer than END_TIMEOUT_MS. */
+  const sendEnd = (sock: WebSocket) => {
+    // audio held until a late acceptance can be seconds long: frames stay under Corti's cap
+    for (let at = 0; at < pending.length; at += CHUNK_BYTES)
+      sock.send(pending.subarray(at, at + CHUNK_BYTES));
+    pending = Buffer.alloc(0);
+    sock.send(JSON.stringify({ type: "end" }));
+    setTimeout(teardown, END_TIMEOUT_MS).unref();
+  };
   const pump = () => {
     while (
       accepted &&
@@ -300,7 +312,8 @@ export function startSession(o: SessionOptions): SttSession {
         if (m.type === "CONFIG_ACCEPTED") {
           accepted = true;
           o.onReady?.();
-          pump();
+          if (stopping) sendEnd(sock);
+          else pump();
         } else if (typeof m.type === "string" && m.type.startsWith("CONFIG_")) {
           // after CONFIG_DENIED the server holds the socket open until its 10 s timeout
           fail(settingsRefused(str(m.reason)));
@@ -324,7 +337,7 @@ export function startSession(o: SessionOptions): SttSession {
       });
       // the server drops TCP (1006) right after "ended"; that close is success
       ws.onclose = guard(() =>
-        ended || stopping ? teardown() : fail(connectionLost()),
+        ended || (stopping && accepted) ? teardown() : fail(connectionLost()),
       );
       // every error is followed by close, which reports it
       ws.onerror = () => {};
@@ -340,12 +353,10 @@ export function startSession(o: SessionOptions): SttSession {
       if (stopping || closed) return done;
       stopping = true;
       audio?.destroy();
-      if (accepted && ws?.readyState === Socket.OPEN) {
-        if (pending.length) ws.send(pending);
-        pending = Buffer.alloc(0);
-        ws.send(JSON.stringify({ type: "end" }));
-        setTimeout(teardown, END_TIMEOUT_MS).unref();
-      } else teardown();
+      // before acceptance the audio waits for it, bounded by the controller's arm deadline
+      if (!accepted) return done;
+      if (ws?.readyState === Socket.OPEN) sendEnd(ws);
+      else teardown();
       return done;
     },
     cancel() {

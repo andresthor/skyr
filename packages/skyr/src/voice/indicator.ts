@@ -191,8 +191,8 @@ function voiceView(s: VoiceSnapshot): VoiceView {
       text: `${Math.ceil(Math.max(0, s.capLeftMs) / 1000)}s left`,
       tone: "warning",
     });
-  // Enter keeps only what the server will transcribe: speech, on an accepted session
-  const canKeep = s.heardSpeech && s.accepted;
+  // Enter keeps speech; before Corti accepts, its audio waits for acceptance
+  const canKeep = s.heardSpeech;
   return {
     kind: "live",
     recording: phase === "listening" || phase === "tail",

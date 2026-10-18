@@ -358,6 +358,40 @@ test("a stop sends the last partial chunk before `end`, so the final word reache
   await expect(stop).resolves.toBeUndefined();
 });
 
+test("a stop before Corti accepts holds the audio, then sends it and `end` once Corti does", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  writePcm(h.source, 5_000);
+  const stop = h.session.stop();
+  expect(h.sock.audio()).toEqual([]);
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  expect(h.sock.audio().at(-1)?.length).toBe(5_000);
+  expect(h.sock.control().at(-1)).toEqual({ type: "end" });
+  h.sock.server({ type: "ended" });
+  h.sock.onclose?.();
+  await expect(stop).resolves.toBeUndefined();
+});
+
+test("audio held through a long wait for acceptance still leaves in frames under Corti's cap", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  writePcm(h.source, 70_000); // over two seconds, past Corti's 64,000 B frame cap
+  void h.session.stop();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  const frames = h.sock.audio();
+  expect(frames.every((f) => f.length <= 8_000)).toBe(true);
+  expect(frames.reduce((n, f) => n + f.length, 0)).toBe(70_000);
+  h.session.cancel();
+});
+
+test("a stop before Corti accepts still reports the session failing, since nothing reached Corti", async () => {
+  const h = await drive();
+  h.sock.onopen?.();
+  void h.session.stop();
+  h.sock.onclose?.();
+  expect(h.onError).toHaveBeenCalledTimes(1);
+});
+
 test("a premature close is a network failure", async () => {
   const h = await drive();
   h.sock.onopen?.();

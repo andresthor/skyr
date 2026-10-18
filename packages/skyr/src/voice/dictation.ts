@@ -151,8 +151,6 @@ export interface DictationFacts {
   capLeftMs: number;
   /** The recorder is delivering audio: from its first chunk until the stop that ends the tail. */
   micOpen: boolean;
-  /** The server took the session; before that, audio is only buffered. */
-  accepted: boolean;
   /** This dictation has heard someone: a chunk above SPEECH_DBFS, or any text from Corti. */
   heardSpeech: boolean;
   /** ms before silence fails this dictation; undefined until the server accepts, which starts the window. */
@@ -200,7 +198,6 @@ export class DictationController {
       sinceStartMs,
       capLeftMs: this.timing.maxMs - sinceStartMs,
       micOpen: this.d?.mic === "open",
-      accepted: this.d?.acceptedAt !== undefined,
       heardSpeech: this.d?.heard ?? false,
       noSpeechLeftMs:
         this.d?.acceptedAt === undefined
@@ -237,10 +234,9 @@ export class DictationController {
       } catch {}
       return;
     }
-    const tailMs = this.curState === "arming" ? 0 : this.timing.tailMs;
     if (d.flush) this.cancelTimer(d, d.flush);
     this.setState("transcribing");
-    this.later(d, tailMs, () => {
+    this.later(d, this.timing.tailMs, () => {
       d.mic = "closed";
       d.session.stop().then(() => {
         if (d !== this.d) return;
@@ -309,8 +305,10 @@ export class DictationController {
         source: this.o.source ?? micSource,
         ...this.config,
         onReady: () => {
-          if (d !== this.d || this.curState !== "arming") return;
+          if (d !== this.d) return;
           d.acceptedAt = Date.now();
+          // after an early stop the session drains instead; acceptance only lets its audio go
+          if (this.curState !== "arming") return;
           this.setState("listening");
           // from acceptance, not start: silence while Corti connects is Corti's delay, not the user's
           this.later(d, this.timing.noSpeechMs, () => {
@@ -348,7 +346,7 @@ export class DictationController {
     this.d = d;
     this.setState("arming");
     this.later(d, this.timing.armTimeoutMs, () => {
-      if (this.curState === "arming")
+      if (d.acceptedAt === undefined)
         this.fail(d, noAnswer(this.timing.armTimeoutMs));
     });
     this.later(d, this.timing.maxMs, () => {

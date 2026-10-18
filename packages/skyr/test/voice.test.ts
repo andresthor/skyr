@@ -12,6 +12,7 @@ import type { SessionOptions } from "../src/voice/client.js";
 import { VoiceError } from "../src/voice/errors.js";
 import { stripAnsi } from "../src/voice/ghost.js";
 import { startRefusal, VOICE_SHORTCUT, voiceMode } from "../src/voice/index.js";
+import { VOICE_STATUS_KEY } from "../src/voice/presenter.js";
 import { parentSession } from "./session.js";
 import {
   agentDirWith,
@@ -124,7 +125,7 @@ test("a tui session_start installs the voice editor and starts the status cleare
   await pi.handlers.get("session_start")!(null, ctx);
   expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(1);
   // the status row starts cleared, not drawn over anything permanent
-  expect(ctx.ui.setStatus).toHaveBeenCalledWith("voice", undefined);
+  expect(ctx.ui.setStatus).toHaveBeenCalledWith(VOICE_STATUS_KEY, undefined);
   expect(pi.shortcuts.get(VOICE_SHORTCUT)!.description).toContain("dictation");
 });
 
@@ -386,7 +387,10 @@ test("session_shutdown, even twice, cancels the dictation once, clears the foote
   await shutdown(null, h.ctx);
   await shutdown(null, h.ctx);
   expect(h.ends[0]).toEqual({ stopped: 0, cancelled: 1 });
-  expect(h.ctx.ui.setStatus.mock.calls.at(-1)).toEqual(["voice", undefined]);
+  expect(h.ctx.ui.setStatus.mock.calls.at(-1)).toEqual([
+    VOICE_STATUS_KEY,
+    undefined,
+  ]);
   expect(vi.getTimerCount()).toBe(0);
 });
 

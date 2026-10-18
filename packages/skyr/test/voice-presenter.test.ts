@@ -7,7 +7,7 @@ import { parseColor, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { stripAnsi } from "../src/voice/ghost.js";
 import type { VoiceSnapshot } from "../src/voice/indicator.js";
-import { renderStatus } from "../src/voice/indicator.js";
+import { ERROR_COLS, renderStatus } from "../src/voice/indicator.js";
 import {
   FALLBACK_PALETTE,
   paintFor,
@@ -133,14 +133,14 @@ test("the error row names the cause, truncated by whole columns", () => {
       message: "microphone blocked · allow it in System Settings › Privacy",
     }),
   )!;
-  // the footer's 52 message columns cut the fix before the terminal does; the cause stays whole
+  // the footer caps the message at its own width before the terminal does; the cause stays whole
   expect(stripAnsi(row)).toMatch(/^voice ✗ microphone blocked · allow it in /);
   const short = renderStatus(
     snap({ state: "error", message: "microphone blocked" }),
   )!;
   expect(stripAnsi(short)).toBe("voice ✗ microphone blocked");
   const long = renderStatus(snap({ state: "error", message: "x".repeat(90) }))!;
-  expect(visibleWidth(long)).toBeLessThanOrEqual(60);
+  expect(visibleWidth(long)).toBe(ERROR_COLS);
 });
 
 test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {

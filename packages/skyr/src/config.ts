@@ -11,7 +11,7 @@ import { clip, errnoOf } from "./tools/render.js";
 /** One key per module that reads the file; a section is added with the code that reads it. */
 const SECTIONS = ["voice"] as const;
 
-export type ConfigFile = Partial<Record<(typeof SECTIONS)[number], unknown>>;
+type ConfigFile = Partial<Record<(typeof SECTIONS)[number], unknown>>;
 
 export interface SkyrFile {
   data: ConfigFile;

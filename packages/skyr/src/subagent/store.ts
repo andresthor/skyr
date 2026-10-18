@@ -33,7 +33,7 @@ export interface RunSnapshot {
   spillFile?: string;
 }
 
-export type RunEvent =
+type RunEvent =
   | { type: "start"; snapshot: RunSnapshot }
   | { type: "end" }
   | ChildEvent;

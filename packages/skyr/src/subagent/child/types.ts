@@ -10,7 +10,8 @@ type AssistantMessage = Extract<
 export type Usage = AssistantMessage["usage"];
 
 export type { AssistantMessage };
-export type ThinkingLevel = AgentSession["thinkingLevel"];
+
+type ThinkingLevel = AgentSession["thinkingLevel"];
 
 /** Everything a child needs, as plain data, so a subprocess runner can take the same spec. */
 export interface ChildSpec {

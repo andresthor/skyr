@@ -69,7 +69,9 @@ export function createLevelHistory(): LevelHistory {
 }
 
 /** The widest row an error message may build in the footer; pi truncates further to the terminal's width. */
+/** The footer's whole error row: the `voice ✗` prefix plus the message. */
 export const ERROR_COLS = 60;
+const ERROR_PREFIX_COLS = 8;
 
 /** Warn this long before the hard cap, so the cap is first advisory, then fact. */
 const CAP_WARN_MS = 15_000;
@@ -91,7 +93,12 @@ export function renderStatus(
   const label = fg(T.muted, "voice");
   const view = voiceView(s);
   if (view.kind === "error") {
-    const text = sliceByColumn(view.message, 0, ERROR_COLS - 8, true);
+    const text = sliceByColumn(
+      view.message,
+      0,
+      ERROR_COLS - ERROR_PREFIX_COLS,
+      true,
+    );
     return `${label} ${fg(T.error, ascii ? "x" : "✗")}${fg(T.muted, ` ${text}`)}`;
   }
   if (view.kind === "off") return undefined;

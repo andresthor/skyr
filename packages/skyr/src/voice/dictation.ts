@@ -222,7 +222,11 @@ export class DictationController {
       d.session.cancel();
       this.end(d);
       this.setState("idle");
-      this.o.sink.end();
+      // guarded like the drain: this runs from the key hook, whose caller crashes Pi
+      // on a throw rather than reporting it — idle is up, nothing is stranded
+      try {
+        this.o.sink.end();
+      } catch {}
       return;
     }
     const tailMs = this.curState === "arming" ? 0 : this.timing.tailMs;
@@ -256,9 +260,15 @@ export class DictationController {
     if (!d) return;
     d.session.cancel();
     this.end(d);
-    this.o.sink.end();
-    // true means committed words went; their undo offer is the notice for that
-    if (this.o.sink.revert()) this.held("discarded", this.timing.discardHoldMs);
+    // guarded: this runs from the key hook, whose caller crashes Pi on a throw rather
+    // than reporting it — the dictation is ended, so no sink throw can strand anything
+    let reverted = false;
+    try {
+      this.o.sink.end();
+      // true means committed words went; their undo offer is the notice for that
+      reverted = this.o.sink.revert();
+    } catch {}
+    if (reverted) this.held("discarded", this.timing.discardHoldMs);
     else this.setState("idle");
   }
 

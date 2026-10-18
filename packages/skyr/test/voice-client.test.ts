@@ -106,6 +106,7 @@ async function drive(o: Partial<SessionOptions> = {}): Promise<Drive> {
   const interim = vi.fn();
   const session = startSession({
     creds: creds(),
+    language: "en",
     source: () => source,
     onInterim: interim,
     onFinal: final,
@@ -205,6 +206,7 @@ test("a plain recorder failure reads as microphone unavailable", async () => {
   const onError = vi.fn();
   startSession({
     creds: creds(),
+    language: "en",
     source: () => {
       throw new Error("spawn went wrong");
     },
@@ -245,8 +247,8 @@ test("CONFIG_ACCEPTED opens the pump at the 8,000 B chunk boundary, with the con
   expect(config.audioFormat).toContain("rate=16000");
 });
 
-test("the default punctuation union is automatic, no spoken key, and no keyterms section when empty", async () => {
-  const h = await drive({ language: undefined, interims: undefined });
+test("fields left out take Corti's defaults, and the language always comes from the caller", async () => {
+  const h = await drive({ interims: undefined });
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_ACCEPTED" });
   const config = h.sock.control()[0]!.configuration as Record<string, unknown>;
@@ -423,6 +425,7 @@ test("a recorder that fails to start, reported to an onError that throws, never 
   onTestFinished(() => void process.off("uncaughtException", record));
   const session = startSession({
     creds: creds(),
+    language: "en",
     source: () => {
       throw new Error("spawn failed");
     },
@@ -568,6 +571,7 @@ test("a recorder that fails with its own reason reports that reason", async () =
   const onError = vi.fn();
   startSession({
     creds: creds(),
+    language: "en",
     source: () => {
       throw soxMissing();
     },

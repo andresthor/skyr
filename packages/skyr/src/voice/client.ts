@@ -55,8 +55,11 @@ export interface SttConfig {
   replacements: readonly Replacement[];
 }
 
-/** A field left out takes Corti's default: "en", interims on, automatic punctuation, no vocabulary. */
-export interface SessionOptions extends Partial<SttConfig> {
+/** Fields left out take Corti's defaults: interims on, automatic punctuation, no vocabulary.
+ * `language` is not one of them — the controller always carries one, from voice/config.ts's
+ * defaults, so this interface never spells "en" a second time. */
+export interface SessionOptions extends Partial<Omit<SttConfig, "language">> {
+  language: string;
   creds: SttCredentials;
   source: () => Readable;
   /** Server accepted the config; audio is flowing. */
@@ -254,7 +257,7 @@ export function startSession(o: SessionOptions): SttSession {
           JSON.stringify({
             type: "config",
             configuration: {
-              primaryLanguage: o.language ?? "en",
+              primaryLanguage: o.language,
               interimResults: o.interims !== false,
               // spokenPunctuation silently wins if both are set, so encode exactly one
               ...(o.punctuation === "spoken"

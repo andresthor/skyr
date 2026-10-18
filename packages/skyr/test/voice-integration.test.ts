@@ -104,7 +104,9 @@ test("with credentials, a headless session_start reads the config but mounts no 
   await pi.handlers.get("session_start")!(null, ctx);
   // the malformed key is told about once, with the key named
   expect(ui.notify).toHaveBeenCalledTimes(1);
-  expect(ui.notify.mock.calls[0]?.[0]).toMatch(/unknown key "frobnicate"/);
+  expect(ui.notify.mock.calls[0]?.[0]).toBe(
+    "skyr.json: voice.frobnicate is not a setting; ignored (settings: language, interims, punctuation, keyterms, replacements)",
+  );
   expect(ui.notify.mock.calls[0]?.[1]).toBe("warning");
   // headless ⇒ no editor takeover, no status row
   expect(ui.setEditorComponent).not.toHaveBeenCalled();
@@ -199,7 +201,7 @@ test("skyr.json problems are told once in the TUI too, and voice still mounts", 
   await pi.handlers.get("session_start")!(null, ctx);
   expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
   expect(ctx.ui.notify).toHaveBeenCalledWith(
-    expect.stringContaining("language"),
+    'skyr.json: voice.language must be a locale like "en" or "en-US"; using "en"',
     "warning",
   );
   expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(1);

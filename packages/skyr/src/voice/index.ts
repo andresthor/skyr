@@ -265,8 +265,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     const { config, problems } = await readVoiceConfig();
     controller.config = { ...config, ...mergeVocabulary(config) };
     // once per session; a malformed section degrades to defaults, never breaks the start
-    if (problems.length)
-      ctx.ui.notify(`skyr: ${problems.join(" · ")}`, "warning");
+    if (problems.length) ctx.ui.notify(problems.join("\n"), "warning");
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     await mount(ctx);
     presenter = voicePresenter({

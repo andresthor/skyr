@@ -8,9 +8,8 @@
  * replacements differing only in case are CONFIG_DENIED — this validator owns that rule.
  */
 
+import { clip } from "../tools/render.js";
 import type { Replacement, SttConfig } from "./client.js";
-
-/** Built-in coding vocabulary appended under every user list, unchanged from the vendored copy. */
 
 /** Case-sensitive written forms; Corti caps each at 50 chars / 5 words. */
 export const CODING_KEYTERMS: readonly string[] = [
@@ -79,39 +78,40 @@ const REPLACEMENT_WORDS = 10;
 const MAX_TERMS = 1_000;
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
 
-/** Echoes a failed value into a problem string without flooding one. */
-const quoted = (s: string) =>
-  JSON.stringify(s.length > 30 ? `${s.slice(0, 29)}…` : s);
+/** Echoes a failed string into a problem string without flooding one: clipped, and quoted so
+ * anything the terminal would read as control text shows as its escape instead. */
+const quoted = (s: string) => JSON.stringify(clip(s, 40));
 
-type Problem = (msg: string) => void;
+/** One reported problem: the `skyr.json:` prefix and the path stay in the caller. */
+type Problem = (path: string, msg: string) => void;
 
 function parseKeyterms(raw: unknown, problem: Problem): string[] {
   const out: string[] = [];
   if (!Array.isArray(raw)) {
-    problem('"keyterms" must be an array, built-ins only sent');
+    problem("keyterms", "must be an array; sending the built-in terms only");
     return out;
   }
-  for (const item of raw) {
+  for (const [i, item] of raw.entries()) {
     if (typeof item !== "string") {
-      problem(
-        `keyterm ${JSON.stringify(item ?? null)} is not a string, dropped`,
-      );
+      problem(`keyterms[${i}]`, "is not a string; dropped");
       continue;
     }
     const term = item.trim();
     if (!term) {
-      problem("empty keyterm dropped");
+      problem(`keyterms[${i}]`, "is empty; dropped");
       continue;
     }
     if (term.length > KEYTERM_CHARS) {
       problem(
-        `keyterm ${quoted(term)} exceeds ${KEYTERM_CHARS} characters, dropped`,
+        `keyterms[${i}]`,
+        `${quoted(term)} is over ${KEYTERM_CHARS} characters; dropped`,
       );
       continue;
     }
     if (words(term) > KEYTERM_WORDS) {
       problem(
-        `keyterm ${quoted(term)} exceeds ${KEYTERM_WORDS} words, dropped`,
+        `keyterms[${i}]`,
+        `${quoted(term)} is over ${KEYTERM_WORDS} words; dropped`,
       );
       continue;
     }
@@ -120,9 +120,7 @@ function parseKeyterms(raw: unknown, problem: Problem): string[] {
   const room = MAX_TERMS - CODING_KEYTERMS.length;
   if (out.length > room) {
     out.length = room;
-    problem(
-      `more than ${room} keyterms (${MAX_TERMS} including the built-ins), extras dropped`,
-    );
+    problem("keyterms", `has over ${room} entries; the rest dropped`);
   }
   return out;
 }
@@ -130,30 +128,39 @@ function parseKeyterms(raw: unknown, problem: Problem): string[] {
 function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
   const out: Replacement[] = [];
   if (!Array.isArray(raw)) {
-    problem('"replacements" must be an array, built-ins only sent');
+    problem(
+      "replacements",
+      "must be an array; sending the built-in rules only",
+    );
     return out;
   }
   const seen = new Set<string>();
-  for (const item of raw) {
-    const entry = item as { find?: unknown; replace?: unknown } | undefined;
+  for (const [i, item] of raw.entries()) {
+    const entry =
+      typeof item === "object" && item !== null
+        ? (item as { find?: unknown; replace?: unknown })
+        : undefined;
     const find = typeof entry?.find === "string" ? entry.find.trim() : "";
     const replace =
       typeof entry?.replace === "string" ? entry.replace.trim() : "";
     if (!find || !replace) {
       problem(
-        `replacement ${JSON.stringify(item ?? null)} must have non-empty "find" and "replace", dropped`,
+        `replacements[${i}]`,
+        'needs a non-empty "find" and "replace"; dropped',
       );
       continue;
     }
     if (find.length > REPLACEMENT_CHARS || replace.length > REPLACEMENT_CHARS) {
       problem(
-        `replacement ${quoted(find)} exceeds ${REPLACEMENT_CHARS} characters, dropped`,
+        `replacements[${i}]`,
+        `${quoted(find)} is over ${REPLACEMENT_CHARS} characters; dropped`,
       );
       continue;
     }
     if (words(find) > REPLACEMENT_WORDS || words(replace) > REPLACEMENT_WORDS) {
       problem(
-        `replacement ${quoted(find)} exceeds ${REPLACEMENT_WORDS} words, dropped`,
+        `replacements[${i}]`,
+        `${quoted(find)} is over ${REPLACEMENT_WORDS} words; dropped`,
       );
       continue;
     }
@@ -161,7 +168,8 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
     const key = find.toLowerCase();
     if (seen.has(key)) {
       problem(
-        `replacement ${quoted(find)} duplicates an existing one (case-insensitive), dropped`,
+        `replacements[${i}]`,
+        `repeats the find ${quoted(find)} (ignoring case); dropped`,
       );
       continue;
     }
@@ -171,9 +179,7 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
   const room = MAX_TERMS - CODING_REPLACEMENTS.length;
   if (out.length > room) {
     out.length = room;
-    problem(
-      `more than ${room} replacements (${MAX_TERMS} including the built-ins), extras dropped`,
-    );
+    problem("replacements", `has over ${room} entries; the rest dropped`);
   }
   return out;
 }
@@ -185,16 +191,21 @@ export function parseVoiceSection(raw: unknown): {
 } {
   const config: VoiceConfig = { ...VOICE_DEFAULTS };
   const problems: string[] = [];
-  const problem = (msg: string) => problems.push(`skyr.json voice: ${msg}`);
+  // the source is part of every problem; the path names where, the text says what and the consequence
+  const problem = (path: string, msg: string) =>
+    problems.push(`skyr.json: voice.${path} ${msg}`);
   if (raw === undefined) return { config, problems };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    problem("expected an object, section defaults used");
+    problems.push("skyr.json: voice must be an object; using defaults");
     return { config, problems };
   }
   const section = raw as Record<string, unknown>;
   for (const key of Object.keys(section))
     if (!(key in VOICE_DEFAULTS))
-      problem(`unknown key ${quoted(key)}, ignored`);
+      problem(
+        key,
+        `is not a setting; ignored (settings: ${Object.keys(VOICE_DEFAULTS).join(", ")})`,
+      );
 
   const { language, interims, punctuation, keyterms, replacements } = section;
   if (language !== undefined) {
@@ -202,19 +213,25 @@ export function parseVoiceSection(raw: unknown): {
       config.language = language;
     else
       problem(
-        '"language" must be a Corti locale (2–3 letters, optional -<2–8>), default "en" used',
+        "language",
+        `must be a locale like "en" or "en-US"; using ${JSON.stringify(VOICE_DEFAULTS.language)}`,
       );
   }
   if (interims !== undefined) {
     if (typeof interims === "boolean") config.interims = interims;
-    else problem('"interims" must be true or false, default true used');
+    else
+      problem(
+        "interims",
+        `must be true or false; using ${VOICE_DEFAULTS.interims}`,
+      );
   }
   if (punctuation !== undefined) {
     if (punctuation === "automatic" || punctuation === "spoken")
       config.punctuation = punctuation;
     else
       problem(
-        '"punctuation" must be "automatic" or "spoken", default "automatic" used',
+        "punctuation",
+        `must be "automatic" or "spoken"; using ${JSON.stringify(VOICE_DEFAULTS.punctuation)}`,
       );
   }
   if (keyterms !== undefined)

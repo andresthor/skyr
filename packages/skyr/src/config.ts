@@ -6,6 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { clip, errnoOf } from "./tools/render.js";
 
 /** One key per module that reads the file; a section is added with the code that reads it. */
 const SECTIONS = ["voice"] as const;
@@ -27,27 +28,39 @@ export function readSkyrFile(agentDir: string): SkyrFile {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
-  } catch (e) {
-    if ((e as { code?: string }).code === "ENOENT")
-      return { data: {}, problems: [] };
-    return { data: {}, problems: [`skyr.json: ${(e as Error).message}`] };
+  } catch (error) {
+    if (errnoOf(error) === "ENOENT") return { data: {}, problems: [] };
+    // the errno only: the message would repeat the agent-dir path the user knows
+    return {
+      data: {},
+      problems: [`skyr.json: can't read (${errnoOf(error)}); using defaults`],
+    };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
-  } catch (e) {
-    return { data: {}, problems: [`skyr.json: ${(e as Error).message}`] };
+  } catch (error) {
+    const detail =
+      error instanceof Error ? clip(error.message, 80) : "unparsable";
+    return {
+      data: {},
+      problems: [`skyr.json: not valid JSON (${detail}); using defaults`],
+    };
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
     return {
       data: {},
-      problems: ["skyr.json: expected an object with one key per module"],
+      problems: [
+        "skyr.json: must be an object with one key per module; using defaults",
+      ],
     };
   const data: ConfigFile = {};
   const problems: string[] = [];
   for (const [key, value] of Object.entries(parsed)) {
     if (!(SECTIONS as readonly string[]).includes(key)) {
-      problems.push(`skyr.json: unknown section "${key}", ignored`);
+      problems.push(
+        `skyr.json: ${JSON.stringify(clip(key, 40))} is not a section; ignored (sections: ${SECTIONS.join(", ")})`,
+      );
       continue;
     }
     data[key as keyof ConfigFile] = value;

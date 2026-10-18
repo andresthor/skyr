@@ -1,6 +1,5 @@
 // Pi behaviour the voice design rests on. A failure here after a Pi upgrade means the design
 // changes, not the test.
-import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
   renderFakeCursor,
@@ -8,20 +7,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
-import { createVoiceEditorClass } from "../src/voice/editor.js";
-import { keybindings, snap } from "./voice.js";
-
-/** A real Pi editor, focused, with voice's subclass on top. */
-function realEditor() {
-  const VoiceEditor = createVoiceEditorClass(CustomEditor);
-  const ed = new VoiceEditor(
-    { terminal: { rows: 40 }, requestRender: () => {} } as never,
-    { borderColor: (s: string) => s, selectList: {} } as never,
-    keybindings(),
-  );
-  ed.focused = true;
-  return ed;
-}
+import { keybindings, realEditor, snap } from "./voice.js";
 
 test("a focused editor ends the cursor's line with pi-tui's cursor marker and a fake-cursor space, which the ghost anchors on", () => {
   const ed = realEditor();

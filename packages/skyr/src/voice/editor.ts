@@ -39,7 +39,8 @@ function spacedSegment(before: string, after: string, segment: string): string {
 export interface VoiceEditorLike {
   /** Whether the editor has keyboard focus; false while a `ctx.ui.custom()` card replaces it. */
   readonly focused: boolean;
-  getText(): string;
+  /** The text with paste markers expanded: what Enter would send. */
+  getExpandedText(): string;
   setText(text: string): void;
   /** The interim segment, drawn after the cursor; "" clears it. */
   ghost(text: string): void;
@@ -242,7 +243,8 @@ export function editorSink(
     // a dictation can only start while our editor is focused, so nothing is held pending now
     begin() {
       const ed = target();
-      snapshot = ed ? ed.getText() : fallback.get();
+      // expanded, because setText drops the paste store a marker points into
+      snapshot = ed ? ed.getExpandedText() : fallback.get();
       committed = snapshot;
       ed?.reset();
       repaint();
@@ -272,7 +274,7 @@ export function editorSink(
       const ed = target();
       if (ed) {
         ed.reset();
-        const changed = ed.getText() !== snapshot;
+        const changed = ed.getExpandedText() !== snapshot;
         if (changed) ed.setText(snapshot);
         repaint();
         return changed;

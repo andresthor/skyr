@@ -5,7 +5,10 @@
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  CustomEditor,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import {
   type Color,
   CURSOR_MARKER,
@@ -17,7 +20,7 @@ import { type Mock, onTestFinished, vi } from "vitest";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { registerSkyr } from "../src/index.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
-import type { createVoiceEditorClass } from "../src/voice/editor.js";
+import { createVoiceEditorClass } from "../src/voice/editor.js";
 import { registerVoice, type VoiceOptions } from "../src/voice/index.js";
 import {
   meterUnit,
@@ -25,6 +28,18 @@ import {
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
 import { scratchDir } from "./session.js";
+
+/** A real Pi editor, focused, with voice's subclass on top. */
+export function realEditor() {
+  const VoiceEditor = createVoiceEditorClass(CustomEditor);
+  const ed = new VoiceEditor(
+    { terminal: { rows: 40 }, requestRender: () => {} } as never,
+    { borderColor: (s: string) => s, selectList: {} } as never,
+    keybindings(),
+  );
+  ed.focused = true;
+  return ed;
+}
 
 /** The cursor cell a focused Pi editor draws at the end of a line. */
 export const CURSOR_CELL = CURSOR_MARKER + renderFakeCursor(" ");

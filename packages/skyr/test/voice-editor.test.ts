@@ -19,7 +19,13 @@ import {
 } from "../src/voice/editor.js";
 import { DRY_MS } from "../src/voice/ghost.js";
 import { FALLBACK_PALETTE, paintFor } from "../src/voice/palette.js";
-import { CURSOR_CELL, editorRows, keybindings, snap } from "./voice.js";
+import {
+  CURSOR_CELL,
+  editorRows,
+  keybindings,
+  realEditor,
+  snap,
+} from "./voice.js";
 
 /** A minimal stand-in for pi-tui's Editor: [top rule, ...text rows, bottom rule], with the fake cursor at end of the cursor line. */
 class FakeEditor {
@@ -69,6 +75,10 @@ class FakeEditor {
   }
 
   getText(): string {
+    return this.text;
+  }
+
+  getExpandedText(): string {
     return this.text;
   }
 
@@ -397,6 +407,22 @@ describe("editorSink", () => {
     expect(sink.revert()).toBe(true);
     expect(editor.text).toBe("previous words typed");
     expect(editor.animating).toBe(false);
+  });
+
+  test("Esc keeps a pasted block: Enter then sends what it would have sent before dictating", () => {
+    const ed = realEditor();
+    const pasted = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
+    ed.handleInput(`\x1b[200~${pasted}\x1b[201~`);
+    expect(ed.getText()).toContain("[paste #1 +40 lines]");
+    const sink = editorSink(
+      () => ed,
+      { get: () => "", set: () => {} },
+      () => {},
+    );
+    sink.begin();
+    sink.final("and more");
+    expect(sink.revert()).toBe(true);
+    expect(ed.getExpandedText()).toBe(pasted);
   });
 
   test("an editor's finals held while hidden die with the revert: refocus commits nothing", () => {

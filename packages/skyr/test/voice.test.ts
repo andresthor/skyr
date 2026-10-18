@@ -115,7 +115,20 @@ test("with credentials, a headless session_start reads the config but mounts no 
   expect([...pi.shortcuts.keys()]).toEqual([VOICE_SHORTCUT]);
 });
 
-test("a tui session_start mounts no widget, starts the status cleared, and dictation picks the config up", async () => {
+test("a tui session_start installs the voice editor and starts the status cleared", async () => {
+  withCreds();
+  agentDirWith();
+  const { start } = recording();
+  const pi = registeredVoice({ mode: "ascii", controller: { start } });
+  const ctx = voiceCtx();
+  await pi.handlers.get("session_start")!(null, ctx);
+  expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(1);
+  // the status row starts cleared, not drawn over anything permanent
+  expect(ctx.ui.setStatus).toHaveBeenCalledWith("voice", undefined);
+  expect(pi.shortcuts.get(VOICE_SHORTCUT)!.description).toContain("dictation");
+});
+
+test("a dictation sends the skyr.json voice settings plus the built-in vocabulary", async () => {
   const creds = withCreds();
   agentDirWith(
     '{"voice": {"language": "da", "punctuation": "spoken", "keyterms": ["Skýr"], "replacements": [{"find": "teh", "replace": "the"}]}}',
@@ -124,10 +137,6 @@ test("a tui session_start mounts no widget, starts the status cleared, and dicta
   const pi = registeredVoice({ mode: "ascii", controller: { start } });
   const ctx = voiceCtx();
   await pi.handlers.get("session_start")!(null, ctx);
-  expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(1);
-  // the status row starts cleared, not drawn over anything permanent
-  expect(ctx.ui.setStatus).toHaveBeenCalledWith("voice", undefined);
-  expect(pi.shortcuts.get(VOICE_SHORTCUT)!.description).toContain("dictation");
   // the shortcut toggles a dictation that resolves the skyr.json config
   await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
   expect(starts).toHaveLength(1);
@@ -139,7 +148,6 @@ test("a tui session_start mounts no widget, starts the status cleared, and dicta
   expect(sent.keyterms).toContain("TypeScript");
   expect(sent.replacements).toContainEqual({ find: "teh", replace: "the" });
   expect(sent.creds).toEqual(creds);
-  expect(sent.creds.clientSecret).toBe(CREDS.clientSecret);
 });
 
 test("the voice editor keeps Pi's working status in its top rule, as Pi's own editor does", async () => {
@@ -151,7 +159,7 @@ test("the voice editor keeps Pi's working status in its top rule, as Pi's own ed
   expect(mountedEditor(ctx.ui).embedWorkingStatus).toBe(true);
 });
 
-test("the refused start names the fix, only when a focused editor could have dictated", () => {
+test("ctrl+space while a card has the keyboard refuses to start, and only then", () => {
   expect(startRefusal(true, { focused: false })).toBeUndefined();
   expect(startRefusal(false, undefined)).toBeUndefined();
   expect(startRefusal(false, { focused: true })).toBeUndefined();
@@ -229,15 +237,18 @@ test("a mid-session theme switch reaches the status row and the editor's ghost/f
   expect(ghostRow).toContain("\x1b[38;2;200;190;180mtheme words");
 });
 
-test("TERM=dumb is ascii; NO_COLOR is mono, keeping glyphs; FORCE_COLOR wins over NO_COLOR", () => {
-  expect(voiceMode({ TERM: "dumb", NO_COLOR: "1" })).toBe("ascii");
-  expect(voiceMode({ TERM: "xterm-256color", NO_COLOR: "1" })).toBe("mono");
-  expect(voiceMode({ NO_COLOR: "1", FORCE_COLOR: "1" })).toBe("color");
-  expect(voiceMode({ NO_COLOR: "" })).toBe("color");
-  expect(voiceMode({})).toBe("color");
+test.each([
+  [{ TERM: "dumb" }, "ascii"],
+  [{ TERM: "dumb", NO_COLOR: "1" }, "ascii"],
+  [{ TERM: "xterm-256color", NO_COLOR: "1" }, "mono"],
+  [{ NO_COLOR: "1", FORCE_COLOR: "1" }, "color"],
+  [{ NO_COLOR: "" }, "color"],
+  [{}, "color"],
+] as const)("a terminal saying %j leaves voice drawing in %s", (env, mode) => {
+  expect(voiceMode(env)).toBe(mode);
 });
 
-test("during dictation the rule rides our focused editor, and discarding committed words offers the undo", async () => {
+test("during dictation the rule carries voice and the footer stays clear", async () => {
   withCreds();
   agentDirWith();
   const { starts, start } = recording();
@@ -254,6 +265,19 @@ test("during dictation the rule rides our focused editor, and discarding committ
   starts[0]!.onReady?.();
   starts[0]!.onFinal?.("hello there");
   expect(ed.getText()).toBe("hello there");
+});
+
+test("a discard after committed words offers the undo; after none it does not", async () => {
+  withCreds();
+  agentDirWith();
+  const { starts, start } = recording();
+  const pi = registeredVoice({ mode: "color", controller: { start } });
+  const ctx = voiceCtx();
+  await pi.handlers.get("session_start")!(null, ctx);
+  const ed = mountedEditor(ctx.ui);
+  await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+  starts[0]!.onReady?.();
+  starts[0]!.onFinal?.("hello there");
   await pi.commands.get("voice")!.handler("off", ctx);
   expect(ed.getText()).toBe("");
   expect(bottomRow(ed)).toContain("discarded");

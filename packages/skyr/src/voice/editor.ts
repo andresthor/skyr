@@ -74,7 +74,10 @@ type CustomEditorClass = typeof CustomEditor;
  */
 export const BINDINGS = {
   submit: "tui.input.submit",
-  cancel: "tui.select.cancel",
+  // the editor's own Esc, so rebinding it moves dictation's cancel with it
+  cancel: "app.interrupt",
+  // the editor's ctrl+c clears it, so it discards a dictation too; the hint names cancel only
+  clear: "app.clear",
   undo: "tui.editor.undo",
 } as const;
 

@@ -327,7 +327,7 @@ describe("bottom rule", () => {
 
   test("an unbound binding draws no hint, rather than naming a key that isn't there", () => {
     const keys = keybindings();
-    keys.setUserBindings({ "tui.select.cancel": [] });
+    keys.setUserBindings({ "app.interrupt": [] });
     const editor = fresh("hello", { keys, clock: clock() });
     editor.showRule(listening);
     const bottom = stripTerminalSequences(editor.render(120).at(-1) ?? "");

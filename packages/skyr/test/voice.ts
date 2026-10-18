@@ -59,8 +59,10 @@ export const HINT_KEYS: VoiceKeys = {
 };
 
 /** Pi's default app key bindings, as interactive mode hands them to the editor with no keybindings.json. */
-export function keybindings(): KeybindingsManager {
-  return new KeybindingsManager();
+export function keybindings(
+  user?: ConstructorParameters<typeof KeybindingsManager>[0],
+): KeybindingsManager {
+  return new KeybindingsManager(user);
 }
 
 const atDb = (db: number) => meterUnit(10 ** (db / 20));
@@ -189,13 +191,13 @@ export function voiceCtx(
 }
 
 /** Builds the editor the last `setEditorComponent` installed, focused, with Pi's real bindings. */
-export function mountedEditor(ui: VoiceUi): VoiceEditor {
+export function mountedEditor(ui: VoiceUi, keys = keybindings()): VoiceEditor {
   const factory = ui.setEditorComponent.mock.calls.at(-1)?.[0];
   if (!factory) throw new Error("voice installed no editor");
   const ed = factory(
     { requestRender: () => {}, terminal: { rows: 40 } },
     { borderColor: (s) => s, selectList: {} },
-    keybindings(),
+    keys,
   );
   ed.focused = true;
   return ed;

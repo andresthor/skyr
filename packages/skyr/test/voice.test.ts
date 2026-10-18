@@ -288,7 +288,7 @@ const bottomRow = (ed: ReturnType<typeof mountedEditor>, width = 72) =>
   stripTerminalSequences(ed.render(width).at(-1) ?? "");
 
 /** A TUI session with our editor mounted and focused, on fake timers. */
-async function mounted() {
+async function mounted(keys = keybindings()) {
   withCreds();
   agentDirWith();
   const rec = recording();
@@ -300,7 +300,7 @@ async function mounted() {
   await pi.handlers.get("session_start")!(null, ctx);
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
-  const ed = mountedEditor(ctx.ui);
+  const ed = mountedEditor(ctx.ui, keys);
   const submitted = vi.fn();
   const escaped = vi.fn();
   ed.onSubmit = submitted;
@@ -343,6 +343,28 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
     h.ed.handleInput("a");
     expect(bottomRow(h.ed)).toBe("─".repeat(72));
     expect(h.ed.getText()).toBe("drafta");
+  });
+
+  test("ctrl+c discards a dictation like Esc, rather than clearing the editor under it", async () => {
+    const h = await mounted();
+    await h.toggle();
+    h.starts[0]!.onReady?.();
+    h.starts[0]!.onFinal("spoken words");
+    h.ed.handleInput("\x03");
+    expect(h.ends[0]).toEqual({ stopped: 0, cancelled: 1 });
+    expect(bottomRow(h.ed)).toContain("discarded");
+  });
+
+  test("cancel follows the editor's own Esc binding: rebound, the new key discards and Esc no longer does", async () => {
+    const h = await mounted(keybindings({ "app.interrupt": "ctrl+g" }));
+    await h.toggle();
+    h.starts[0]!.onReady?.();
+    h.starts[0]!.onFinal("hello there");
+    h.ed.handleInput("\x1b");
+    expect(h.ends[0]).toEqual({ stopped: 0, cancelled: 0 });
+    h.ed.handleInput("\x07");
+    expect(h.ends[0]).toEqual({ stopped: 0, cancelled: 1 });
+    expect(bottomRow(h.ed)).toContain("discarded");
   });
 
   test("any key clears an error line and still reaches the editor", async () => {

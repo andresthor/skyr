@@ -189,7 +189,10 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       return false;
     }
     if (!controller.active) return false;
-    if (keys.matches(data, BINDINGS.cancel)) {
+    if (
+      keys.matches(data, BINDINGS.cancel) ||
+      keys.matches(data, BINDINGS.clear)
+    ) {
       cancel();
       return true;
     }

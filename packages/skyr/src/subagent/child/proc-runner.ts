@@ -1,15 +1,14 @@
 /** The subprocess runner: one child process per run, talking the job-dir file protocol. */
 import { spawn } from "node:child_process";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  readSnapshot,
+  readStoredResult,
+  writeJson,
+  zeroUsage,
+} from "./protocol.js";
 import type { ChildResult, Runner } from "./types.js";
 
 /** Seconds a child gets between SIGTERM and SIGKILL once its abort fires. */
@@ -17,71 +16,12 @@ const GRACE_MS = 3_000;
 /** Heartbeat age that marks a row stalled; nothing kills a stalled child. */
 const STALLED_MS = 15_000;
 const POLL_MS = 500;
-const PROTOCOL = 1;
-
-interface Snapshot {
-  v: number;
-  id: string;
-  turns: number;
-  toolCalls: number;
-  activity: string | undefined;
-  tokens: number;
-  startedAt: number;
-  now: number;
-  pid: number;
-}
-
-interface StoredResult extends ChildResult {
-  v: number;
-  description: string;
-  agent?: string;
-}
-
-const ZERO: ChildResult["usage"] = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-/** Shape-checked read of a stored result: anything the protocol does not speak is absent. */
-export const readStoredResult = (raw: unknown): StoredResult | undefined => {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const r = raw as Record<string, unknown>;
-  if (r.v !== PROTOCOL) return undefined;
-  if (r.status !== "done" && r.status !== "failed" && r.status !== "aborted")
-    return undefined;
-  if (r.text !== undefined && typeof r.text !== "string") return undefined;
-  if (r.error !== undefined && typeof r.error !== "string") return undefined;
-  if (typeof r.description !== "string" || r.description === "")
-    return undefined;
-  if (typeof r.usage !== "object" || r.usage === null) return undefined;
-  const usage = r.usage as { input?: unknown; output?: unknown };
-  if (typeof usage.input !== "number" || typeof usage.output !== "number")
-    return undefined;
-  return r as unknown as StoredResult;
-};
-
-const readSnapshot = (raw: string): Snapshot | undefined => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-  if (typeof parsed !== "object" || parsed === null) return undefined;
-  const r = parsed as Record<string, unknown>;
-  if (r.v !== PROTOCOL || typeof r.id !== "string") return undefined;
-  return parsed as Snapshot;
-};
 
 const abortedResult = (): ChildResult => ({
   status: "aborted",
   text: undefined,
   error: undefined,
-  usage: ZERO,
+  usage: zeroUsage(),
   sessionFile: undefined,
 });
 
@@ -221,10 +161,4 @@ export function processRunner(
       })();
     },
   };
-}
-
-async function writeJson(target: string, data: unknown): Promise<void> {
-  const temp = `${target}.tmp-${process.pid}`;
-  await writeFile(temp, JSON.stringify(data), "utf8");
-  await rename(temp, target);
 }

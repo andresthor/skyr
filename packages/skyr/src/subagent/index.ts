@@ -31,7 +31,7 @@ import {
   loadAgents,
   parseTools,
 } from "./agents.js";
-import { readStoredResult } from "./child/proc-runner.js";
+import { readStoredResult } from "./child/protocol.js";
 import { type ChildResult, runnerFor } from "./runner.js";
 import { createRunStore, type RunSnapshot, type RunStatus } from "./store.js";
 import {

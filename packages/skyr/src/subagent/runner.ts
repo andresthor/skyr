@@ -15,13 +15,7 @@ import { processRunner } from "./child/proc-runner.js";
 import { runChildSession } from "./child/spec-session.js";
 import type { ChildSpec, Runner } from "./child/types.js";
 
-export type {
-  ChildEvent,
-  ChildResult,
-  ChildSpec,
-  Runner,
-  Usage,
-} from "./child/types.js";
+export type { ChildEvent, ChildResult, Runner } from "./child/types.js";
 
 /** How the parent's providers name themselves for the copy; both runners agree on this. */
 export type Providers = Pick<
@@ -36,7 +30,7 @@ export type Providers = Pick<
  * `--api-key` keys and virtual models do not carry over. `registerTools` is the child's only
  * extension: Pi's and the user's extensions, skills and prompt templates stay off.
  */
-export function inProcessRunner(
+function inProcessRunner(
   providers: Providers,
   registerTools: ExtensionFactory,
 ): Runner {

@@ -17,6 +17,7 @@ import {
   type SttSession,
   startSession,
 } from "./client.js";
+import { VOICE_DEFAULTS } from "./config.js";
 import type { SttCredentials } from "./credentials.js";
 import { VoiceError } from "./errors.js";
 import { dbfs, micSource } from "./mic.js";
@@ -76,9 +77,7 @@ export const SPEECH_DBFS = 20 * Math.log10((2500 / 32768) * 0.15 ** (1 / 0.6));
 /** ~1.5 s of chunks that are exactly zero: macOS hands a mic-denied process silence, not an error. */
 const ZERO_CHUNKS_BLOCKED = 24;
 
-/** The Corti config, resolved from the skyr.json voice section by registerVoice, is read at every
- * `start`, so the owning object may be updated between sessions. */
-export interface DictationControllerOptions extends Partial<SttConfig> {
+export interface DictationControllerOptions {
   creds: SttCredentials;
   sink: DictationSink;
   onChange: () => void;
@@ -90,6 +89,8 @@ export interface DictationControllerOptions extends Partial<SttConfig> {
 }
 
 export class DictationController {
+  /** What each `start` configures Corti with; registerVoice sets it from skyr.json per session. */
+  config: SttConfig = VOICE_DEFAULTS;
   state: VoiceState = "idle";
   /** When the current state began, for the indicator's state-relative animation. */
   stateSince = 0;
@@ -188,11 +189,7 @@ export class DictationController {
     this.session = (this.o.start ?? startSession)({
       creds: this.o.creds,
       source: this.o.source ?? micSource,
-      language: this.o.language,
-      interims: this.o.interims,
-      punctuation: this.o.punctuation,
-      keyterms: this.o.keyterms,
-      replacements: this.o.replacements,
+      ...this.config,
       onReady: () => {
         if (!live() || this.state !== "arming") return;
         this.sessionAccepted = true;

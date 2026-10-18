@@ -20,7 +20,6 @@ import { prewarmToken } from "./client.js";
 import {
   mergeVocabulary,
   parseVoiceSection,
-  VOICE_DEFAULTS,
   type VoiceConfig,
 } from "./config.js";
 import { resolveSttCredentials } from "./credentials.js";
@@ -78,7 +77,7 @@ export function voiceMode(env: NodeJS.ProcessEnv): VoiceMode {
     : "color";
 }
 
-/** Read at load and again per `session_start`; `getAgentDir()` is env-true per call. */
+/** Read per `session_start`; `getAgentDir()` is env-true per call. */
 async function readVoiceConfig(): Promise<{
   config: VoiceConfig;
   problems: string[];
@@ -127,21 +126,6 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   const history = createLevelHistory();
   let bars: number[] = [];
   let discardedUntil = 0;
-
-  // read before any session_start resolves, so /voice works even straight after reload — silent:
-  // problems have no UI before a context exists, and session_start is the earliest honest surface
-  void readVoiceConfig().then(
-    ({ config }) => applyConfig(config),
-    () => {},
-  );
-  const applyConfig = (config: VoiceConfig) => {
-    controllerOptions.language = config.language;
-    controllerOptions.interims = config.interims;
-    controllerOptions.punctuation = config.punctuation;
-    const vocabulary = mergeVocabulary(config);
-    controllerOptions.keyterms = vocabulary.keyterms;
-    controllerOptions.replacements = vocabulary.replacements;
-  };
 
   const repaint = () => tui?.requestRender();
   const sink = editorSink(
@@ -195,7 +179,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     timer = undefined;
   };
 
-  const controllerOptions: DictationControllerOptions = {
+  const controller = new DictationController({
     creds,
     sink,
     onLevel: (rms) => history.push(meterUnit(rms)),
@@ -211,9 +195,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       repaint();
     },
     ...opts.controller,
-  };
-  applyConfig(VOICE_DEFAULTS);
-  const controller = new DictationController(controllerOptions);
+  });
 
   // Esc and `/voice off`: a reverted buffer means committed words went, so offer the undo
   const cancel = () => {
@@ -310,7 +292,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     editor = undefined;
     presenter = undefined;
     const { config, problems } = await readVoiceConfig();
-    applyConfig(config);
+    controller.config = { ...config, ...mergeVocabulary(config) };
     // once per session; a malformed section degrades to defaults, never breaks the start
     if (problems.length)
       ctx.ui.notify(`skyr: ${problems.join(" · ")}`, "warning");

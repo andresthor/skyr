@@ -6,9 +6,10 @@
  * test/pi-contract.test.ts for the other registrars.
  */
 import { parseColor } from "@earendil-works/pi-tui";
-import { expect, test } from "vitest";
+import { describe, expect, onTestFinished, test, vi } from "vitest";
 import type { SessionOptions } from "../src/voice/client.js";
 import type { VoiceEditorLike } from "../src/voice/editor.js";
+import { VoiceError } from "../src/voice/errors.js";
 import { startRefusal, VOICE_SHORTCUT, voiceMode } from "../src/voice/index.js";
 import {
   agentDirWith,
@@ -36,14 +37,25 @@ const theme = (hex: string): ThemeStub => {
   };
 };
 
-/** A fake session that records what each dictation was started with. */
+/** A fake session that records what each dictation was started with, and how it ended. */
 function recording() {
   const starts: SessionOptions[] = [];
+  const ends: { stopped: number; cancelled: number }[] = [];
   const start = (o: SessionOptions) => {
     starts.push(o);
-    return { stop: () => Promise.resolve(""), cancel: () => {} };
+    const end = { stopped: 0, cancelled: 0 };
+    ends.push(end);
+    return {
+      stop: () => {
+        end.stopped++;
+        return Promise.resolve("");
+      },
+      cancel: () => {
+        end.cancelled++;
+      },
+    };
   };
-  return { starts, start };
+  return { starts, ends, start };
 }
 
 test("without credentials only the stub /voice exists, and it says so once", async () => {
@@ -196,4 +208,83 @@ test("during dictation the rule rides our focused editor, and discarding committ
   await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
   await pi.commands.get("voice")!.handler("off", ctx);
   expect(ed.decor.rule?.discarded).toBe(false);
+});
+
+describe("keys through the voice editor, with Pi's real bindings", () => {
+  const TAIL_MS = 400;
+
+  /** A TUI session with our editor mounted and focused, on fake timers. */
+  async function mounted() {
+    withCreds();
+    agentDirWith();
+    const rec = recording();
+    const pi = registeredVoice({
+      mode: "ascii",
+      controller: { start: rec.start, timing: { tailMs: TAIL_MS } },
+    });
+    const ctx = voiceCtx();
+    await pi.handlers.get("session_start")!(null, ctx);
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    const ed = mountedEditor(ctx.ui);
+    const submitted = vi.fn();
+    const escaped = vi.fn();
+    ed.onSubmit = submitted;
+    ed.onEscape = escaped;
+    const toggle = () => pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+    return { ...rec, ctx, ed, submitted, escaped, toggle };
+  }
+
+  test("Enter during dictation stops it and is swallowed, so the half-heard prompt is never sent", async () => {
+    const h = await mounted();
+    await h.toggle();
+    h.starts[0]!.onReady?.();
+    h.starts[0]!.onFinal("hello there");
+    h.ed.handleInput("\r");
+    expect(h.submitted).not.toHaveBeenCalled();
+    expect(h.ed.getText()).toBe("hello there");
+    expect(h.ed.decor.rule?.state).toBe("transcribing");
+    await vi.advanceTimersByTimeAsync(TAIL_MS);
+    expect(h.ends[0]).toEqual({ stopped: 1, cancelled: 0 });
+    expect(h.ed.decor.rule?.state).toBe("idle");
+    // with no dictation running, Enter is Pi's again
+    h.ed.handleInput("\r");
+    expect(h.submitted).toHaveBeenCalledWith("hello there");
+  });
+
+  test("Esc during dictation discards it and puts the buffer back, without reaching Pi", async () => {
+    const h = await mounted();
+    h.ed.setText("draft");
+    await h.toggle();
+    h.starts[0]!.onReady?.();
+    h.starts[0]!.onFinal("spoken words");
+    expect(h.ed.getText()).toBe("draft spoken words");
+    h.ed.handleInput("\x1b");
+    expect(h.ed.getText()).toBe("draft");
+    expect(h.ends[0]).toEqual({ stopped: 0, cancelled: 1 });
+    expect(h.escaped).not.toHaveBeenCalled();
+    expect(h.ed.decor.rule?.discarded).toBe(true);
+  });
+
+  test("any key clears an error line and still reaches the editor", async () => {
+    const h = await mounted();
+    await h.toggle();
+    h.starts[0]!.onError(new VoiceError("network", "connection lost"));
+    expect(h.ed.decor.rule?.state).toBe("error");
+    h.ed.handleInput("a");
+    expect(h.ed.decor.rule?.state).toBe("idle");
+    expect(h.ed.getText()).toBe("a");
+  });
+
+  test("ctrl+space while a card has the keyboard refuses to start and says how to proceed", async () => {
+    const h = await mounted();
+    h.ed.focused = false;
+    await h.toggle();
+    expect(h.starts).toHaveLength(0);
+    expect(h.ctx.ui.notify).toHaveBeenCalledTimes(1);
+    expect(h.ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringMatching(/a card or selector has the keyboard — close it/),
+      "warning",
+    );
+  });
 });

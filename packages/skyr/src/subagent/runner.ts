@@ -118,7 +118,6 @@ async function canSpawnModelFor(
       modelRuntime: fileRuntime,
     }).model;
     if (!filed) return false;
-    if (typeof fileRuntime.hasConfiguredAuth !== "function") return false;
     if (!fileRuntime.hasConfiguredAuth(filed.provider)) return false;
     if (providers.getRegisteredNativeProvider(filed.provider) !== undefined)
       return false;

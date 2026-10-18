@@ -39,7 +39,7 @@ export interface SttConfig {
   interims: boolean;
   /** The two modes are exclusive server-side; exactly one is sent. */
   punctuation: Punctuation;
-  /** Sent as given; voice/config.ts mergeVocabulary adds the built-ins. */
+  /** Sent as given; voice/config.ts merges the built-ins in. */
   keyterms: readonly string[];
   replacements: readonly Replacement[];
 }

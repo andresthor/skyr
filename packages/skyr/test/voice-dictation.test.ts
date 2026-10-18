@@ -5,7 +5,11 @@
  */
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { SessionOptions, SttSession } from "../src/voice/client.js";
+import type {
+  SessionOptions,
+  SttConfig,
+  SttSession,
+} from "../src/voice/client.js";
 import type { DictationSink } from "../src/voice/dictation.js";
 import {
   DictationController,
@@ -24,6 +28,14 @@ const TIMING: DictationTiming = {
   errorHoldMs: 4_000,
   discardHoldMs: 2_000,
   stallMs: 1_500,
+};
+
+const CONFIG: SttConfig = {
+  language: "en",
+  interims: true,
+  punctuation: "automatic",
+  keyterms: [],
+  replacements: [],
 };
 
 /** Chunk levels in dBFS: well above the speech gate, and room noise well below it. */
@@ -70,6 +82,7 @@ function harness(
   let controller: DictationController;
   controller = new DictationController({
     creds: CREDS,
+    config: () => CONFIG,
     sink: {
       begin: () => events.push({ op: "begin" }),
       interim: (s) => events.push({ op: "interim", arg: s }),

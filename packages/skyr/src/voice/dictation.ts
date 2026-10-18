@@ -21,7 +21,6 @@ import {
   type SttSession,
   startSession,
 } from "./client.js";
-import { VOICE_DEFAULTS } from "./config.js";
 import type { SttCredentials } from "./credentials.js";
 import { VoiceError } from "./errors.js";
 import { micSource } from "./mic.js";
@@ -117,6 +116,8 @@ const kept = (d: Dictation) => d.finals > 0 || d.interim !== "";
 
 export interface DictationControllerOptions {
   creds: SttCredentials;
+  /** What a dictation configures Corti with, read each time one starts. */
+  config: () => SttConfig;
   sink: DictationSink;
   /** Fires when the state changes or a final lands. micOpen and heardSpeech move
    * without it, reaching the screen on the display's own tick instead. */
@@ -148,8 +149,6 @@ export interface DictationFacts {
 }
 
 export class DictationController {
-  /** What each `start` configures Corti with; registerVoice sets it from skyr.json per session. */
-  config: SttConfig = VOICE_DEFAULTS;
   /** The state machine's current state; written only through `setState`. */
   private curState: VoiceState = "idle";
   /** When the current state began, for the indicator's state-relative animation. */
@@ -273,7 +272,7 @@ export class DictationController {
       session: (this.o.start ?? startSession)({
         creds: this.o.creds,
         source: this.o.source ?? micSource,
-        ...this.config,
+        ...this.o.config(),
         onReady: () => {
           if (d !== this.d) return;
           d.acceptedAt = Date.now();

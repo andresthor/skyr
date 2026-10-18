@@ -1,30 +1,28 @@
 /**
- * The voice section of `skyr.json`, through the public functions: a broken section never
+ * The voice section of `skyr.json`, through the public reader: a broken section never
  * throws, a broken field degrades alone, and the case-insensitive replacement trap is caught
  * here — never as CONFIG_DENIED live. The file itself is read by `src/config.ts`
  * (config.test.ts); credentials stay in env.
  */
 import { describe, expect, test } from "vitest";
-import {
-  mergeVocabulary,
-  parseVoiceSection,
-  VOICE_DEFAULTS,
-} from "../src/voice/config.js";
+import { parseVoiceSection } from "../src/voice/config.js";
 
-/** The built-in coding vocabulary, as the merge hands it to Corti when the user adds nothing. */
-const BUILT_IN = mergeVocabulary(VOICE_DEFAULTS);
+/** What Corti gets when the user sets nothing: the defaults and the built-in coding vocabulary. */
+const DEFAULTS = parseVoiceSection(undefined).config;
 
 describe("parseVoiceSection", () => {
-  test("an absent section parses to the defaults with no problems", () => {
-    expect(parseVoiceSection(undefined)).toEqual({
-      config: VOICE_DEFAULTS,
-      problems: [],
+  test("an absent section gives the defaults with no problems", () => {
+    expect(parseVoiceSection(undefined).problems).toEqual([]);
+    expect(DEFAULTS).toMatchObject({
+      language: "en",
+      interims: true,
+      punctuation: "automatic",
     });
   });
 
   test("a wrong-typed section degrades whole to defaults", () => {
     const { config, problems } = parseVoiceSection("en");
-    expect(config).toEqual(VOICE_DEFAULTS);
+    expect(config).toEqual(DEFAULTS);
     expect(problems).toEqual([
       "skyr.json: voice must be an object; using defaults",
     ]);
@@ -52,10 +50,7 @@ describe("parseVoiceSection", () => {
     (key, value, problem) => {
       const { config, problems } = parseVoiceSection({ [key]: value });
       expect(problems).toEqual([`skyr.json: ${problem}`]);
-      for (const setting of Object.keys(config))
-        expect(config[setting as keyof typeof config]).toEqual(
-          VOICE_DEFAULTS[setting as keyof typeof VOICE_DEFAULTS],
-        );
+      expect(config).toEqual(DEFAULTS);
     },
   );
 
@@ -72,8 +67,8 @@ describe("parseVoiceSection", () => {
       language: "da-DK",
       interims: false,
       punctuation: "spoken",
-      keyterms: ["Skýr"],
-      replacements: [],
+      keyterms: [...DEFAULTS.keyterms, "Skýr"],
+      replacements: DEFAULTS.replacements,
     });
     expect(problems[0]).toBe(
       "skyr.json: voice.replacements must be an array; sending the built-in rules only",
@@ -119,9 +114,9 @@ describe("parseVoiceSection", () => {
     const long = "a".repeat(51);
     const wide = "one two three four five six";
     const { config, problems } = parseVoiceSection({
-      keyterms: ["typescript", 5, "", long, wide],
+      keyterms: ["Skýr", 5, "", long, wide],
     });
-    expect(config.keyterms).toEqual(["typescript"]);
+    expect(config.keyterms).toEqual([...DEFAULTS.keyterms, "Skýr"]);
     expect(problems).toEqual([
       "skyr.json: voice.keyterms[1] is not a string; dropped",
       "skyr.json: voice.keyterms[2] is empty; dropped",
@@ -133,7 +128,7 @@ describe("parseVoiceSection", () => {
   test("replacements exceeding Corti's per-rule caps are dropped by position", () => {
     const { config, problems } = parseVoiceSection({
       replacements: [
-        { find: "vitist", replace: "vitest" },
+        { find: "teh", replace: "the" },
         { find: "", replace: "x" },
         { find: "a b c d e f g h i j k", replace: "x" },
         { find: "y", replace: "a".repeat(101) },
@@ -143,7 +138,8 @@ describe("parseVoiceSection", () => {
       ],
     });
     expect(config.replacements).toEqual([
-      { find: "vitist", replace: "vitest" },
+      ...DEFAULTS.replacements,
+      { find: "teh", replace: "the" },
       { find: "dup", replace: "dup" },
     ]);
     expect(problems).toEqual([
@@ -163,7 +159,10 @@ describe("parseVoiceSection", () => {
         { find: "GET HUB", replace: "gethub" },
       ],
     });
-    expect(config.replacements).toHaveLength(1);
+    // the first stands, in place of the built-in rule with the same find
+    expect(
+      config.replacements.filter((r) => r.find.toLowerCase() === "get hub"),
+    ).toEqual([{ find: "get hub", replace: "GitHub" }]);
     expect(problems).toEqual([
       'skyr.json: voice.replacements[1] repeats the find "Get Hub" (ignoring case); dropped',
       'skyr.json: voice.replacements[2] repeats the find "GET HUB" (ignoring case); dropped',
@@ -182,34 +181,32 @@ describe("parseVoiceSection", () => {
             }));
       const { config, problems } = parseVoiceSection({ [key]: entries });
       // the parser leaves room for the built-ins, so the merged list lands exactly on the cap
-      const room = 1000 - BUILT_IN[key].length;
+      const room = 1000 - DEFAULTS[key].length;
       expect(problems).toEqual([
         `skyr.json: voice.${key} has over ${room} entries; the rest dropped`,
       ]);
-      expect(mergeVocabulary(config)[key]).toHaveLength(1000);
+      expect(config[key]).toHaveLength(1000);
     },
   );
 });
 
-describe("mergeVocabulary", () => {
+describe("the built-in vocabulary", () => {
   test("a user term or rule replaces the built-in it matches, in either case", () => {
-    const config = {
-      ...VOICE_DEFAULTS,
+    const { config: merged } = parseVoiceSection({
       keyterms: ["Skýr", "NPM"],
       replacements: [
-        { find: "type script", replace: "TS! " }, // the built-in's letters, all lower
+        { find: "type script", replace: "TS!" }, // the built-in's letters, all lower
         { find: "get hub", replace: "GH" }, // the built-in's find, all lower
         { find: "vitst", replace: "vitest" },
       ],
-    };
-    const merged = mergeVocabulary(config);
+    });
     expect(merged.keyterms).toContain("NPM");
     expect(merged.keyterms).not.toContain("npm");
     expect(merged.keyterms).toContain("Skýr");
-    expect(merged.keyterms).toHaveLength(BUILT_IN.keyterms.length + 1);
+    expect(merged.keyterms).toHaveLength(DEFAULTS.keyterms.length + 1);
     expect(merged.replacements).toContainEqual({
       find: "type script",
-      replace: "TS! ",
+      replace: "TS!",
     });
     expect(merged.replacements).toContainEqual({
       find: "get hub",
@@ -221,23 +218,23 @@ describe("mergeVocabulary", () => {
     });
     // one-for-one: every replacement removed a built-in instead of growing the list,
     // so the merged counts stay inside Corti's 1,000 cap
-    expect(merged.replacements).toHaveLength(BUILT_IN.replacements.length + 1);
+    expect(merged.replacements).toHaveLength(DEFAULTS.replacements.length + 1);
   });
 
   test("with nothing from the user, the built-in coding vocabulary goes to Corti", () => {
-    expect(BUILT_IN.keyterms).toContain("pnpm");
-    expect(BUILT_IN.replacements).toContainEqual({
+    expect(DEFAULTS.keyterms).toContain("pnpm");
+    expect(DEFAULTS.replacements).toContainEqual({
       find: "vitist",
       replace: "vitest",
     });
   });
 
   test("the built-in vocabulary stays inside what Corti accepts: short terms, finds unique in any case", () => {
-    for (const term of BUILT_IN.keyterms) {
+    for (const term of DEFAULTS.keyterms) {
       expect(term.length).toBeLessThanOrEqual(50);
       expect(term.split(/\s+/).length).toBeLessThanOrEqual(5);
     }
-    const finds = BUILT_IN.replacements.map((r) => r.find.toLowerCase());
+    const finds = DEFAULTS.replacements.map((r) => r.find.toLowerCase());
     expect(new Set(finds).size).toBe(finds.length);
   });
 });

@@ -52,10 +52,8 @@ const CODING_REPLACEMENTS: readonly Replacement[] = [
   { find: "Get Hub", replace: "GitHub" },
 ];
 
-/** The voice section as the user wrote it: a Corti config before mergeVocabulary adds the built-ins. */
-export type VoiceConfig = SttConfig;
-
-export const VOICE_DEFAULTS: VoiceConfig = {
+/** The settings a section leaves out, before the built-in vocabulary is merged in. */
+const VOICE_DEFAULTS: SttConfig = {
   language: "en",
   interims: true,
   punctuation: "automatic",
@@ -189,20 +187,30 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
   return out;
 }
 
-/** Parses and coerces the unknown section; wrong-typed fields drop to their default with a problem string. */
+/**
+ * The Corti config the section asks for, with the built-in coding vocabulary merged in: what a
+ * session is started with. Never throws; a wrong-typed field drops to its default, and each
+ * problem is one line naming the field and the fallback.
+ */
 export function parseVoiceSection(raw: unknown): {
-  config: VoiceConfig;
+  config: SttConfig;
   problems: string[];
 } {
-  const config: VoiceConfig = { ...VOICE_DEFAULTS };
   const problems: string[] = [];
+  const user = userSettings(raw, problems);
+  return { config: withVocabulary(user), problems };
+}
+
+/** The section's own settings, before the built-ins; each problem is pushed onto `problems`. */
+function userSettings(raw: unknown, problems: string[]): SttConfig {
+  const config: SttConfig = { ...VOICE_DEFAULTS };
   // the source is part of every problem; the path names where, the text says what and the consequence
   const problem = (path: string, msg: string) =>
     problems.push(`skyr.json: voice.${path} ${msg}`);
-  if (raw === undefined) return { config, problems };
+  if (raw === undefined) return config;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     problems.push("skyr.json: voice must be an object; using defaults");
-    return { config, problems };
+    return config;
   }
   const section = raw as Record<string, unknown>;
   for (const key of Object.keys(section))
@@ -243,7 +251,7 @@ export function parseVoiceSection(raw: unknown): {
     config.keyterms = parseKeyterms(keyterms, problem);
   if (replacements !== undefined)
     config.replacements = parseReplacements(replacements, problem);
-  return { config, problems };
+  return config;
 }
 
 /** Last-write-wins merge by a case-insensitive key: a matching earlier entry is dropped, so
@@ -267,10 +275,9 @@ function mergeList<T>(
  * case) replaces it — sending both would be CONFIG_DENIED. The swap is one-for-one, and the
  * user lists were capped against the built-ins during parsing, so each merged list stays
  * inside Corti's 1,000. */
-export function mergeVocabulary(
-  config: VoiceConfig,
-): Pick<SttConfig, "keyterms" | "replacements"> {
+function withVocabulary(config: SttConfig): SttConfig {
   return {
+    ...config,
     keyterms: mergeList(CODING_KEYTERMS, config.keyterms, (t) =>
       t.toLowerCase(),
     ),

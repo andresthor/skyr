@@ -19,12 +19,8 @@ import type {
 import { readSkyrFile } from "../config.js";
 import { loadPi } from "../pi.js";
 import { quoted } from "../tools/render.js";
-import { prewarmToken } from "./client.js";
-import {
-  mergeVocabulary,
-  parseVoiceSection,
-  type VoiceConfig,
-} from "./config.js";
+import { prewarmToken, type SttConfig } from "./client.js";
+import { parseVoiceSection } from "./config.js";
 import { credentialsNotice, resolveSttCredentials } from "./credentials.js";
 import {
   DictationController,
@@ -73,7 +69,7 @@ export function voiceMode(env: NodeJS.ProcessEnv): VoiceMode {
 
 /** Read per `session_start`; `getAgentDir()` is env-true per call. */
 async function readVoiceConfig(): Promise<{
-  config: VoiceConfig;
+  config: SttConfig;
   problems: string[];
 }> {
   const { getAgentDir } = await loadPi();
@@ -125,6 +121,8 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   // The session context of the last mount or toggle, for reading the buffer outside a callback;
   // no dictation starts without one (toggle sets it), so reads never race a session.
   let ctxRef: ExtensionContext | undefined;
+  // What the next dictation configures Corti with: skyr.json as the last session_start read it.
+  let config = parseVoiceSection(undefined).config;
 
   const repaint = () => tui?.requestRender();
   // Ours only while Pi still has our factory installed: an extension may replace it at any time.
@@ -150,6 +148,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
 
   const controller = new DictationController({
     creds,
+    config: () => config,
     sink,
     onLevel: (dbfs) => display.level(dbfs),
     onChange: () => display.refresh(),
@@ -250,10 +249,11 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     editor = undefined;
     ctxRef = undefined;
     tui = undefined;
-    const { config, problems } = await readVoiceConfig();
-    controller.config = { ...config, ...mergeVocabulary(config) };
+    const read = await readVoiceConfig();
+    config = read.config;
     // once per session; a malformed section degrades to defaults, never breaks the start
-    if (problems.length) ctx.ui.notify(problems.join("\n"), "warning");
+    if (read.problems.length)
+      ctx.ui.notify(read.problems.join("\n"), "warning");
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     await mount(ctx);
     display.start(ctx.ui);

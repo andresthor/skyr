@@ -355,6 +355,24 @@ test("a message that fits the footer's 60 columns shows whole; one column more i
   expect(visibleWidth(cut)).toBe(60);
 });
 
+test("TERM=dumb error rows cut with an ASCII ...: the footer is pure ASCII, the rule all but its border", () => {
+  const ascii = /^[\x20-\x7e]*$/;
+  const footer = renderStatus(
+    snap({ state: "error", message: "x".repeat(90) }),
+    { paint: testPaint("ascii") },
+  )!;
+  expect(footer).toBe(`voice x ${"x".repeat(49)}...`);
+  expect(footer).toMatch(ascii);
+  const row = plain(
+    { state: "error", message: "x".repeat(200) },
+    { width: 30, mode: "ascii" },
+  );
+  expect(row).toMatch(/^── x x+\.\.\. ───$/);
+  expect(visibleWidth(row)).toBe(30);
+  // the rule cells are the editor's own border, which Pi draws in every mode
+  expect(row.replaceAll("─", "")).toMatch(ascii);
+});
+
 test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {
   const dumb = renderStatus(snap(), { paint: testPaint("ascii") })!;
   expect(dumb).toMatch(/^voice \[rec\] listening [-=#]{8}$/);

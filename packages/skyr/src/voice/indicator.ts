@@ -100,7 +100,7 @@ export function renderStatus(
   const view = voiceView(s);
   if (view.kind === "error") {
     const prefix = visibleWidth(`${label} ${m.cause("")}`);
-    return `${label} ${m.cause(fitCols(view.message, ERROR_COLS - prefix))}`;
+    return `${label} ${m.cause(m.cut(view.message, ERROR_COLS - prefix))}`;
   }
   if (view.kind === "off") return undefined;
   if (view.kind === "discarded") return `${label} ${m.discarded}`;
@@ -138,21 +138,21 @@ interface LiveView {
   advisories: Advisory[];
 }
 
-/** `text` whole when it fits in `cols` columns, else cut by whole columns to end in "…". */
-function fitCols(text: string, cols: number): string {
-  // not truncateToWidth: it wraps its ellipsis in SGR resets, ending the muted colour early
-  return visibleWidth(text) <= cols
-    ? text
-    : `${sliceByColumn(text, 0, cols - 1, true)}…`;
-}
-
 /** The view's marks as both displays draw them: the same glyphs, words and colours on each. */
 function marks(paint: Paint) {
   const T = paint.theme.colors;
   const ascii = paint.mode === "ascii";
   const fg = (c: Color, text: string) => styled(paint, text, { fg: c });
+  const ellipsis = ascii ? "..." : "…";
   return {
     sep: ascii ? ", " : fg(T.dim, " · "),
+    // not truncateToWidth: it wraps its ellipsis in SGR resets, which end the muted colour early
+    // and put escapes into a TERM=dumb row
+    /** `text` whole when it fits in `cols` columns, else cut by whole columns to end in an ellipsis. */
+    cut: (text: string, cols: number) =>
+      visibleWidth(text) <= cols
+        ? text
+        : `${sliceByColumn(text, 0, cols - ellipsis.length, true)}${ellipsis}`,
     discarded: fg(T.muted, "discarded"),
     /** The error mark, then `text`: the error's message, clipped to the display's room. */
     cause: (text: string) =>
@@ -320,9 +320,7 @@ export function renderRule(
 
   if (view.kind === "error") {
     // the columns a message may take, keeping one rule cell
-    const cause = m.cause(
-      fitCols(view.message, ends(m.cause(""), "").fill - 1),
-    );
+    const cause = m.cause(m.cut(view.message, ends(m.cause(""), "").fill - 1));
     return first([compose(cause, more ?? ""), compose(cause, "")]);
   }
   if (view.kind === "discarded")

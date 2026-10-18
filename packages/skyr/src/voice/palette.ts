@@ -20,7 +20,7 @@ export type VoiceMode = "color" | "mono" | "ascii";
 type VoiceToken = "accent" | "text" | "muted" | "dim" | "error" | "warning";
 
 /** Theme colours plus the terminal's colour mode, so 256-colour terminals get 256-colour escapes. */
-export interface VoicePalette {
+interface VoicePalette {
   colors: Record<VoiceToken, Color>;
   mode: TerminalColorMode;
 }

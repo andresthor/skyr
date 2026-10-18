@@ -497,10 +497,12 @@ test("when Corti never sends ended, a stop still resolves with the committed tex
 });
 
 test("a flush before Corti accepts the config sends nothing", async () => {
-  const h = await drive();
+  const onLevel = vi.fn();
+  const h = await drive({ onLevel });
   h.sock.onopen?.();
   writePcm(h.source, 5_000);
-  await vi.waitFor(() => expect(h.source.readableLength).toBe(0));
+  // the chunk reached the client: it is buffered, waiting for Corti's answer
+  expect(onLevel).toHaveBeenCalledTimes(1);
   h.session.flush?.();
   expect(h.sock.audio()).toEqual([]);
   expect(h.sock.control().map((c) => c.type)).toEqual(["config"]);

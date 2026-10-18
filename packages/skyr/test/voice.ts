@@ -9,7 +9,6 @@ import { join } from "node:path";
 import {
   CustomEditor,
   type ExtensionAPI,
-  type ThemeAppearance,
 } from "@earendil-works/pi-coding-agent";
 import {
   type Color,
@@ -19,6 +18,7 @@ import {
   renderFakeCursor,
   rgbColor,
   stripTerminalSequences,
+  styleText,
   type TerminalColorMode,
 } from "@earendil-works/pi-tui";
 import { type Mock, onTestFinished, vi } from "vitest";
@@ -36,14 +36,14 @@ import {
   type VoiceKeys,
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
-import { type Paint, paintFor, type VoiceMode } from "../src/voice/palette.js";
+import type { Paint, VoiceMode, VoiceTheme } from "../src/voice/palette.js";
 import { scratchDir } from "./session.js";
 
 /** A real Pi editor, focused, with voice's subclass on top. */
-export function realEditor(options: VoiceEditorOptions = {}) {
+export function realEditor(options: Partial<VoiceEditorOptions> = {}) {
   const VoiceEditor = createVoiceEditorClass(CustomEditor, {
     keyHook: () => false,
-    paint: () => testPaint(),
+    paint: testPaint(),
     ...options,
   });
   const ed = new VoiceEditor(
@@ -167,32 +167,30 @@ const CORTI_DARK = {
   warning: parseColor("#d7af5f"),
 };
 
-interface ThemeStub {
-  colors: Record<keyof typeof CORTI_DARK, Color>;
-  appearance: ThemeAppearance;
-  getColorMode(): TerminalColorMode;
-}
-
-/** A theme as voice reads Pi's: the Corti dark colours, a dark background and truecolour, unless overridden. */
+/**
+ * A theme as voice reads Pi's: the Corti dark colours on a dark background, in truecolour, unless
+ * overridden. It styles with pi-tui's `styleText`, as Pi's Theme does for a colour value.
+ */
 export function testTheme(
   o: {
-    colors?: Partial<ThemeStub["colors"]>;
-    appearance?: ThemeAppearance;
+    colors?: Partial<VoiceTheme["colors"]>;
+    appearance?: VoiceTheme["appearance"];
     colorMode?: TerminalColorMode;
   } = {},
-): ThemeStub {
+): VoiceTheme {
+  const colorMode = o.colorMode ?? "truecolor";
   return {
     colors: { ...CORTI_DARK, ...o.colors },
     appearance: o.appearance ?? "dark",
-    getColorMode: () => o.colorMode ?? "truecolor",
+    style: (text, style) => styleText(text, style, colorMode),
   };
 }
 
 /** What voice draws with: `theme` on a terminal that shows `mode`. */
 export const testPaint = (
   mode: VoiceMode = "color",
-  theme: ThemeStub = testTheme(),
-): Paint => paintFor(theme, mode);
+  theme: VoiceTheme = testTheme(),
+): Paint => ({ theme, mode });
 
 /** A stretch of rendered text and the SGR state a terminal draws it in. */
 export interface StyledRun {
@@ -268,7 +266,7 @@ interface VoiceUi {
   getEditorComponent: Mock<() => unknown>;
   getEditorText: Mock<() => string>;
   setEditorText: Mock<(text: string) => void>;
-  theme: ThemeStub;
+  theme: VoiceTheme;
 }
 
 interface VoiceCtx {
@@ -282,13 +280,24 @@ export function voiceCtx(
   o: {
     mode?: VoiceCtx["mode"];
     hasUI?: boolean;
-    theme?: ThemeStub;
+    theme?: VoiceTheme;
     installed?: unknown;
   } = {},
 ): VoiceCtx {
   const mode = o.mode ?? "tui";
   // like Pi, the component getter answers with whatever was installed last
   let installed = o.installed;
+  // like Pi's, the theme handle is one live view: a switch reaches whoever holds it
+  let theme = o.theme ?? testTheme();
+  const live: VoiceTheme = {
+    get colors() {
+      return theme.colors;
+    },
+    get appearance() {
+      return theme.appearance;
+    },
+    style: (text, style) => theme.style(text, style),
+  };
   return {
     mode,
     hasUI: o.hasUI ?? (mode === "tui" || mode === "rpc"),
@@ -301,7 +310,12 @@ export function voiceCtx(
       getEditorComponent: vi.fn(() => installed),
       getEditorText: vi.fn(() => ""),
       setEditorText: vi.fn(),
-      theme: o.theme ?? testTheme(),
+      get theme() {
+        return live;
+      },
+      set theme(next) {
+        theme = next;
+      },
     },
   };
 }

@@ -24,7 +24,7 @@ import type {
 import type { DictationSink } from "./dictation.js";
 import { DRY_MS, spliceGhost } from "./ghost.js";
 import { renderRule, type VoiceKeys, type VoiceSnapshot } from "./indicator.js";
-import { FALLBACK_PALETTE, type Paint, paintFor } from "./palette.js";
+import type { Paint } from "./palette.js";
 
 /** The text to insert so a segment reads naturally between what is before and after the cursor. */
 function spacedSegment(before: string, after: string, segment: string): string {
@@ -61,9 +61,9 @@ export interface VoiceEditorLike {
 /** What a mount builds the voice editor class with; both live for the session's life. */
 export interface VoiceEditorOptions {
   /** Consulted before Pi sees a key; return true to swallow it. */
-  keyHook?: (data: string, keys: KeybindingsManager) => boolean;
-  /** The colours for each render, read every frame so /theme reaches the ghost and the rule. */
-  paint?: () => Paint;
+  keyHook: (data: string, keys: KeybindingsManager) => boolean;
+  /** The colours to draw in; its theme is Pi's live handle, so a /theme switch reaches it. */
+  paint: Paint;
 }
 
 type CustomEditorClass = typeof CustomEditor;
@@ -83,7 +83,7 @@ export const BINDINGS = {
 
 export function createVoiceEditorClass(
   Base: CustomEditorClass,
-  { keyHook, paint }: VoiceEditorOptions = {},
+  { keyHook, paint }: VoiceEditorOptions,
   now: () => number = Date.now,
 ) {
   return class VoiceEditor extends Base implements VoiceEditorLike {
@@ -94,14 +94,12 @@ export function createVoiceEditorClass(
     private rule: VoiceSnapshot | undefined;
     /** Drawing the rule threw once: for this editor's life, voice shows in the footer instead. */
     private ruleFailed = false;
-    private readonly paint: () => Paint;
     private readonly keys: KeybindingsManager;
     private pending: string[] = [];
 
     constructor(...args: ConstructorParameters<CustomEditorClass>) {
       super(...args);
       this.keys = args[2];
-      this.paint = paint ?? (() => paintFor(FALLBACK_PALETTE, "color"));
       // `focused` is a class field on pi-tui's Editor, so an accessor has to be defined per instance.
       // Pi restores a `ctx.ui.custom()` card's editor with setText(saved) and then focuses it, so
       // finals that arrived meanwhile are held here and land once focus is back.
@@ -119,7 +117,7 @@ export function createVoiceEditorClass(
     }
 
     override handleInput(data: string): void {
-      if (keyHook?.(data, this.keys)) return;
+      if (keyHook(data, this.keys)) return;
       super.handleInput(data);
     }
 
@@ -134,7 +132,7 @@ export function createVoiceEditorClass(
           paddingX: this.getPaddingX(),
           ghost: this.ghostText,
           drying: this.drying.map((s) => ({ ...s, age: t - s.at })),
-          paint: this.paint(),
+          paint,
           // private in pi-tui's types, but it is what tells the bottom rule from the autocomplete rows
           below:
             (this as unknown as { renderedAutocompleteHeight?: number })
@@ -158,7 +156,7 @@ export function createVoiceEditorClass(
             hiddenBelow: hiddenLineCount,
             rule: (s) => this.borderColor(s),
             keys: this.hintKeys(),
-            paint: this.paint(),
+            paint,
           });
         if (row !== undefined) return row;
       } catch {

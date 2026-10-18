@@ -15,7 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { type DictationFacts, SPEECH_DBFS } from "./dictation.js";
 import { dbfs } from "./mic.js";
-import { clamp01, FALLBACK_PALETTE, type Paint, paintFor } from "./palette.js";
+import { clamp01, type Paint, styled } from "./palette.js";
 
 /** One smoothed bar cell per this many ms of recording. */
 const BAR_MS = 100;
@@ -89,9 +89,11 @@ const ELLIPSIS_MS = 300;
  */
 export function renderStatus(
   s: VoiceSnapshot,
-  { paint = paintFor(FALLBACK_PALETTE, "color") }: { paint?: Paint } = {},
+  { paint }: { paint: Paint },
 ): string | undefined {
-  const { colors: T, ascii, fg } = paint;
+  const T = paint.theme.colors;
+  const ascii = paint.mode === "ascii";
+  const fg = (c: Color, text: string) => styled(paint, text, { fg: c });
   const label = fg(T.muted, "voice");
   const view = voiceView(s);
   if (view.kind === "error") {
@@ -126,7 +128,7 @@ export function renderStatus(
   return `${[`${label} ${light} ${word}`, ...advisories].join(sep)} ${meter}`;
 }
 
-/** An advisory line: `tone` picks the palette token it draws in. */
+/** An advisory line: `tone` picks the theme colour it draws in. */
 interface Advisory {
   text: string;
   tone: "warning" | "muted";
@@ -259,7 +261,7 @@ interface RuleOptions {
   /** The editor's `borderColor`: Pi colours its rules by thinking level and bash mode. */
   rule: (s: string) => string;
   keys: VoiceKeys;
-  paint?: Paint;
+  paint: Paint;
 }
 
 /**
@@ -270,15 +272,11 @@ interface RuleOptions {
  */
 export function renderRule(
   s: VoiceSnapshot,
-  {
-    width,
-    hiddenBelow = 0,
-    rule,
-    keys,
-    paint = paintFor(FALLBACK_PALETTE, "color"),
-  }: RuleOptions,
+  { width, hiddenBelow = 0, rule, keys, paint }: RuleOptions,
 ): string | undefined {
-  const { colors: T, ascii, fg } = paint;
+  const T = paint.theme.colors;
+  const ascii = paint.mode === "ascii";
+  const fg = (c: Color, text: string) => styled(paint, text, { fg: c });
   const view = voiceView(s);
   const line = (n: number) => rule("─".repeat(Math.max(0, n)));
   const key = (k: string, what: string) =>
@@ -367,7 +365,6 @@ function meterCells(
   rule: (s: string) => string,
   paint: Paint,
 ): string {
-  const fg = paint.fg;
   const toDb = (u: number) => METER_FLOOR_DB + u * METER_SPAN_DB;
   const lo = SPEECH_DBFS;
   const hi = Math.max(lo + MIN_RANGE_DB, ...bars.map(toDb));
@@ -380,20 +377,20 @@ function meterCells(
       continue;
     }
     const k = Math.round(clamp01((db - lo) / (hi - lo)) * (RISE.length - 1));
-    if (paint.ascii) {
+    if (paint.mode === "ascii") {
       out += k < 4 ? "=" : "#";
       continue;
     }
     const top = k === RISE.length - 1;
     // same direction rule as wetStart: the lightness runs away from the background, so a
     // short bar recedes on a light theme exactly as it does on a dark one
-    const away = paint.light ? -1 : 1;
+    const away = paint.theme.appearance === "light" ? -1 : 1;
     const colour = shade(
-      paint.colors.accent,
+      paint.theme.colors.accent,
       away * (-0.22 + (0.22 * k) / (RISE.length - 1) + (top ? 0.04 : 0)),
       top ? 1.3 : 1,
     );
-    out += fg(colour, RISE.charAt(k));
+    out += styled(paint, RISE.charAt(k), { fg: colour });
   }
   return out;
 }

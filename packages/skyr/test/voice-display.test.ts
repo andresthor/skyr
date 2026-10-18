@@ -10,7 +10,7 @@ import { createVoiceDisplay } from "../src/voice/display.js";
 import { DRY_MS } from "../src/voice/ghost.js";
 import type { VoiceSnapshot } from "../src/voice/indicator.js";
 import type { VoiceMode } from "../src/voice/palette.js";
-import { realEditor, snap, testPaint } from "./voice.js";
+import { realEditor, snap, testPaint, testTheme } from "./voice.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -20,6 +20,7 @@ afterEach(() => {
 });
 
 class FakeStatusUi {
+  theme = testTheme();
   lines: (string | undefined)[] = [];
   setStatus = (key: string, text: string | undefined) => {
     expect(key).toBe("skyr.voice");
@@ -40,7 +41,7 @@ function setup(editor?: Editor, mode: VoiceMode = "color") {
   const display = createVoiceDisplay({
     facts: () => facts.now,
     editor: () => editor,
-    paint: () => testPaint(mode),
+    mode,
     repaint,
   });
   display.start(ui);
@@ -74,9 +75,12 @@ test("when a card hides our editor, the footer carries voice and the rule lets g
 
 test("if the rule ever fails to draw, voice moves to the footer instead of vanishing", () => {
   const ed = realEditor({
-    paint: () => {
-      throw new Error("theme went away");
-    },
+    paint: testPaint("color", {
+      ...testTheme(),
+      style: () => {
+        throw new Error("theme went away");
+      },
+    }),
   });
   const { ui, display } = setup(ed);
   expect(ui.last).toBeUndefined();

@@ -37,7 +37,7 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
-import { paintFor, type VoiceMode } from "./palette.js";
+import type { Paint, VoiceMode } from "./palette.js";
 
 const VOICE_SHORTCUT = "ctrl+space";
 
@@ -122,12 +122,11 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   let editor: VoiceEditorLike | undefined;
   // Kept by reference, so a later mount and ours() can recognise it.
   let editorFactory: EditorFactory | undefined;
-  // The session context of the last mount or toggle, for reading the buffer and theme outside a
-  // callback; no dictation starts without one (toggle sets it), so reads never race a session.
+  // The session context of the last mount or toggle, for reading the buffer outside a callback;
+  // no dictation starts without one (toggle sets it), so reads never race a session.
   let ctxRef: ExtensionContext | undefined;
 
   const repaint = () => tui?.requestRender();
-  const paint = () => paintFor(ctxRef?.ui.theme, mode);
   // Ours only while Pi still has our factory installed: an extension may replace it at any time.
   const ours = () =>
     editorFactory && ctxRef?.ui.getEditorComponent() === editorFactory
@@ -145,7 +144,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   const display = createVoiceDisplay({
     facts: () => controller.facts(),
     editor: ours,
-    paint,
+    mode,
     repaint,
   });
 
@@ -189,7 +188,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       ctx.ui.notify(refusal, "warning");
       return;
     }
-    // the buffer and the theme come from this ctx while the dictation runs
+    // the buffer comes from this ctx while the dictation runs
     ctxRef = ctx;
     if (!controller.active) display.clearMeter();
     controller.toggle();
@@ -201,6 +200,8 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     // a foreign editor wins, existing fallback via setEditorText unchanged; ours or none gets (re)installed
     if (installed && installed !== editorFactory) return;
     const { CustomEditor } = await loadPi();
+    // Pi's theme handle is its global theme proxy, never replaced, so /theme reaches the editor
+    const paint: Paint = { theme: ctx.ui.theme, mode };
     // one class per session mount, not per editor: the hook and paint live for the session's life
     const VoiceEditor = createVoiceEditorClass(CustomEditor, {
       keyHook,

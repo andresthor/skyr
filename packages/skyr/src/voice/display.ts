@@ -11,21 +11,22 @@ import {
   renderStatus,
   type VoiceSnapshot,
 } from "./indicator.js";
-import type { Paint } from "./palette.js";
+import type { VoiceMode, VoiceTheme } from "./palette.js";
 
 const TICK_MS = 50;
 const VOICE_STATUS_KEY = "skyr.voice";
 
 interface StatusUI {
   setStatus(key: string, text: string | undefined): void;
+  /** Pi's live theme handle: read per row, so the row follows theme switches. */
+  readonly theme: VoiceTheme;
 }
 
 interface VoiceDisplayOptions {
   facts: () => DictationFacts;
   /** Our editor while it is the one installed, else undefined. */
   editor: () => Pick<VoiceEditorLike, "showRule" | "animating"> | undefined;
-  /** The footer's colours, read per row, so the row follows theme switches. */
-  paint: () => Paint;
+  mode: VoiceMode;
   repaint: () => void;
 }
 
@@ -36,7 +37,7 @@ interface VoiceDisplay {
   clearMeter(): void;
   /** Shows the current facts now, and starts or stops the tick to match. */
   refresh(): void;
-  /** Shows voice in this session's footer from now on, and refreshes. */
+  /** Shows voice in this session's footer, in its theme, from now on, and refreshes. */
   start(status: StatusUI): void;
   /**
    * Stops the tick and shows the facts once more, then lets go of the footer; with the
@@ -56,7 +57,7 @@ interface VoiceDisplay {
 export function createVoiceDisplay({
   facts,
   editor,
-  paint,
+  mode,
   repaint,
 }: VoiceDisplayOptions): VoiceDisplay {
   const history = createLevelHistory();
@@ -73,7 +74,9 @@ export function createVoiceDisplay({
     // the editor owns its rule: it says whether it can carry voice, and the footer takes over
     // exactly when it can't
     const onRule = editor()?.showRule(snapshot) ?? false;
-    const row = onRule ? undefined : renderStatus(snapshot, { paint: paint() });
+    const row = onRule
+      ? undefined
+      : renderStatus(snapshot, { paint: { theme: status.theme, mode } });
     if (row === shown) return;
     shown = row;
     status.setStatus(VOICE_STATUS_KEY, row);

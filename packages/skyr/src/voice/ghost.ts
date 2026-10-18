@@ -18,7 +18,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { sanitize } from "../tools/render.js";
-import { clamp01, FALLBACK_PALETTE, type Paint, paintFor } from "./palette.js";
+import { clamp01, type Paint, styled } from "./palette.js";
 
 export const DRY_MS = 300;
 
@@ -117,7 +117,7 @@ interface GhostInput {
   drying?: readonly DryingSpan[];
   /** Rows the editor drew under its bottom rule (the autocomplete list). */
   below?: number;
-  paint?: Paint;
+  paint: Paint;
 }
 
 /**
@@ -134,13 +134,13 @@ export function spliceGhost(
     ghost = "",
     drying = [],
     below = 0,
-    paint = paintFor(FALLBACK_PALETTE, "color"),
+    paint,
   }: GhostInput,
 ): string[] {
   const out = lines.slice();
   // `ascii` (TERM=dumb) draws no decoration at all; `mono` keeps the ghost as italic faint text
-  if (paint.ascii) return out;
-  const { colors: T, colour, fg } = paint;
+  if (paint.mode === "ascii") return out;
+  const T = paint.theme.colors;
   const topRule = 0;
   const botRule = out.length - 1 - below;
   if (botRule <= topRule) return out;
@@ -172,7 +172,7 @@ export function spliceGhost(
     const reach = wet.reduce((n, s) => n + s.chars + s.lead, 0);
     // NO_COLOR has no colour to fade, so the span is bold until it dries
     const style = (c: Color, s: string) =>
-      colour ? fg(c, s) : `\x1b[1m${s}\x1b[22m`;
+      styled(paint, s, paint.mode === "color" ? { fg: c } : { bold: true });
     // paints `text` from its end leftwards; `d0` is its last character's distance from the cursor
     const paintTail = (text: string, d0: number): string => {
       let tail = "";
@@ -215,7 +215,8 @@ export function spliceGhost(
   }
 
   // faint carries the ghost where the theme's dim is close to its text colour, and under NO_COLOR
-  const style = (s: string) => `\x1b[2m\x1b[3m${fg(T.dim, s)}\x1b[23m\x1b[22m`;
+  const style = (s: string) =>
+    styled(paint, s, { fg: T.dim, dim: true, italic: true });
   // one display line: a newline would move the terminal's cursor inside a row Pi measured as one
   const g = sanitize(ghost).trimStart();
   const sep =

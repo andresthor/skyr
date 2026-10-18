@@ -18,6 +18,7 @@ import {
   type VoiceEditorOptions,
 } from "../src/voice/editor.js";
 import { DRY_MS } from "../src/voice/ghost.js";
+import type { VoiceTheme } from "../src/voice/palette.js";
 import {
   CURSOR_CELL,
   editorRows,
@@ -135,7 +136,7 @@ function fresh(
   const VoiceEditor = createVoiceEditorClass(
     FakeBase,
     {
-      paint: opts.paint ?? (() => testPaint()),
+      paint: opts.paint ?? testPaint(),
       keyHook: opts.keyHook ?? (() => false),
     },
     opts.clock?.now,
@@ -262,12 +263,22 @@ describe("render", () => {
     expect(editor.render(40)).toEqual(ghostOnly.render(40));
   });
 
-  test("the paint is read per frame, so a mid-session theme switch reaches ghost and firm colours", () => {
+  test("a mid-session theme switch through Pi's live theme handle reaches ghost and firm colours", () => {
     let theme = testTheme({ colors: { dim: parseColor("#767676") } });
+    // like Pi's theme proxy: one handle, reading whichever theme is current
+    const live: VoiceTheme = {
+      get colors() {
+        return theme.colors;
+      },
+      get appearance() {
+        return theme.appearance;
+      },
+      style: (text, style) => theme.style(text, style),
+    };
     const editor = fresh("hello", {
       paddingX: 2,
       clock: clock(),
-      paint: () => testPaint("color", theme),
+      paint: testPaint("color", live),
     });
     editor.ghost("world");
     const ghostColour = () =>
@@ -351,9 +362,12 @@ describe("bottom rule", () => {
   test("a throw while drawing the voice rule leaves Pi's rule, never a broken input bar", () => {
     const editor = fresh("hello", {
       clock: clock(),
-      paint: () => {
-        throw new Error("theme went away");
-      },
+      paint: testPaint("color", {
+        ...testTheme(),
+        style: () => {
+          throw new Error("theme went away");
+        },
+      }),
     });
     expect(editor.showRule(listening)).toBe(true);
     expect(editor.render(40).at(-1)).toBe(`<${"─".repeat(40)}>`);

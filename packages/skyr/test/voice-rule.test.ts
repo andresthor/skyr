@@ -1,7 +1,8 @@
 /**
  * The bottom rule voice draws into Pi's editor: exactly `width` columns in every state and mode,
  * one mark per fact (the meter for speech, the light for the mic, the word for the phase, the
- * keys for what they do now), and nothing drawn when voice has nothing to say.
+ * keys for what they do now), and nothing drawn when voice has nothing to say. Then the footer
+ * row that carries the same marks when the rule can't.
  */
 import {
   colorToOklch,
@@ -14,6 +15,7 @@ import { SPEECH_DBFS } from "../src/voice/dictation.js";
 import {
   meterUnit,
   renderRule,
+  renderStatus,
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
 import {
@@ -289,4 +291,81 @@ test("TERM=dumb marks are ASCII; NO_COLOR keeps the glyphs without colour; 256-c
     paint: paint("color", { ...FALLBACK_PALETTE, mode: "256color" }),
   })!;
   expect(indexed).not.toContain("\x1b[38;2;");
+});
+
+test("the footer row names voice first, so a neighbouring status can't claim its marks", () => {
+  expect(
+    stripTerminalSequences(
+      renderStatus(
+        snap({ state: "arming", micOpen: false, sinceStartMs: 300 }),
+      )!,
+    ),
+  ).toBe("voice ○ starting ────────");
+  expect(
+    stripTerminalSequences(
+      renderStatus(snap({ state: "transcribing", micOpen: false }))!,
+    ),
+  ).toBe("voice ○ finishing· ────────");
+  expect(
+    stripTerminalSequences(renderStatus(snap({ state: "discarded" }))!),
+  ).toBe("voice discarded");
+  // the footer collapses runs of spaces, so the row never relies on them
+  expect(renderStatus(snap())!).not.toMatch(/ {2}/);
+});
+
+test("the error row names the cause, truncated by whole columns", () => {
+  const row = renderStatus(
+    snap({
+      state: "error",
+      message: "microphone blocked · allow it in System Settings › Privacy",
+    }),
+  )!;
+  // the footer caps the message at its own width before the terminal does; the cause stays whole
+  expect(stripTerminalSequences(row)).toMatch(
+    /^voice ✗ microphone blocked · allow it in /,
+  );
+  const short = renderStatus(
+    snap({ state: "error", message: "microphone blocked" }),
+  )!;
+  expect(stripTerminalSequences(short)).toBe("voice ✗ microphone blocked");
+  const long = renderStatus(snap({ state: "error", message: "x".repeat(90) }))!;
+  // the footer's error row is 60 columns whole, prefix included
+  expect(visibleWidth(long)).toBe(60);
+});
+
+test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {
+  expect(
+    stripTerminalSequences(renderStatus(snap(), { paint: paint("ascii") })!),
+  ).toMatch(/^voice \[rec\] listening [-=#]{8}$/);
+  const mono = renderStatus(snap(), { paint: paint("mono") })!;
+  expect(mono).not.toContain("\x1b[");
+  expect(mono).toContain("●");
+});
+
+test("the footer row reads the palette it is given, so it follows theme switches", () => {
+  const light = {
+    ...FALLBACK_PALETTE,
+    colors: { ...FALLBACK_PALETTE.colors, accent: parseColor("#157937") },
+  };
+  expect(renderStatus(snap(), { paint: paint("color", light) })).toContain(
+    "\x1b[38;2;21;121;55m●",
+  );
+  expect(
+    renderStatus(snap(), {
+      paint: paint("color", { ...FALLBACK_PALETTE, mode: "256color" }),
+    }),
+  ).not.toContain("\x1b[38;2;");
+});
+
+test("the footer carries the rule's advisories, so a hidden editor still hears about the cap", () => {
+  expect(
+    stripTerminalSequences(renderStatus(snap({ capLeftMs: 9_500 }))!),
+  ).toMatch(/^voice ● listening · 10s left /);
+  expect(
+    stripTerminalSequences(
+      renderStatus(
+        snap({ state: "arming", micOpen: false, sinceStartMs: 2000 }),
+      )!,
+    ),
+  ).toBe("voice ○ starting · no audio yet ────────");
 });

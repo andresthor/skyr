@@ -10,7 +10,7 @@
  * the buffer. `setEditorText` would lose the cursor and the undo stack.
  *
  * Everything the editor draws — ghost, drying commits, the bottom rule — lives here
- * and nowhere else: the sink, the presenter and `index.ts` go through this surface
+ * and nowhere else: the sink, the display and `index.ts` go through this surface
  * and never read or write decoration state directly.
  *
  * The base class and the per-session options (key hook, paint) are passed in because

@@ -17,8 +17,6 @@ import { type DictationFacts, SPEECH_DBFS } from "./dictation.js";
 import { dbfs } from "./mic.js";
 import { clamp01, FALLBACK_PALETTE, type Paint, paintFor } from "./palette.js";
 
-export const TICK_MS = 50;
-
 /** One smoothed bar cell per this many ms of recording. */
 const BAR_MS = 100;
 /** Bars kept: 4.8 s, the window the meter auto-ranges its peak over. */

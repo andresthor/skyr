@@ -5,9 +5,9 @@
  * `ctrl+space` or `/voice` toggles listening, Esc cancels and restores the editor,
  * Enter stops-without-sending. Quiet never ends a dictation. Text is never auto-sent.
  *
- * The editor owns its decoration (ghost, drying spans, the bottom rule); `presenter.ts`
- * routes what it cannot carry — a hidden editor, a foreign editor, a failed rule — to the
- * footer. The core modules render nothing.
+ * The editor owns its decoration (ghost, drying spans, the bottom rule); `display.ts` keeps
+ * voice on screen and routes what the editor cannot carry — a hidden editor, a foreign editor,
+ * a failed rule — to the footer. The core modules render nothing.
  */
 import type {
   ExtensionAPI,
@@ -30,20 +30,14 @@ import {
   DictationController,
   type DictationControllerOptions,
 } from "./dictation.js";
+import { createVoiceDisplay } from "./display.js";
 import {
   BINDINGS,
   createVoiceEditorClass,
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
-import {
-  createLevelHistory,
-  meterUnit,
-  TICK_MS,
-  type VoiceSnapshot,
-} from "./indicator.js";
 import { paintFor, type VoiceMode } from "./palette.js";
-import { type VoicePresenter, voicePresenter } from "./presenter.js";
 
 const VOICE_SHORTCUT = "ctrl+space";
 
@@ -131,16 +125,9 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   // The session context of the last mount or toggle, for reading the buffer and theme outside a
   // callback; no dictation starts without one (toggle sets it), so reads never race a session.
   let ctxRef: ExtensionContext | undefined;
-  // This session's presenter, built on session_start once the theme is known; gone after.
-  let presenter: VoicePresenter | undefined;
-  // The repaint tick, running only while voice can still move: a live dictation, or drying spans.
-  let timer: ReturnType<typeof setInterval> | undefined;
-  // Mic levels in at the chunk rate, smoothed bars out on the tick; reset when a dictation starts.
-  const history = createLevelHistory();
-  // The last sampled bars, newest first — what the meter shows between ticks.
-  let bars: number[] = [];
 
   const repaint = () => tui?.requestRender();
+  const paint = () => paintFor(ctxRef?.ui.theme, mode);
   // Ours only while Pi still has our factory installed: an extension may replace it at any time.
   const ours = () =>
     editorFactory && ctxRef?.ui.getEditorComponent() === editorFactory
@@ -155,35 +142,18 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     repaint,
   );
 
-  const snapshot = (): VoiceSnapshot => ({
-    ...controller.facts(),
-    bars,
+  const display = createVoiceDisplay({
+    facts: () => controller.facts(),
+    editor: ours,
+    paint,
+    repaint,
   });
-  // Every route to the screen in one place: present the snapshot, decide the tick, repaint.
-  const refresh = () => {
-    presenter?.update(snapshot());
-    if (controller.state !== "idle" || ours()?.animating) startTimer();
-    else stopTimer();
-    repaint();
-  };
-  const tick = () => {
-    bars = history.sample(TICK_MS);
-    refresh();
-  };
-  const startTimer = () => {
-    timer ??= setInterval(tick, TICK_MS);
-    timer.unref?.();
-  };
-  const stopTimer = () => {
-    if (timer) clearInterval(timer);
-    timer = undefined;
-  };
 
   const controller = new DictationController({
     creds,
     sink,
-    onLevel: (rms) => history.push(meterUnit(rms)),
-    onChange: () => refresh(),
+    onLevel: (rms) => display.level(rms),
+    onChange: () => display.refresh(),
     ...opts.controller,
   });
 
@@ -221,11 +191,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     }
     // the buffer and the theme come from this ctx while the dictation runs
     ctxRef = ctx;
-    if (!controller.active) {
-      // a dictation starting now begins with an empty meter, not the last one's tail
-      history.reset();
-      bars = [];
-    }
+    if (!controller.active) display.clearMeter();
     controller.toggle();
   };
 
@@ -238,7 +204,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     // one class per session mount, not per editor: the hook and paint live for the session's life
     const VoiceEditor = createVoiceEditorClass(CustomEditor, {
       keyHook,
-      paint: () => paintFor(ctxRef?.ui.theme, mode),
+      paint,
     });
     editorFactory = (t, theme, keybindings) => {
       // Pi copies padding and autocomplete into a custom editor, but not this constructor-only flag;
@@ -277,10 +243,10 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
 
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
     controller.dispose();
-    stopTimer();
-    // every piece of session state starts over: only the controller and its config carry over
+    // a no-op after the session_shutdown Pi sends first; it matters only if one never came
+    display.stop();
+    // the last session's handles go
     editor = undefined;
-    presenter = undefined;
     ctxRef = undefined;
     tui = undefined;
     const { config, problems } = await readVoiceConfig();
@@ -289,20 +255,13 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     if (problems.length) ctx.ui.notify(problems.join("\n"), "warning");
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     await mount(ctx);
-    presenter = voicePresenter({
-      editor: ours,
-      status: ctx.ui,
-      paint: () => paintFor(ctxRef?.ui.theme, mode),
-    });
-    refresh();
+    display.start(ctx.ui);
     // a cached token makes ctrl+space feel instant
     prewarmToken(creds, { fetch: opts.fetch });
   });
 
   pi.on("session_shutdown", () => {
     controller.dispose();
-    stopTimer();
-    presenter?.update(snapshot());
-    presenter = undefined;
+    display.stop();
   });
 }

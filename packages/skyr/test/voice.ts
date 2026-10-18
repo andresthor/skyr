@@ -20,7 +20,10 @@ import { type Mock, onTestFinished, vi } from "vitest";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { registerSkyr } from "../src/index.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
-import { createVoiceEditorClass } from "../src/voice/editor.js";
+import {
+  createVoiceEditorClass,
+  type VoiceEditorOptions,
+} from "../src/voice/editor.js";
 import { registerVoice, type VoiceOptions } from "../src/voice/index.js";
 import {
   meterUnit,
@@ -30,8 +33,8 @@ import {
 import { scratchDir } from "./session.js";
 
 /** A real Pi editor, focused, with voice's subclass on top. */
-export function realEditor() {
-  const VoiceEditor = createVoiceEditorClass(CustomEditor);
+export function realEditor(options?: VoiceEditorOptions) {
+  const VoiceEditor = createVoiceEditorClass(CustomEditor, options);
   const ed = new VoiceEditor(
     { terminal: { rows: 40 }, requestRender: () => {} } as never,
     { borderColor: (s: string) => s, selectList: {} } as never,

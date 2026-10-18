@@ -1,0 +1,24 @@
+#!/bin/bash
+# Commit message shape, from skyr-craft's "Hand over": a typed subject, a blank line before any
+# body, and a `test` commit that touches tests only. `git commit --no-verify` skips it.
+msg=$(grep -v '^#' "$1")
+subject=$(printf '%s\n' "$msg" | head -n1)
+fail() {
+  echo "commit-msg: $1" >&2
+  echo "  subject: $subject" >&2
+  exit 1
+}
+
+case "$subject" in fixup!* | amend!* | squash!* | Merge* | Revert*) exit 0 ;; esac
+
+type_re='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: [^ ]'
+[[ $subject =~ $type_re ]] || fail "subject is not 'type(scope): summary'"
+((${#subject} <= 120)) || fail "subject is ${#subject} characters; put the detail in a body"
+second=$(printf '%s\n' "$msg" | sed -n 2p)
+[[ -z $second ]] || fail "the body must follow a blank line"
+
+if [[ $subject =~ ^test(\(|:|!) ]]; then
+  src=$(git diff --cached --name-only | grep -E '^packages/[^/]+/(src/|index\.ts)' || true)
+  [[ -z $src ]] || fail "a test commit touches source: $(echo $src | tr '\n' ' ')"
+fi
+exit 0

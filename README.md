@@ -143,7 +143,7 @@ loading the default export — see `packages/skyr/src/index.ts`.
 pnpm install
 pnpm test        # vitest across packages
 pnpm typecheck
-pnpm lint        # biome, then knip: nothing unused, and nothing exported only for tests unless @internal
+pnpm lint        # biome, knip (nothing unused; test-only exports need @internal), bin/craft-check.mjs
 pnpm format      # biome: apply its fixes
 ```
 

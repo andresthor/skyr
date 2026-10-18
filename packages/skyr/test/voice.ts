@@ -22,7 +22,7 @@ import {
   type TerminalColorMode,
 } from "@earendil-works/pi-tui";
 import { type Mock, onTestFinished, vi } from "vitest";
-// Pi builds its app bindings with this class but does not export it from its root
+// biome-ignore lint/style/noRestrictedImports: Pi builds its app bindings with this class but does not export it from its root
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { registerSkyr } from "../src/index.js";
 import type { SttCredentials } from "../src/voice/credentials.js";

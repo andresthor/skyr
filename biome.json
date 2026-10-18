@@ -6,7 +6,20 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["**/node_modules/**"],
+                "message": "import the runtime by its package name, not a path into node_modules"
+              }
+            ]
+          }
+        }
+      }
     }
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } },

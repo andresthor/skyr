@@ -1,6 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
+    ".": {
+      "entry": ["bin/*.mjs"]
+    },
     "packages/skyr": {
       "entry": ["src/subagent/child/main.ts!", "test/fixtures/proc/*.js"],
       "project": ["src/**/*.ts!", "test/**/*.{ts,js}"]

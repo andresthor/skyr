@@ -4,11 +4,11 @@ import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
   renderFakeCursor,
+  stripTerminalSequences,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { createVoiceEditorClass } from "../src/voice/editor.js";
-import { CURSOR_CELL, stripAnsi } from "../src/voice/ghost.js";
 import { VOICE_SHORTCUT } from "../src/voice/index.js";
 import { keybindings, snap } from "./voice.js";
 
@@ -24,15 +24,19 @@ function realEditor() {
   return ed;
 }
 
-test("the ghost's anchor is pi-tui's cursor marker followed by its fake-cursor space", () => {
-  expect(CURSOR_CELL).toBe(`${CURSOR_MARKER}${renderFakeCursor(" ")}`);
+test("a focused editor ends the cursor's line with pi-tui's cursor marker and a fake-cursor space, which the ghost anchors on", () => {
+  const ed = realEditor();
+  ed.setText("hello");
+  expect(ed.render(40)).toContainEqual(
+    expect.stringContaining(`hello${CURSOR_MARKER}${renderFakeCursor(" ")}`),
+  );
 });
 
 test("pi's editor draws its bottom rule through renderBottomBorder, so the voice rule reaches the screen", () => {
   const ed = realEditor();
   ed.showRule(snap());
   const bottom = ed.render(60).at(-1) ?? "";
-  expect(stripAnsi(bottom)).toContain("● listening");
+  expect(stripTerminalSequences(bottom)).toContain("● listening");
   expect(visibleWidth(bottom)).toBe(60);
 });
 

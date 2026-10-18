@@ -3,9 +3,12 @@
  * screen, and to the footer status row only when it is not. The footer row is cleared, never
  * left as a permanent line, and it is set only when it changes.
  */
-import { parseColor, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  parseColor,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
-import { stripAnsi } from "../src/voice/ghost.js";
 import type { VoiceSnapshot } from "../src/voice/indicator.js";
 import { ERROR_COLS, renderStatus } from "../src/voice/indicator.js";
 import {
@@ -80,7 +83,7 @@ test("when a card hides our editor, the footer carries voice and the rule lets g
   editor.focused = false;
   present.update(snap());
   expect(editor.carried).toBeUndefined();
-  expect(stripAnsi(ui.last ?? "")).toMatch(/^voice ● listening /);
+  expect(stripTerminalSequences(ui.last ?? "")).toMatch(/^voice ● listening /);
   editor.focused = true;
   present.update(snap());
   expect(ui.last).toBeUndefined();
@@ -110,18 +113,20 @@ const paint = (mode: VoiceMode = "color", palette = FALLBACK_PALETTE) =>
 
 test("the footer row names voice first, so a neighbouring status can't claim its marks", () => {
   expect(
-    stripAnsi(
+    stripTerminalSequences(
       renderStatus(
         snap({ state: "arming", micOpen: false, sinceStartMs: 300 }),
       )!,
     ),
   ).toBe("voice ○ starting ────────");
   expect(
-    stripAnsi(renderStatus(snap({ state: "transcribing", micOpen: false }))!),
+    stripTerminalSequences(
+      renderStatus(snap({ state: "transcribing", micOpen: false }))!,
+    ),
   ).toBe("voice ○ finishing· ────────");
-  expect(stripAnsi(renderStatus(snap({ state: "discarded" }))!)).toBe(
-    "voice discarded",
-  );
+  expect(
+    stripTerminalSequences(renderStatus(snap({ state: "discarded" }))!),
+  ).toBe("voice discarded");
   // the footer collapses runs of spaces, so the row never relies on them
   expect(renderStatus(snap())!).not.toMatch(/ {2}/);
 });
@@ -134,19 +139,21 @@ test("the error row names the cause, truncated by whole columns", () => {
     }),
   )!;
   // the footer caps the message at its own width before the terminal does; the cause stays whole
-  expect(stripAnsi(row)).toMatch(/^voice ✗ microphone blocked · allow it in /);
+  expect(stripTerminalSequences(row)).toMatch(
+    /^voice ✗ microphone blocked · allow it in /,
+  );
   const short = renderStatus(
     snap({ state: "error", message: "microphone blocked" }),
   )!;
-  expect(stripAnsi(short)).toBe("voice ✗ microphone blocked");
+  expect(stripTerminalSequences(short)).toBe("voice ✗ microphone blocked");
   const long = renderStatus(snap({ state: "error", message: "x".repeat(90) }))!;
   expect(visibleWidth(long)).toBe(ERROR_COLS);
 });
 
 test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {
-  expect(stripAnsi(renderStatus(snap(), { paint: paint("ascii") })!)).toMatch(
-    /^voice \[rec\] listening [-=#]{8}$/,
-  );
+  expect(
+    stripTerminalSequences(renderStatus(snap(), { paint: paint("ascii") })!),
+  ).toMatch(/^voice \[rec\] listening [-=#]{8}$/);
   const mono = renderStatus(snap(), { paint: paint("mono") })!;
   expect(mono).not.toContain("\x1b[");
   expect(mono).toContain("●");
@@ -168,11 +175,11 @@ test("the footer row reads the palette it is given, so it follows theme switches
 });
 
 test("the footer carries the rule's advisories, so a hidden editor still hears about the cap", () => {
-  expect(stripAnsi(renderStatus(snap({ capLeftMs: 9_500 }))!)).toMatch(
-    /^voice ● listening · 10s left /,
-  );
   expect(
-    stripAnsi(
+    stripTerminalSequences(renderStatus(snap({ capLeftMs: 9_500 }))!),
+  ).toMatch(/^voice ● listening · 10s left /);
+  expect(
+    stripTerminalSequences(
       renderStatus(
         snap({ state: "arming", micOpen: false, sinceStartMs: 2000 }),
       )!,
@@ -185,5 +192,5 @@ test("if the rule ever fails to draw, voice moves to the footer instead of vanis
   const { ui, present } = setup(editor);
   present.update(snap());
   expect(editor.carried).toBeUndefined();
-  expect(stripAnsi(ui.last ?? "")).toMatch(/^voice ● listening /);
+  expect(stripTerminalSequences(ui.last ?? "")).toMatch(/^voice ● listening /);
 });

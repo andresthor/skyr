@@ -3,10 +3,14 @@
  * one mark per fact (the meter for speech, the light for the mic, the word for the phase, the
  * keys for what they do now), and nothing drawn when voice has nothing to say.
  */
-import { colorToOklch, parseColor, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  colorToOklch,
+  parseColor,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { SPEECH_DBFS } from "../src/voice/dictation.js";
-import { stripAnsi } from "../src/voice/ghost.js";
 import {
   meterUnit,
   renderRule,
@@ -38,7 +42,7 @@ const draw = (
     hiddenBelow: o.hiddenBelow,
   });
 const plain = (s: Partial<VoiceSnapshot>, o = {}) =>
-  stripAnsi(draw(s, o) ?? "");
+  stripTerminalSequences(draw(s, o) ?? "");
 
 const STATES: Partial<VoiceSnapshot>[] = [
   { state: "arming", micOpen: false, sinceStartMs: 300 },
@@ -283,18 +287,18 @@ test("an unbound key draws no hint at all, so nothing pretends to name a key tha
     keys: { submit: "", cancel: "escape", undo: "ctrl+-" },
     paint: paint(),
   })!;
-  expect(stripAnsi(half)).toContain("escape discard");
-  expect(stripAnsi(half)).not.toContain("keep");
-  expect(stripAnsi(half)).not.toMatch(/· ·/);
+  expect(stripTerminalSequences(half)).toContain("escape discard");
+  expect(stripTerminalSequences(half)).not.toContain("keep");
+  expect(stripTerminalSequences(half)).not.toMatch(/· ·/);
   const none = renderRule(snap(), {
     width: 72,
     rule,
     keys: { submit: "", cancel: "", undo: "" },
     paint: paint(),
   })!;
-  expect(stripAnsi(none)).not.toContain("keep");
-  expect(stripAnsi(none)).not.toContain("cancel");
-  expect(stripAnsi(none)).not.toContain("discard");
+  expect(stripTerminalSequences(none)).not.toContain("keep");
+  expect(stripTerminalSequences(none)).not.toContain("cancel");
+  expect(stripTerminalSequences(none)).not.toContain("discard");
 });
 
 test("after Esc reverted committed words, the rule says so and names the undo", () => {

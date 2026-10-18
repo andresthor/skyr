@@ -6,7 +6,12 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { Color, TerminalColorMode } from "@earendil-works/pi-tui";
+import {
+  type Color,
+  CURSOR_MARKER,
+  renderFakeCursor,
+  type TerminalColorMode,
+} from "@earendil-works/pi-tui";
 import { type Mock, onTestFinished, vi } from "vitest";
 // Pi builds its app bindings with this class but does not export it from its root
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
@@ -14,7 +19,6 @@ import { registerSkyr } from "../src/index.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
 import { DEFAULT_TIMING } from "../src/voice/dictation.js";
 import type { createVoiceEditorClass } from "../src/voice/editor.js";
-import { CURSOR_CELL } from "../src/voice/ghost.js";
 import { registerVoice, type VoiceOptions } from "../src/voice/index.js";
 import {
   meterUnit,
@@ -22,6 +26,9 @@ import {
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
 import { scratchDir } from "./session.js";
+
+/** The cursor cell a focused Pi editor draws at the end of a line. */
+export const CURSOR_CELL = CURSOR_MARKER + renderFakeCursor(" ");
 
 export const CREDS: SttCredentials = {
   environment: "test-env",

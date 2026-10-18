@@ -6,11 +6,10 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { parseColor } from "@earendil-works/pi-tui";
+import { parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
 import type { SessionOptions } from "../src/voice/client.js";
 import { VoiceError } from "../src/voice/errors.js";
-import { stripAnsi } from "../src/voice/ghost.js";
 import { startRefusal, VOICE_SHORTCUT, voiceMode } from "../src/voice/index.js";
 import { VOICE_STATUS_KEY } from "../src/voice/presenter.js";
 import { parentSession } from "./session.js";
@@ -292,7 +291,7 @@ const TAIL_MS = 400;
 
 /** The mounted editor's bottom row, as plain text: voice's own render when it carries the rule. */
 const bottomRow = (ed: ReturnType<typeof mountedEditor>, width = 72) =>
-  stripAnsi(ed.render(width).at(-1) ?? "");
+  stripTerminalSequences(ed.render(width).at(-1) ?? "");
 
 /** A TUI session with our editor mounted and focused, on fake timers. */
 async function mounted() {

@@ -9,7 +9,7 @@ import type {
   CustomEditor,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { parseColor } from "@earendil-works/pi-tui";
+import { parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import {
   createVoiceEditorClass,
@@ -17,9 +17,9 @@ import {
   type VoiceEditorLike,
   type VoiceEditorOptions,
 } from "../src/voice/editor.js";
-import { CURSOR_CELL, DRY_MS, stripAnsi } from "../src/voice/ghost.js";
+import { DRY_MS } from "../src/voice/ghost.js";
 import { FALLBACK_PALETTE, paintFor } from "../src/voice/palette.js";
-import { editorRows, keybindings, snap } from "./voice.js";
+import { CURSOR_CELL, editorRows, keybindings, snap } from "./voice.js";
 
 /** A minimal stand-in for pi-tui's Editor: [top rule, ...text rows, bottom rule], with the fake cursor at end of the cursor line. */
 class FakeEditor {
@@ -297,8 +297,10 @@ describe("bottom rule", () => {
     expect(editor.showRule(listening)).toBe(true);
     // the test's border marker takes visible columns, so give the hints room to stay
     const bottom = editor.render(120).at(-1) ?? "";
-    expect(stripAnsi(bottom)).toContain("● listening");
-    expect(stripAnsi(bottom)).toContain("enter keep · escape discard");
+    expect(stripTerminalSequences(bottom)).toContain("● listening");
+    expect(stripTerminalSequences(bottom)).toContain(
+      "enter keep · escape discard",
+    );
     // the rule cells are drawn through the editor's own border colour, never recoloured
     expect(bottom.startsWith("<──>")).toBe(true);
     expect(bottom.endsWith("<──>")).toBe(true);
@@ -310,7 +312,7 @@ describe("bottom rule", () => {
     editor.focused = false;
     expect(editor.showRule(listening)).toBe(false);
     const bottom = editor.render(120).at(-1) ?? "";
-    expect(stripAnsi(bottom)).not.toContain("listening");
+    expect(stripTerminalSequences(bottom)).not.toContain("listening");
   });
 
   test("an unbound binding draws no hint, rather than naming a key that isn't there", () => {
@@ -318,7 +320,7 @@ describe("bottom rule", () => {
     keys.setUserBindings({ "tui.select.cancel": [] });
     const editor = fresh("hello", { keys, clock: clock() });
     editor.showRule(listening);
-    const bottom = stripAnsi(editor.render(120).at(-1) ?? "");
+    const bottom = stripTerminalSequences(editor.render(120).at(-1) ?? "");
     expect(bottom).toContain("enter keep");
     expect(bottom).not.toContain("escape");
     expect(bottom).not.toContain("discard");

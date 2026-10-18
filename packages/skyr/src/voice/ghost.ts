@@ -7,11 +7,14 @@
  */
 import {
   type Color,
+  CURSOR_MARKER,
   colorToHex,
   colorToOklch,
   mixColors,
   oklchColor,
   parseColor,
+  renderFakeCursor,
+  stripTerminalSequences,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { sanitize } from "../tools/render.js";
@@ -57,16 +60,10 @@ const smooth = (x: number) => {
   return u * u * (3 - 2 * u);
 };
 
-const ANSI =
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape bytes are exactly what the pattern must name
-  /\x1b\[[\d;]*m|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b_[^\x07]*\x07/g;
-export const stripAnsi = (s: string) => s.replace(ANSI, "");
 const graphemes = new Intl.Segmenter();
 
-// pi-tui's fake-cursor cell exactly as a focused editor emits it at end of line:
-// CURSOR_MARKER + renderFakeCursor(" "). test/voice-ghost.test.ts re-derives it from the pinned copy.
-export const CURSOR_CELL = "\x1b_pi:c\x07\x1b_pi:fc\x07 \x1b_pi:/fc\x07";
-const CURSOR_MARKER = "\x1b_pi:c\x07";
+// what a focused editor draws for its cursor at the end of a line
+const CURSOR_CELL = CURSOR_MARKER + renderFakeCursor(" ");
 
 function wrapWords(text: string, first: number, rest: number): string[] {
   const out: string[] = [];
@@ -155,7 +152,7 @@ export function spliceGhost(
   const cursorRow = out[ci];
   // findIndex found the row, so it is present; `split` always yields a first element
   let before = cursorRow?.split(CURSOR_CELL)[0] ?? "";
-  const beforeText = stripAnsi(before);
+  const beforeText = stripTerminalSequences(before);
   const wet = drying.filter((s) => s.chars > 0 && s.age < DRY_MS);
   if (wet.length) {
     const start = wetStart(T.accent, T.text);
@@ -199,14 +196,14 @@ export function spliceGhost(
       return text.slice(0, i + 1) + tail;
     };
     const hasMarker = before.includes(CURSOR_MARKER);
-    const plain = stripAnsi(before);
+    const plain = stripTerminalSequences(before);
     before = paintTail(plain, 0) + (hasMarker ? CURSOR_MARKER : "");
     // older spans sit on the wrapped rows above; the space eaten at each wrap counts as one
     let d = Math.max(0, plain.length - paddingX) + 1;
     for (let i = ci - 1; i > topRule && d < reach; i--) {
       const row = out[i];
       if (row === undefined) break;
-      const text = stripAnsi(row).replace(/ +$/, "");
+      const text = stripTerminalSequences(row).replace(/ +$/, "");
       out[i] = paintTail(text, d) + pad(width - visibleWidth(text));
       d += Math.max(0, text.length - paddingX) + 1;
     }

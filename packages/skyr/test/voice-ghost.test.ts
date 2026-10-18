@@ -1,6 +1,6 @@
 /**
- * The ghost drawn into Pi's editor rows. `spliceGhost` anchors on `CURSOR_CELL` (pinned to
- * pi-tui in voice-pi-contract.test.ts), keeps every row within the width, and must never let
+ * The ghost drawn into Pi's editor rows. `spliceGhost` anchors on the cursor cell a focused
+ * editor draws, keeps every row within the width, and must never let
  * an escape byte inside transcription text reach the terminal. The palette it colours with is
  * the theme's own, pinned here too.
  */
@@ -9,22 +9,18 @@ import {
   colorToOklch,
   parseColor,
   rgbColor,
+  stripTerminalSequences,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
-import {
-  CURSOR_CELL,
-  DRY_MS,
-  spliceGhost,
-  stripAnsi,
-} from "../src/voice/ghost.js";
+import { DRY_MS, spliceGhost } from "../src/voice/ghost.js";
 import {
   FALLBACK_PALETTE,
   paintFor,
   paletteFromTheme,
   type VoiceMode,
 } from "../src/voice/palette.js";
-import { editorRows } from "./voice.js";
+import { CURSOR_CELL, editorRows } from "./voice.js";
 
 const T = FALLBACK_PALETTE;
 /** The fallback paint in a given mode, as the old `palette`/`mode` pair read. */
@@ -54,7 +50,7 @@ test("the ghost lands right after the cursor cell, on the cursor's own row", () 
   expect(row.startsWith(`  hello${CURSOR_CELL}`)).toBe(true);
   // the cursor cell's own space renders as the caret's blank column right after "hello",
   // so the visible text is the buffer, the caret, then the ghost's leading space
-  expect(stripAnsi(row).startsWith("  hello  world")).toBe(true);
+  expect(stripTerminalSequences(row).startsWith("  hello  world")).toBe(true);
   expect(visibleWidth(row)).toBe(40);
 });
 
@@ -76,9 +72,9 @@ test("a ghost too wide for the cursor row wraps below it and never passes the bo
   for (let i = mi + 1; i < botRule; i++) expect(lines[i]).toContain("\x1b[3m");
   expect(lines[botRule]).toBe("─".repeat(width));
   // no word of the ghost is lost, though it may be re-wrapped in order
-  expect(stripAnsi(lines.join("\n")).replace(/\s+/g, "")).toContain(
-    "onetwothreefourfive",
-  );
+  expect(
+    stripTerminalSequences(lines.join("\n")).replace(/\s+/g, ""),
+  ).toContain("onetwothreefourfive");
 });
 
 test("a cursor row with room only in the padding still keeps every row within width", () => {
@@ -112,7 +108,9 @@ test("escape bytes in the ghost text never reach any rendered row", () => {
   expect(all).not.toContain("\x1b[31m");
   expect(all).not.toContain("\x1b[0m");
   expect(all).not.toContain("_pi:evil");
-  expect(stripAnsi(all).replace(/\s+/g, "")).toContain("hiredtail");
+  expect(stripTerminalSequences(all).replace(/\s+/g, "")).toContain(
+    "hiredtail",
+  );
 });
 
 test("a newline or tab in the ghost never reaches a row: the ghost is one display line", () => {
@@ -125,7 +123,9 @@ test("a newline or tab in the ghost never reaches a row: the ghost is one displa
     expect(line).not.toMatch(/[\n\t]/);
     expect(visibleWidth(line)).toBe(30);
   }
-  expect(stripAnsi(lines.join(" "))).toContain("first line second third");
+  expect(stripTerminalSequences(lines.join(" "))).toContain(
+    "first line second third",
+  );
 });
 
 test("an editor without the cursor cell draws no ghost and no wet colouring", () => {
@@ -268,7 +268,7 @@ test("two finals landing 100 ms apart dry on their own clocks, and the space bet
   expect(runs.map((r) => r.text)).toEqual(["one", "two"]);
   // the older span is further along its dry than the newer one, not snapped to either end
   expect(runs[0]?.rgb).not.toBe(runs[1]?.rgb);
-  expect(stripAnsi(row).startsWith("one two")).toBe(true);
+  expect(stripTerminalSequences(row).startsWith("one two")).toBe(true);
   expect(row).toContain("\x1b[39m \x1b[38;2;");
 });
 

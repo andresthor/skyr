@@ -4,12 +4,8 @@
  * editor's bottom rule while our editor is on screen, and the footer status row only when it
  * is not (another extension owns the editor, or a card hides it).
  */
-import {
-  renderStatus,
-  type VoiceMode,
-  type VoicePalette,
-  type VoiceSnapshot,
-} from "./indicator.js";
+import { renderStatus, type VoiceSnapshot } from "./indicator.js";
+import type { VoiceMode, VoicePalette } from "./palette.js";
 
 /** The status key the presenter claims in pi's footer; unrelated extensions stay unnamed. */
 export const VOICE_STATUS_KEY = "voice";

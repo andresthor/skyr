@@ -17,16 +17,13 @@ import type {
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { DictationSink } from "./dictation.js";
+import { DRY_MS, spliceGhost } from "./ghost.js";
+import { renderRule, type VoiceKeys, type VoiceSnapshot } from "./indicator.js";
 import {
-  DRY_MS,
   FALLBACK_PALETTE,
-  renderRule,
-  spliceGhost,
-  type VoiceKeys,
   type VoiceMode,
   type VoicePalette,
-  type VoiceSnapshot,
-} from "./indicator.js";
+} from "./palette.js";
 
 /** The text to insert so a segment reads naturally between what is before and after the cursor. */
 function spacedSegment(before: string, after: string, segment: string): string {

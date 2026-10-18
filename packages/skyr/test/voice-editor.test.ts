@@ -11,13 +11,8 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "../src/voice/editor.js";
-import {
-  CURSOR_CELL,
-  DRY_MS,
-  FALLBACK_PALETTE,
-  stripAnsi,
-  type VoicePalette,
-} from "../src/voice/indicator.js";
+import { CURSOR_CELL, DRY_MS, stripAnsi } from "../src/voice/ghost.js";
+import { FALLBACK_PALETTE, type VoicePalette } from "../src/voice/palette.js";
 import { editorRows, keybindings, snap } from "./voice.js";
 
 /** A minimal stand-in for pi-tui's Editor: [top rule, ...text rows, bottom rule], with the fake cursor at end of the cursor line. */

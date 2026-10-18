@@ -5,11 +5,9 @@
  */
 import { parseColor, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
-import {
-  FALLBACK_PALETTE,
-  renderStatus,
-  stripAnsi,
-} from "../src/voice/indicator.js";
+import { stripAnsi } from "../src/voice/ghost.js";
+import { renderStatus } from "../src/voice/indicator.js";
+import { FALLBACK_PALETTE } from "../src/voice/palette.js";
 import {
   type RuleEditor,
   VOICE_STATUS_KEY,

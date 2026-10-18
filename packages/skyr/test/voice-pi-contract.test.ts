@@ -8,8 +8,8 @@ import {
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { createVoiceEditorClass } from "../src/voice/editor.js";
+import { CURSOR_CELL, stripAnsi } from "../src/voice/ghost.js";
 import { VOICE_SHORTCUT } from "../src/voice/index.js";
-import { CURSOR_CELL, stripAnsi } from "../src/voice/indicator.js";
 import { keybindings, snap } from "./voice.js";
 
 /** A real Pi editor, focused, with voice's subclass on top. */

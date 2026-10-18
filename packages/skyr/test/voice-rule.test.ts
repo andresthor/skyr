@@ -6,14 +6,13 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { SPEECH_DBFS } from "../src/voice/dictation.js";
+import { stripAnsi } from "../src/voice/ghost.js";
 import {
-  FALLBACK_PALETTE,
   meterUnit,
   renderRule,
-  stripAnsi,
-  type VoiceMode,
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
+import { FALLBACK_PALETTE, type VoiceMode } from "../src/voice/palette.js";
 import { HINT_KEYS, snap } from "./voice.js";
 
 const rule = (s: string) => s;

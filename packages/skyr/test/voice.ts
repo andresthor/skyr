@@ -14,9 +14,9 @@ import { registerSkyr } from "../src/index.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
 import { DEFAULT_TIMING } from "../src/voice/dictation.js";
 import type { createVoiceEditorClass } from "../src/voice/editor.js";
+import { CURSOR_CELL } from "../src/voice/ghost.js";
 import { registerVoice, type VoiceOptions } from "../src/voice/index.js";
 import {
-  CURSOR_CELL,
   meterUnit,
   type VoiceKeys,
   type VoiceSnapshot,

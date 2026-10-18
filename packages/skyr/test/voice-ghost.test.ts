@@ -1,7 +1,8 @@
 /**
  * The ghost drawn into Pi's editor rows. `spliceGhost` anchors on `CURSOR_CELL` (pinned to
  * pi-tui in voice-pi-contract.test.ts), keeps every row within the width, and must never let
- * an escape byte inside transcription text reach the terminal.
+ * an escape byte inside transcription text reach the terminal. The palette it colours with is
+ * the theme's own, pinned here too.
  */
 
 import {
@@ -14,11 +15,10 @@ import { expect, test } from "vitest";
 import {
   CURSOR_CELL,
   DRY_MS,
-  FALLBACK_PALETTE,
-  paletteFromTheme,
   spliceGhost,
   stripAnsi,
-} from "../src/voice/indicator.js";
+} from "../src/voice/ghost.js";
+import { FALLBACK_PALETTE, paletteFromTheme } from "../src/voice/palette.js";
 import { editorRows } from "./voice.js";
 
 const T = FALLBACK_PALETTE;

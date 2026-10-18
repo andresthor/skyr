@@ -32,15 +32,14 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
+import { DRY_MS } from "./ghost.js";
 import {
   createLevelHistory,
-  DRY_MS,
   meterUnit,
-  paletteFromTheme,
   TICK_MS,
-  type VoiceMode,
   type VoiceSnapshot,
 } from "./indicator.js";
+import { paletteFromTheme, type VoiceMode } from "./palette.js";
 import { type VoicePresenter, voicePresenter } from "./presenter.js";
 
 export const VOICE_SHORTCUT = "ctrl+space";

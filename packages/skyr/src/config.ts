@@ -6,7 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { clip, errnoOf } from "./tools/render.js";
+import { clip, errnoOf, quoted } from "./tools/render.js";
 
 /** One key per module that reads the file; a section is added with the code that reads it. */
 const SECTIONS = ["voice"] as const;
@@ -33,7 +33,9 @@ export function readSkyrFile(agentDir: string): SkyrFile {
     // the errno only: the message would repeat the agent-dir path the user knows
     return {
       data: {},
-      problems: [`skyr.json: can't read (${errnoOf(error)}); using defaults`],
+      problems: [
+        `skyr.json: can't read (${errnoOf(error) ?? "error"}); using defaults`,
+      ],
     };
   }
   let parsed: unknown;
@@ -59,7 +61,7 @@ export function readSkyrFile(agentDir: string): SkyrFile {
   for (const [key, value] of Object.entries(parsed)) {
     if (!(SECTIONS as readonly string[]).includes(key)) {
       problems.push(
-        `skyr.json: ${JSON.stringify(clip(key, 40))} is not a section; ignored (sections: ${SECTIONS.join(", ")})`,
+        `skyr.json: ${quoted(key, 40)} is not a section; ignored (sections: ${SECTIONS.join(", ")})`,
       );
       continue;
     }

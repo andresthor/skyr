@@ -5,13 +5,10 @@
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { basename } from "node:path";
 import { PassThrough, type Readable } from "node:stream";
-import {
-  micFailed,
-  recorderExited,
-  recorderSpawnFailed,
-  soxMissing,
-} from "./errors.js";
+import { errnoOf } from "../tools/render.js";
+import { micFailed, VoiceError } from "./errors.js";
 
 /** The capture format everything else derives: chunk arithmetic, the speech gate, the PCM string. */
 export const SAMPLE_RATE_HZ = 16_000;
@@ -71,7 +68,9 @@ function findBinary(bin: string): string | undefined {
 export function micSource(): Readable {
   const rec = findBinary("rec");
   const recorder = rec || findBinary("ffmpeg");
-  if (recorder === undefined) throw soxMissing();
+  // ffmpeg works too, but only on macOS, so the hint names sox
+  if (recorder === undefined)
+    throw new VoiceError("sox not found · brew install sox");
   const [cmd, args] =
     recorder === rec ? [recorder, REC_ARGS] : [recorder, FFMPEG_ARGS];
 
@@ -82,12 +81,22 @@ export function micSource(): Readable {
   let stopped = false;
   child.stdout?.pipe(out);
   child.on("error", (error: unknown) =>
-    out.destroy(recorderSpawnFailed(cmd, error)),
+    out.destroy(
+      new VoiceError(
+        `can't start ${basename(cmd)} (${errnoOf(error) ?? "error"})`,
+      ),
+    ),
   );
   child.on("exit", (code) => {
     // a signal, not a status code, leaves nothing to name
     if (!stopped && code !== 0)
-      out.destroy(code === null ? micFailed() : recorderExited(cmd, code));
+      out.destroy(
+        code === null
+          ? micFailed()
+          : new VoiceError(
+              `microphone unavailable (${basename(cmd)} exited ${code})`,
+            ),
+      );
   });
   const destroy = out.destroy.bind(out);
   out.destroy = (err?: Error) => {

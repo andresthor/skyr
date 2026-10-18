@@ -18,13 +18,14 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { readSkyrFile } from "../config.js";
 import { loadPi } from "../pi.js";
+import { quoted } from "../tools/render.js";
 import { prewarmToken } from "./client.js";
 import {
   mergeVocabulary,
   parseVoiceSection,
   type VoiceConfig,
 } from "./config.js";
-import { resolveSttCredentials } from "./credentials.js";
+import { credentialsNotice, resolveSttCredentials } from "./credentials.js";
 import {
   DictationController,
   type DictationControllerOptions,
@@ -35,7 +36,6 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
-import { credentialsNotice, startBlocked, unknownVoiceArg } from "./errors.js";
 import {
   createLevelHistory,
   meterUnit,
@@ -98,7 +98,7 @@ function startRefusal(
 ): string | undefined {
   if (active) return undefined;
   if (!editor || editor.focused) return undefined;
-  return startBlocked(VOICE_SHORTCUT);
+  return `voice: a card or selector has the keyboard; close it, then press ${VOICE_SHORTCUT} again`;
 }
 
 type EditorFactory = Parameters<ExtensionUIContext["setEditorComponent"]>[0];
@@ -262,7 +262,11 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       else if (arg === "on") {
         if (!controller.active) toggle(ctx);
       } else if (arg === "") toggle(ctx);
-      else ctx.ui.notify(unknownVoiceArg(arg), "warning");
+      else
+        ctx.ui.notify(
+          `voice: ${quoted(arg, 20)} is not an option; use /voice, /voice on or /voice off`,
+          "warning",
+        );
     },
   });
 

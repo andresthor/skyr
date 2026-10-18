@@ -15,7 +15,7 @@ import {
 } from "../src/voice/client.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
 import { DEFAULT_TIMING } from "../src/voice/dictation.js";
-import { soxMissing } from "../src/voice/errors.js";
+import { VoiceError } from "../src/voice/errors.js";
 import { CREDS } from "./voice.js";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -625,7 +625,7 @@ test("a recorder that fails with its own reason reports that reason", async () =
     creds: creds(),
     language: "en",
     source: () => {
-      throw soxMissing();
+      throw new VoiceError("sox not found · brew install sox");
     },
     onInterim: () => {},
     onFinal: () => {},

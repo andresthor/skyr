@@ -43,3 +43,23 @@ export function resolveSttCredentials(
   if (!/^[\w.-]+$/.test(tenant)) return { invalid: "CORTI_TENANT_NAME" };
   return { creds: { environment, tenant, clientId, clientSecret } };
 }
+
+/** What each checkable variable must look like, for the notice that names an invalid one. */
+const CRED_FORMS: Record<string, string> = {
+  CORTI_ENVIRONMENT: 'letters, digits or "-"',
+  CORTI_TENANT_NAME: 'letters, digits, "_", "." or "-"',
+};
+
+/** The stub's one line, naming only the variable that kept voice from registering. */
+export function credentialsNotice(
+  from: Exclude<CredentialResult, { creds: SttCredentials }>,
+): string {
+  if ("missing" in from) {
+    // en-GB: no comma before "and"
+    const listed = new Intl.ListFormat("en-GB", { type: "conjunction" }).format(
+      from.missing,
+    );
+    return `voice: set ${listed} to dictate`;
+  }
+  return `voice: ${from.invalid} must be ${CRED_FORMS[from.invalid]}; voice is off`;
+}

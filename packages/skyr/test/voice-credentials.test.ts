@@ -4,8 +4,10 @@
  * corti.app must leave voice unregistered — named as invalid, never told to be "set".
  */
 import { describe, expect, test } from "vitest";
-import { resolveSttCredentials } from "../src/voice/credentials.js";
-import { credentialsNotice } from "../src/voice/errors.js";
+import {
+  credentialsNotice,
+  resolveSttCredentials,
+} from "../src/voice/credentials.js";
 import { CREDS } from "./voice.js";
 
 const ENV = {

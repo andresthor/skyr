@@ -7,7 +7,14 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { redactUrl, withTimeout } from "./net.js";
-import { elapsed, errorRow, sanitize, took, toolRow } from "./render.js";
+import {
+  elapsed,
+  errorRow,
+  oneLine,
+  sanitize,
+  took,
+  toolRow,
+} from "./render.js";
 
 const TIMEOUT_MS = 15_000;
 const DEFAULT_RESULTS = 8;
@@ -17,6 +24,7 @@ const SNIPPET_CHARS = 500;
 const MAX_BODY_BYTES = 1024 * 1024;
 const TITLE_CHARS = 300;
 const URL_CHARS = 500;
+const VENDOR_CHARS = 200;
 
 const CHAIN = ["tavily", "exa", "parallel"] as const;
 
@@ -78,16 +86,10 @@ class KeyRejectedError extends Error {
 const RATE_LIMITED = new Set([429, 432, 433]);
 const RATE_LIMIT = /rate.?limit/i;
 
-/** Vendor-written text bound for a thrown message: one clean line, kept short. */
-function vendorText(text: string): string {
-  const line = sanitize(text).trim();
-  return line.length <= 200 ? line : `${line.slice(0, 200)}…`;
-}
-
 function vendorError(provider: Provider, text: string): ProviderError {
   return RATE_LIMIT.test(text)
     ? new ProviderError(provider, "rate-limited", true)
-    : new ProviderError(provider, vendorText(text));
+    : new ProviderError(provider, oneLine(text, VENDOR_CHARS));
 }
 
 /** The message in a JSON error body, as Tavily (`detail.error`) and Parallel (`message`) send it. */
@@ -182,7 +184,7 @@ async function request(
   const message = errorMessage(body);
   if (RATE_LIMITED.has(res.status) || RATE_LIMIT.test(message))
     throw new ProviderError(provider, "rate-limited", true);
-  const detail = message ? `: ${vendorText(message)}` : "";
+  const detail = message ? `: ${oneLine(message, VENDOR_CHARS)}` : "";
   throw new ProviderError(
     provider,
     `HTTP ${res.status} from ${redactUrl(URLS[provider])}${detail}`,

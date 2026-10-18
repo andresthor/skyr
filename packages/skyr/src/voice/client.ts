@@ -6,22 +6,9 @@
  */
 import type { Readable } from "node:stream";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { stripInvisible } from "../tools/render.js";
+import { errnoOf, oneLine, stripInvisible } from "../tools/render.js";
 import type { SttCredentials } from "./credentials.js";
-import {
-  connectionLost,
-  cortiError,
-  credentialsRefused,
-  internalError,
-  micFailed,
-  settingsRefused,
-  signInFailed,
-  signInNoAnswer,
-  signInUnreachable,
-  signInUnreadable,
-  unknownTenant,
-  VoiceError,
-} from "./errors.js";
+import { micFailed, VoiceError } from "./errors.js";
 import { pcmRms, SAMPLE_RATE_HZ } from "./mic.js";
 
 const PCM = `audio/pcm; rate=${SAMPLE_RATE_HZ}; channels=1; bits=16; endian=little; encoding=sint`;
@@ -29,6 +16,8 @@ const PCM = `audio/pcm; rate=${SAMPLE_RATE_HZ}; channels=1; bits=16; endian=litt
 const CHUNK_BYTES = 8_000;
 /** Past this after `end` the caller keeps the last interim; flushing on quiet usually has the final in already. */
 const END_TIMEOUT_MS = 2_500;
+/** How much of Corti's own reason an error line carries. */
+const REASON_CHARS = 40;
 
 /** A frame field read as Corti documents it, or undefined; frames are untrusted input. */
 const str = (v: unknown) => (typeof v === "string" ? v : undefined);
@@ -92,6 +81,18 @@ export const TOKEN_TIMEOUT_MS = 8_000;
 /** A token this close to expiry is not worth starting a session on. */
 const TOKEN_MARGIN_S = 60;
 
+/** Sign-in could not reach auth: ENOTFOUND is usually a mistyped environment, so name the fix. */
+function signInUnreachable(error: unknown): VoiceError {
+  const code = errnoOf(error);
+  if (code === "ENOTFOUND")
+    return new VoiceError(
+      "can't reach Corti (ENOTFOUND) · check CORTI_ENVIRONMENT",
+    );
+  return new VoiceError(
+    code ? `can't reach Corti (${code})` : "can't reach Corti",
+  );
+}
+
 /** Seam for tests: global fetch offline, and a deadline a test can shorten. */
 export interface TokenDeps {
   fetch?: typeof fetch;
@@ -128,20 +129,25 @@ export async function getSttToken(
   } catch (error) {
     // AbortSignal.timeout rejects as a TimeoutError; every other failure is a reachability one
     throw error instanceof Error && error.name === "TimeoutError"
-      ? signInNoAnswer(timeoutMs)
+      ? new VoiceError(`Corti sign-in didn't answer in ${timeoutMs / 1000} s`)
       : signInUnreachable(error);
   }
   if (res.status === 400 || res.status === 401 || res.status === 403)
-    throw credentialsRefused();
-  if (res.status === 404) throw unknownTenant();
-  if (!res.ok) throw signInFailed(res.status);
+    throw new VoiceError(
+      "Corti refused the client · check CORTI_CLIENT_ID and CORTI_CLIENT_SECRET",
+    );
+  // Keycloak answers an unknown realm with 404, so a tenant typo reads as one
+  if (res.status === 404)
+    throw new VoiceError("unknown Corti tenant · check CORTI_TENANT_NAME");
+  if (!res.ok)
+    throw new VoiceError(`Corti sign-in failed (HTTP ${res.status})`);
   const body: unknown = await res.json().catch(() => undefined);
   const { access_token: token, expires_in: expiresIn } =
     typeof body === "object" && body !== null
       ? (body as Record<string, unknown>)
       : {};
   if (typeof token !== "string" || typeof expiresIn !== "number")
-    throw signInUnreadable();
+    throw new VoiceError("Corti sign-in sent an unreadable answer");
   // a token only has to be valid at connect time
   cached = {
     key,
@@ -218,7 +224,7 @@ export function startSession(o: SessionOptions): SttSession {
         fn(...a);
       } catch {
         try {
-          fail(internalError());
+          fail(new VoiceError("internal error"));
         } catch {} // onError itself threw: the session is already torn down, and a throw here would exit Pi
       }
     };
@@ -316,7 +322,12 @@ export function startSession(o: SessionOptions): SttSession {
           else pump();
         } else if (typeof m.type === "string" && m.type.startsWith("CONFIG_")) {
           // after CONFIG_DENIED the server holds the socket open until its 10 s timeout
-          fail(settingsRefused(str(m.reason)));
+          const reason = str(m.reason);
+          fail(
+            new VoiceError(
+              `Corti refused the settings · check skyr.json voice${reason ? `: ${oneLine(reason, REASON_CHARS)}` : ""}`,
+            ),
+          );
         } else if (m.type === "transcript") {
           const data = transcriptData(m.data);
           if (!data) return;
@@ -329,7 +340,12 @@ export function startSession(o: SessionOptions): SttSession {
             o.onInterim(text);
           }
         } else if (m.type === "error") {
-          fail(cortiError(str(m.reason) ?? str(m.error)));
+          const reason = str(m.reason) ?? str(m.error);
+          fail(
+            new VoiceError(
+              `Corti error${reason ? `: ${oneLine(reason, REASON_CHARS)}` : ""}`,
+            ),
+          );
         } else if (m.type === "ended") {
           ended = true;
           teardown();
@@ -337,7 +353,9 @@ export function startSession(o: SessionOptions): SttSession {
       });
       // the server drops TCP (1006) right after "ended"; that close is success
       ws.onclose = guard(() =>
-        ended || (stopping && accepted) ? teardown() : fail(connectionLost()),
+        ended || (stopping && accepted)
+          ? teardown()
+          : fail(new VoiceError("connection to Corti lost")),
       );
       // every error is followed by close, which reports it
       ws.onerror = () => {};

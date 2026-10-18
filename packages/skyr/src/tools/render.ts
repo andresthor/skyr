@@ -31,24 +31,34 @@ export function sanitize(raw: string): string {
   return stripInvisible(stripTerminalSequences(raw).replace(/\s+/g, " "));
 }
 
-/** Model-supplied text bound for an error message: its length is unbounded, so keep it readable. */
-/** The errno of a filesystem/DNS error ("ENOENT", …), "error" when it has none. */
-export function errnoOf(error: unknown): string {
-  const code =
-    typeof error === "object" && error !== null && "code" in error
-      ? error.code
-      : undefined;
-  return typeof code === "string" ? code : "error";
+/**
+ * The errno of a failed call ("ENOENT", …), or undefined when it has none. Looks down the cause
+ * chain too: undici wraps the real error (DNS, TLS) at a depth that varies by Node version, and
+ * groups some of them in `errors`.
+ */
+export function errnoOf(error: unknown): string | undefined {
+  for (let e: unknown = error, hops = 0; hops < 4; hops++) {
+    if (typeof e !== "object" || e === null) return undefined;
+    if ("code" in e && typeof e.code === "string") return e.code;
+    const wrapped = e as { cause?: unknown; errors?: unknown[] };
+    e = wrapped.cause ?? wrapped.errors?.[0];
+  }
+  return undefined;
 }
 
+/** Model-supplied text bound for an error message: its length is unbounded, so keep it readable. */
 export function clip(text: string, max = 120): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
 /** Server- or vendor-written text bound for a one-line message: sanitized, trimmed, clipped. */
-export function oneLine(text: string, max = 120): string {
-  const line = sanitize(text).trim();
-  return line.length <= max ? line : `${line.slice(0, max)}…`;
+export function oneLine(text: string, max: number): string {
+  return clip(sanitize(text).trim(), max);
+}
+
+/** Echoed user input in a message: clipped, then JSON-quoted, so C0 controls, quotes and backslashes show as escapes. */
+export function quoted(text: string, max: number): string {
+  return JSON.stringify(clip(text, max));
 }
 
 export function toolRow(theme: Theme, segments: Segment[]): TruncatedText {

@@ -69,7 +69,7 @@ async function resolveHost(
   } catch (error: unknown) {
     // ENOTFOUND reads as a typo and EAI_AGAIN as a transient fault, so keep the code. Not the
     // message: it repeats the host, which doubles the width of the row.
-    const detail = ` (${errnoOf(error)})`;
+    const detail = ` (${errnoOf(error) ?? "error"})`;
     throw new Error(`web_fetch: could not resolve ${host}${detail}`);
   }
 }

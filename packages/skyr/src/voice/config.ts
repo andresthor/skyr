@@ -8,7 +8,7 @@
  * replacements differing only in case are CONFIG_DENIED — this validator owns that rule.
  */
 
-import { clip } from "../tools/render.js";
+import { quoted } from "../tools/render.js";
 import type { Replacement, SttConfig } from "./client.js";
 
 /** Case-sensitive written forms; Corti caps each at 50 chars / 5 words. */
@@ -76,11 +76,9 @@ const REPLACEMENT_CHARS = 100;
 const REPLACEMENT_WORDS = 10;
 /** Corti takes 1,000 terms per connection; the built-ins are sent too, so user entries leave room. */
 const MAX_TERMS = 1_000;
+/** How much of an echoed entry a problem line quotes. */
+const ECHO_CHARS = 40;
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
-
-/** Echoes a failed string into a problem string without flooding one: clipped, and quoted so
- * anything the terminal would read as control text shows as its escape instead. */
-const quoted = (s: string) => JSON.stringify(clip(s, 40));
 
 /** One reported problem: the `skyr.json:` prefix and the path stay in the caller. */
 type Problem = (path: string, msg: string) => void;
@@ -104,14 +102,14 @@ function parseKeyterms(raw: unknown, problem: Problem): string[] {
     if (term.length > KEYTERM_CHARS) {
       problem(
         `keyterms[${i}]`,
-        `${quoted(term)} is over ${KEYTERM_CHARS} characters; dropped`,
+        `${quoted(term, ECHO_CHARS)} is over ${KEYTERM_CHARS} characters; dropped`,
       );
       continue;
     }
     if (words(term) > KEYTERM_WORDS) {
       problem(
         `keyterms[${i}]`,
-        `${quoted(term)} is over ${KEYTERM_WORDS} words; dropped`,
+        `${quoted(term, ECHO_CHARS)} is over ${KEYTERM_WORDS} words; dropped`,
       );
       continue;
     }
@@ -157,7 +155,7 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
     if (overChars) {
       problem(
         `replacements[${i}].${overChars}`,
-        `${quoted(sides[overChars])} is over ${REPLACEMENT_CHARS} characters; dropped`,
+        `${quoted(sides[overChars], ECHO_CHARS)} is over ${REPLACEMENT_CHARS} characters; dropped`,
       );
       continue;
     }
@@ -167,7 +165,7 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
     if (overWords) {
       problem(
         `replacements[${i}].${overWords}`,
-        `${quoted(sides[overWords])} is over ${REPLACEMENT_WORDS} words; dropped`,
+        `${quoted(sides[overWords], ECHO_CHARS)} is over ${REPLACEMENT_WORDS} words; dropped`,
       );
       continue;
     }
@@ -176,7 +174,7 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
     if (seen.has(key)) {
       problem(
         `replacements[${i}]`,
-        `repeats the find ${quoted(find)} (ignoring case); dropped`,
+        `repeats the find ${quoted(find, ECHO_CHARS)} (ignoring case); dropped`,
       );
       continue;
     }

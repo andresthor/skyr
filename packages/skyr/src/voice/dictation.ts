@@ -23,15 +23,7 @@ import {
 } from "./client.js";
 import { VOICE_DEFAULTS } from "./config.js";
 import type { SttCredentials } from "./credentials.js";
-import {
-  micBlocked,
-  micStopped,
-  noAnswer,
-  noSpeech,
-  noWords,
-  type VoiceError,
-  wordsKept,
-} from "./errors.js";
+import { VoiceError } from "./errors.js";
 import { dbfs, FULL_SCALE, micSource } from "./mic.js";
 
 export type VoiceState =
@@ -227,11 +219,7 @@ export class DictationController {
       d.session.cancel();
       this.end(d);
       this.setState("idle");
-      // guarded like the drain: this runs from the key hook, whose caller crashes Pi
-      // on a throw rather than reporting it — idle is up, nothing is stranded
-      try {
-        this.o.sink.end();
-      } catch {}
+      this.toSink((sink) => sink.end());
       return;
     }
     if (d.flush) this.cancelTimer(d, d.flush);
@@ -240,20 +228,11 @@ export class DictationController {
       d.mic = "closed";
       d.session.stop().then(() => {
         if (d !== this.d) return;
-        if (!kept(d)) return this.fail(d, noWords());
-        // settled before the sink runs, and a sink throw has nowhere to go
-        // but an unhandled rejection: the promise chain ends here
+        if (!kept(d))
+          return this.fail(d, new VoiceError("no words recognised"));
         this.end(d);
         this.setState("idle");
-        // guarded one by one: idle is up, and this promise chain has no caller left to
-        // report a throw to — escaping here would be an unhandled rejection
-        try {
-          // a segment whose final never came is still better kept than lost
-          if (d.interim) this.o.sink.final(d.interim);
-        } catch {}
-        try {
-          this.o.sink.end();
-        } catch {}
+        this.release(d);
       });
     });
   }
@@ -264,17 +243,10 @@ export class DictationController {
     if (!d) return;
     d.session.cancel();
     this.end(d);
-    // guarded one by one: the key hook's caller crashes Pi on a throw, and a broken end
-    // must not stop the buffer going back
-    try {
-      this.o.sink.end();
-    } catch {}
-    let reverted = false;
-    try {
-      // true means committed words went; their undo offer is the notice for that
-      reverted = this.o.sink.revert();
-    } catch {}
-    if (reverted) this.held("discarded", this.timing.discardHoldMs);
+    this.toSink((sink) => sink.end());
+    // true means committed words went; their undo offer is the notice for that
+    if (this.toSink((sink) => sink.revert()))
+      this.held("discarded", this.timing.discardHoldMs);
     else this.setState("idle");
   }
 
@@ -315,7 +287,12 @@ export class DictationController {
           // from acceptance, not start: silence while Corti connects is Corti's delay, not the user's
           this.later(d, this.timing.noSpeechMs, () => {
             if (capturing(this.curState) && !d.heard)
-              this.fail(d, noSpeech(this.timing.noSpeechMs));
+              this.fail(
+                d,
+                new VoiceError(
+                  `no speech in ${this.timing.noSpeechMs / 1000} s`,
+                ),
+              );
           });
         },
         onInterim: (segment) => {
@@ -349,7 +326,12 @@ export class DictationController {
     this.setState("arming");
     this.later(d, this.timing.armTimeoutMs, () => {
       if (d.acceptedAt === undefined)
-        this.fail(d, noAnswer(this.timing.armTimeoutMs));
+        this.fail(
+          d,
+          new VoiceError(
+            `Corti didn't answer in ${this.timing.armTimeoutMs / 1000} s`,
+          ),
+        );
     });
     this.later(d, this.timing.maxMs, () => {
       if (this.curState === "listening") this.finish();
@@ -369,12 +351,17 @@ export class DictationController {
       // after a long block the timer can run before queued chunks are read; one turn lets them land
       setImmediate(() => {
         if (capturing(this.curState) && Date.now() - d.lastChunkAt >= stallMs)
-          this.fail(d, micStopped());
+          this.fail(d, new VoiceError("microphone stopped"));
       }),
     );
     if (rms === 0) {
       if (++d.zeroChunks >= ZERO_CHUNKS_BLOCKED && !d.heard)
-        this.fail(d, micBlocked());
+        this.fail(
+          d,
+          new VoiceError(
+            "microphone blocked · allow it in System Settings › Privacy",
+          ),
+        );
       return;
     }
     d.zeroChunks = Number.NEGATIVE_INFINITY;
@@ -392,18 +379,28 @@ export class DictationController {
     if (d !== this.d) return;
     d.session.cancel();
     this.end(d);
-    // settled before the sink runs: a broken editor must not strand a live dictation,
-    // and a throw here would exit Pi, because fail is also called from timers
-    this.message = kept(d) ? wordsKept(err.message) : err.message;
+    this.message = kept(d) ? `${err.message} · words kept` : err.message;
     this.held("error", this.timing.errorHoldMs);
-    // guarded one by one: the error line is already up, and a throw here would
-    // exit Pi, because fail is also called from timers
+    this.release(d);
+  }
+
+  /** After d ended: commits the interim whose final never came, kept rather than lost, then ends the sink. */
+  private release(d: Dictation): void {
+    if (d.interim) this.toSink((sink) => sink.final(d.interim));
+    this.toSink((sink) => sink.end());
+  }
+
+  /**
+   * One sink call, its throw swallowed: callers run from the key hook, timers and promise ends,
+   * where a throw exits Pi or goes unhandled. Each runs after `end(d)`, so a broken editor
+   * strands no live dictation; each sink effect gets its own call, so one throw skips no other.
+   */
+  private toSink<T>(call: (sink: DictationSink) => T): T | undefined {
     try {
-      if (d.interim) this.o.sink.final(d.interim);
-    } catch {}
-    try {
-      this.o.sink.end();
-    } catch {}
+      return call(this.o.sink);
+    } catch {
+      return undefined;
+    }
   }
 
   /** From here on, no timer of d's fires and no callback of d's has any effect. */

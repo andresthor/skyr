@@ -2,6 +2,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { loadPi } from "../pi.js";
+import { errnoOf } from "../tools/render.js";
 
 export interface AgentDef {
   name: string;
@@ -131,9 +132,9 @@ async function loadDir(
   try {
     entries = await readdir(dir);
   } catch (error: unknown) {
-    const code = error instanceof Error && "code" in error ? error.code : "";
+    const code = errnoOf(error);
     if (code !== "ENOENT")
-      errors.push(`cannot read agent dir ${dir} (${String(code)})`);
+      errors.push(`cannot read agent dir ${dir} (${code ?? ""})`);
     return agents;
   }
   for (const entry of entries.filter((e) => e.endsWith(".md")).sort()) {

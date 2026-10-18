@@ -16,7 +16,9 @@ import { type Static, Type } from "typebox";
 import { loadPi } from "../pi.js";
 import {
   clip,
+  errnoOf,
   errorRow,
+  quoted,
   type Segment,
   sanitize,
   seconds,
@@ -166,17 +168,6 @@ const fail = (detail: string, cause?: unknown) =>
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
-
-/** The errno of a filesystem error ("ENOENT", …), "fs error" when it has none. */
-const errnoOf = (error: unknown): string => {
-  const code =
-    typeof error === "object" &&
-    error !== null &&
-    typeof (error as { code?: unknown }).code === "string"
-      ? (error as { code: string }).code
-      : undefined;
-  return code ?? "fs error";
-};
 
 /** The directory where one session's child sessions live, next to the parent's .jsonl. */
 function childSessionDir(parentFile: string | undefined): string | undefined {
@@ -345,7 +336,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       parentKey = realpathSync(ctx.cwd);
     } catch (error: unknown) {
       throw fail(
-        `the working directory ${ctx.cwd} does not resolve (${errnoOf(error)}); tell the user to restart Pi in an existing directory`,
+        `the working directory ${ctx.cwd} does not resolve (${errnoOf(error) ?? "fs error"}); tell the user to restart Pi in an existing directory`,
       );
     }
     const message = `pass an existing directory, absolute or relative to ${ctx.cwd}`;
@@ -355,7 +346,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       key = realpathSync(cwd);
     } catch (error: unknown) {
       throw fail(
-        `cwd ${JSON.stringify(clip(params.cwd ?? "."))} does not resolve (${errnoOf(error)}) (looked at ${clip(cwd)}); ${message}`,
+        `cwd ${quoted(params.cwd ?? ".", 120)} does not resolve (${errnoOf(error) ?? "fs error"}) (looked at ${clip(cwd)}); ${message}`,
       );
     }
     // A broken entry cannot survive a successful realpath, so undefined means the directory
@@ -363,11 +354,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
     const entry = statSync(key, { throwIfNoEntry: false });
     if (entry === undefined)
       throw fail(
-        `cwd ${JSON.stringify(clip(params.cwd ?? "."))} no longer exists (looked at ${clip(key)}); ${message}`,
+        `cwd ${quoted(params.cwd ?? ".", 120)} no longer exists (looked at ${clip(key)}); ${message}`,
       );
     if (!entry.isDirectory())
       throw fail(
-        `cwd ${JSON.stringify(clip(params.cwd ?? "."))} is not a directory (looked at ${clip(key)}); ${message}`,
+        `cwd ${quoted(params.cwd ?? ".", 120)} is not a directory (looked at ${clip(key)}); ${message}`,
       );
     const writer = tools.includes("edit") || tools.includes("write");
     let worktree: WorktreePlan | undefined;

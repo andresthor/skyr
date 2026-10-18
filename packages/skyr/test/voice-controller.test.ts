@@ -402,7 +402,7 @@ test("a drain that outlasts the stall window is not a dead mic: the mic closed o
   expect(h.states).not.toContain("error");
 });
 
-test("the time left before the cap counts from this dictation's start, by the controller's own clock", async () => {
+test("the time left before the cap counts from this dictation's start", async () => {
   const h = harness();
   h.controller.toggle();
   expect(h.controller.capLeftMs).toBe(TIMING.maxMs);

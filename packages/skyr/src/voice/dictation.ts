@@ -99,7 +99,6 @@ export interface DictationControllerOptions {
   source?: () => Readable;
   timing?: Partial<DictationTiming>;
   start?: (o: SessionOptions) => SttSession;
-  now?: () => number;
 }
 
 export class DictationController {
@@ -112,7 +111,6 @@ export class DictationController {
 
   private session: SttSession | undefined;
   private readonly timing: DictationTiming;
-  private readonly now: () => number;
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private quietStartTimer: ReturnType<typeof setTimeout> | undefined;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -128,7 +126,6 @@ export class DictationController {
 
   constructor(private readonly o: DictationControllerOptions) {
     this.timing = { ...DEFAULT_TIMING, ...o.timing };
-    this.now = o.now ?? Date.now;
   }
 
   /** The recorder is delivering audio: from its first chunk until the stop that ends the tail. */
@@ -141,9 +138,9 @@ export class DictationController {
     return this.sessionAccepted;
   }
 
-  /** ms since this dictation started, on the controller's own clock. */
+  /** ms since this dictation started. */
   get sinceStartMs(): number {
-    return this.now() - this.startedAt;
+    return Date.now() - this.startedAt;
   }
 
   /** ms before the hard cap stops this dictation, as the controller enforces it. */
@@ -174,7 +171,7 @@ export class DictationController {
   start(): void {
     this.clearTimers();
     const gen = ++this.generation;
-    this.startedAt = this.now();
+    this.startedAt = Date.now();
     this.heard = false;
     this.mic = "waiting";
     this.sessionAccepted = false;
@@ -320,7 +317,7 @@ export class DictationController {
     const level = levelFromRms(rms);
     this.o.onLevel?.(rms);
     if (this.mic === "waiting") this.mic = "open";
-    this.lastChunkAt = this.now();
+    this.lastChunkAt = Date.now();
     if (this.state !== "listening" && this.state !== "arming") return;
     if (this.stallTimer) this.cancelTimer(this.stallTimer);
     const capturing = this.generation;
@@ -330,7 +327,7 @@ export class DictationController {
         if (
           capturing === this.generation &&
           (this.state === "listening" || this.state === "arming") &&
-          this.now() - this.lastChunkAt >= this.timing.stallMs
+          Date.now() - this.lastChunkAt >= this.timing.stallMs
         )
           this.fail(new VoiceError("mic", "microphone stopped"));
       }),
@@ -367,7 +364,7 @@ export class DictationController {
 
   private setState(s: VoiceState): void {
     this.state = s;
-    this.stateSince = this.now();
+    this.stateSince = Date.now();
     this.o.onChange();
   }
 

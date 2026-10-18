@@ -74,19 +74,18 @@ export async function getSttToken(
       signal: AbortSignal.timeout(10_000),
     });
   } catch {
-    throw new VoiceError("network", "can't reach Corti");
+    throw new VoiceError("can't reach Corti");
   }
   if (res.status === 400 || res.status === 401 || res.status === 403)
-    throw new VoiceError("auth", "credentials rejected");
-  if (!res.ok)
-    throw new VoiceError("network", `Corti auth unavailable (${res.status})`);
+    throw new VoiceError("credentials rejected");
+  if (!res.ok) throw new VoiceError(`Corti auth unavailable (${res.status})`);
   const body: unknown = await res.json().catch(() => undefined);
   const { access_token: token, expires_in: expiresIn } =
     typeof body === "object" && body !== null
       ? (body as Record<string, unknown>)
       : {};
   if (typeof token !== "string" || typeof expiresIn !== "number")
-    throw new VoiceError("network", "Corti sign-in sent an unreadable answer");
+    throw new VoiceError("Corti sign-in sent an unreadable answer");
   // a token only has to be valid at connect time; the margin keeps a session from starting on a dying one
   cached = { key, token, exp: Date.now() + (expiresIn - 60) * 1000 };
   return token;
@@ -150,7 +149,7 @@ export function startSession(o: SessionOptions): SttSession {
         fn(...a);
       } catch {
         try {
-          fail(new VoiceError("network", "internal error"));
+          fail(new VoiceError("internal error"));
         } catch {} // onError itself threw: the session is already torn down, and a throw here would exit Pi
       }
     };
@@ -173,9 +172,7 @@ export function startSession(o: SessionOptions): SttSession {
     queueMicrotask(
       guard(() =>
         fail(
-          e instanceof VoiceError
-            ? e
-            : new VoiceError("mic", "no microphone found"),
+          e instanceof VoiceError ? e : new VoiceError("no microphone found"),
         ),
       ),
     );
@@ -184,11 +181,7 @@ export function startSession(o: SessionOptions): SttSession {
   audio.on(
     "error",
     guard((e: unknown) =>
-      fail(
-        e instanceof VoiceError
-          ? e
-          : new VoiceError("mic", "no microphone found"),
-      ),
+      fail(e instanceof VoiceError ? e : new VoiceError("no microphone found")),
     ),
   );
   audio.on(
@@ -250,7 +243,7 @@ export function startSession(o: SessionOptions): SttSession {
           pump();
         } else if (typeof m.type === "string" && m.type.startsWith("CONFIG_")) {
           // after CONFIG_DENIED the server holds the socket open until its 10 s timeout
-          fail(new VoiceError("config", "Corti rejected the session"));
+          fail(new VoiceError("Corti rejected the session"));
         } else if (m.type === "transcript") {
           const data = transcriptData(m.data);
           if (!data) return;
@@ -262,7 +255,7 @@ export function startSession(o: SessionOptions): SttSession {
           if (u.kind === "final") o.onFinal(u.segment);
           else if (u.kind === "interim") o.onInterim(u.segment);
         } else if (m.type === "error") {
-          fail(new VoiceError("network", "Corti transcription error"));
+          fail(new VoiceError("Corti transcription error"));
         } else if (m.type === "ended") {
           ended = true;
           teardown();
@@ -272,17 +265,13 @@ export function startSession(o: SessionOptions): SttSession {
       ws.onclose = guard(() =>
         ended || stopping
           ? teardown()
-          : fail(new VoiceError("network", "connection lost")),
+          : fail(new VoiceError("connection lost")),
       );
       ws.onerror = () => {};
     })
     .catch(
       guard((e: unknown) =>
-        fail(
-          e instanceof VoiceError
-            ? e
-            : new VoiceError("network", "can't reach Corti"),
-        ),
+        fail(e instanceof VoiceError ? e : new VoiceError("can't reach Corti")),
       ),
     );
 

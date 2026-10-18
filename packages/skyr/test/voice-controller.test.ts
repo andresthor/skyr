@@ -192,7 +192,7 @@ test("a failure keeps the words on screen and says so", () => {
   h.opts().onReady?.();
   h.opts().onFinal?.("first sentence");
   h.opts().onInterim?.("and the second");
-  h.opts().onError?.(new VoiceError("network", "connection lost"));
+  h.opts().onError?.(new VoiceError("connection lost"));
   expect(h.controller.state).toBe("error");
   expect(h.controller.message).toBe("connection lost · words kept");
   // the interim the user watched appear is committed, not dropped
@@ -200,7 +200,7 @@ test("a failure keeps the words on screen and says so", () => {
   // a failure before any words says only what went wrong
   h.controller.dismiss();
   h.controller.toggle();
-  h.opts().onError?.(new VoiceError("network", "connection lost"));
+  h.opts().onError?.(new VoiceError("connection lost"));
   expect(h.controller.message).toBe("connection lost");
 });
 
@@ -300,7 +300,7 @@ test("a session that never accepts fails with didn't answer", async () => {
 test("any keypress clears an error early, the hold timer gone", async () => {
   const h = harness();
   h.controller.toggle();
-  h.opts().onError?.(new VoiceError("network", "connection lost"));
+  h.opts().onError?.(new VoiceError("connection lost"));
   expect(h.controller.state).toBe("error");
   h.controller.dismiss();
   expect(h.controller.state).toBe("idle");

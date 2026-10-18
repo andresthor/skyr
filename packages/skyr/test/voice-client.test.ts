@@ -213,10 +213,7 @@ test("other CONFIG_* frames are a config failure: the mic and socket close, and 
   h.sock.onopen?.();
   h.sock.server({ type: "CONFIG_DENIED", reason: "tenant not found" });
   expect(h.onError).toHaveBeenCalledWith(
-    expect.objectContaining({
-      kind: "config",
-      message: "Corti rejected the session",
-    }),
+    expect.objectContaining({ message: "Corti rejected the session" }),
   );
   expect(h.source.destroyed).toBe(true);
   expect(h.sock.readyState).toBe(3);
@@ -294,7 +291,7 @@ test("a premature close is a network failure", async () => {
   h.sock.onclose?.();
   await vi.waitFor(() =>
     expect(h.onError).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "network", message: "connection lost" }),
+      expect.objectContaining({ message: "connection lost" }),
     ),
   );
   await expect(h.session.stop()).resolves.toBe("");
@@ -514,7 +511,7 @@ test("a recorder that fails with its own reason reports that reason", async () =
   startSession({
     creds: creds(),
     source: () => {
-      throw new VoiceError("recorder", "needs sox · brew install sox");
+      throw new VoiceError("needs sox · brew install sox");
     },
     onInterim: () => {},
     onFinal: () => {},

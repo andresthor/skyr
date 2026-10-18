@@ -56,13 +56,13 @@ export function findBinary(
 /**
  * Spawns sox `rec` (ffmpeg as a fallback) and returns its stdout. Destroying the
  * stream kills the recorder. A recorder that exits on its own before it is
- * stopped surfaces as `mic` error, which is how a missing or busy device shows.
+ * stopped surfaces as a "no microphone found" error, which is how a missing or busy device shows.
  */
 export function micSource(): Readable {
   const rec = findBinary("rec");
   const recorder = rec || findBinary("ffmpeg");
   if (recorder === undefined)
-    throw new VoiceError("recorder", "needs sox · brew install sox");
+    throw new VoiceError("needs sox · brew install sox");
   const [cmd, args] =
     recorder === rec ? [recorder, REC_ARGS] : [recorder, FFMPEG_ARGS];
 
@@ -72,12 +72,10 @@ export function micSource(): Readable {
   const out = new PassThrough();
   let stopped = false;
   child.stdout?.pipe(out);
-  child.on("error", () =>
-    out.destroy(new VoiceError("mic", "no microphone found")),
-  );
+  child.on("error", () => out.destroy(new VoiceError("no microphone found")));
   child.on("exit", (code) => {
     if (!stopped && code !== 0)
-      out.destroy(new VoiceError("mic", "no microphone found"));
+      out.destroy(new VoiceError("no microphone found"));
   });
   const destroy = out.destroy.bind(out);
   out.destroy = (err?: Error) => {

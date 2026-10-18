@@ -299,7 +299,7 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
   test("any key clears an error line and still reaches the editor", async () => {
     const h = await mounted();
     await h.toggle();
-    h.starts[0]!.onError(new VoiceError("network", "connection lost"));
+    h.starts[0]!.onError(new VoiceError("connection lost"));
     expect(h.ed.decor.rule?.state).toBe("error");
     h.ed.handleInput("a");
     expect(h.ed.decor.rule?.state).toBe("idle");

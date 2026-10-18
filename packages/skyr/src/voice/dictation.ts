@@ -17,7 +17,7 @@ import {
   startSession,
 } from "./client.js";
 import type { SttCredentials } from "./credentials.js";
-import { VoiceError, voiceErrorLine } from "./errors.js";
+import { VoiceError } from "./errors.js";
 import { micSource } from "./mic.js";
 
 export type VoiceState =
@@ -183,7 +183,7 @@ export class DictationController {
     const live = () => gen === this.generation;
     this.later(this.timing.armTimeoutMs, () => {
       if (live() && this.state === "arming")
-        this.fail(new VoiceError("network", "Corti didn't answer"));
+        this.fail(new VoiceError("Corti didn't answer"));
     });
     this.quietStartTimer = this.later(this.timing.noSpeechMs, () => {
       if (
@@ -191,7 +191,7 @@ export class DictationController {
         !this.heard &&
         (this.state === "arming" || this.state === "listening")
       )
-        this.fail(new VoiceError("mic", "nothing heard"));
+        this.fail(new VoiceError("nothing heard"));
     });
     this.later(
       this.timing.maxMs,
@@ -251,7 +251,7 @@ export class DictationController {
         // a segment whose final never came is still better kept than lost
         if (this.pendingInterim) this.o.sink.final(this.pendingInterim);
         else if (this.finals === 0)
-          return this.fail(new VoiceError("mic", "nothing heard"));
+          return this.fail(new VoiceError("nothing heard"));
         this.done();
       });
     });
@@ -293,7 +293,7 @@ export class DictationController {
     this.setState("idle");
   }
 
-  private fail(err: unknown): void {
+  private fail(err: VoiceError): void {
     this.generation++;
     this.session?.cancel();
     this.session = undefined;
@@ -302,9 +302,7 @@ export class DictationController {
     const kept = this.finals > 0 || this.pendingInterim !== "";
     if (this.pendingInterim) this.o.sink.final(this.pendingInterim);
     this.o.sink.end();
-    this.message = kept
-      ? `${voiceErrorLine(err)} · words kept`
-      : voiceErrorLine(err);
+    this.message = kept ? `${err.message} · words kept` : err.message;
     this.setState("error");
     const gen = this.generation;
     this.later(this.timing.errorHoldMs, () => {
@@ -329,16 +327,13 @@ export class DictationController {
           (this.state === "listening" || this.state === "arming") &&
           Date.now() - this.lastChunkAt >= this.timing.stallMs
         )
-          this.fail(new VoiceError("mic", "microphone stopped"));
+          this.fail(new VoiceError("microphone stopped"));
       }),
     );
     if (rms === 0) {
       if (++this.zeroChunks >= ZERO_CHUNKS_BLOCKED && !this.heard) {
         this.fail(
-          new VoiceError(
-            "mic",
-            "microphone blocked · System Settings › Privacy",
-          ),
+          new VoiceError("microphone blocked · System Settings › Privacy"),
         );
       }
       return;

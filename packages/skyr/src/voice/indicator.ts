@@ -186,7 +186,6 @@ export function voiceView(s: VoiceSnapshot): VoiceView {
   const canKeep = s.heardSpeech && s.accepted;
   return {
     kind: "live",
-    // the light stays on through the tail after Enter, so the meter runs as long as the mic
     recording: phase === "listening" || phase === "tail",
     word,
     dots,

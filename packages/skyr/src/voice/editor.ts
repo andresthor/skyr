@@ -55,8 +55,6 @@ export interface VoiceDecor {
 
 export interface VoiceEditorLike {
   decor: VoiceDecor;
-  /** Consulted before Pi sees a key; return true to swallow it. */
-  keyHook?: (data: string, keys: KeybindingsManager) => boolean;
   commit(segment: string): void;
   /** Drop finals held back while the editor was hidden. */
   discardPending(): void;
@@ -64,7 +62,6 @@ export interface VoiceEditorLike {
   readonly focused: boolean;
   getText(): string;
   setText(text: string): void;
-  invalidate(): void;
 }
 
 type CustomEditorClass = typeof CustomEditor;
@@ -80,6 +77,7 @@ export function createVoiceEditorClass(
     };
     /** The palette for this render, re-read every frame so /theme reaches the ghost and drying colours. */
     palette: () => VoicePalette = () => FALLBACK_PALETTE;
+    /** Consulted before Pi sees a key; return true to swallow it. */
     keyHook?: (data: string, keys: KeybindingsManager) => boolean;
     private readonly keys: KeybindingsManager;
     private pending: string[] = [];

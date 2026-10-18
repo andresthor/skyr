@@ -86,8 +86,6 @@ class FakeEditor {
     this.cursorCol += insert.length;
     this.text = lines.join("\n");
   }
-
-  invalidate(): void {}
 }
 
 const nowAt = 1_000_000;
@@ -101,6 +99,7 @@ const VoiceEditor = createVoiceEditorClass(
 
 /** VoiceEditorLike's `focused` is a settable own accessor on the instance, so the test types it as one. */
 type EditorInstance = Omit<VoiceEditorLike, "focused"> &
+  Pick<InstanceType<typeof VoiceEditor>, "keyHook"> &
   FakeEditor & { focused: boolean; palette: () => VoicePalette };
 
 function fresh(

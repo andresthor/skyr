@@ -71,7 +71,6 @@ export const VOICE_DEFAULTS: VoiceConfig = {
 /** Corti's locale form: 2–3 letters + optional `-<2–8 letters>`; it rides in the config JSON
  * body, not a hostname, so credential-grade hostname rules don't apply (credentials.ts). */
 const LANGUAGE = /^[a-z]{2,3}(-[a-zA-Z]{2,8})?$/;
-const LANGUAGE_MAX = 12;
 const KEYTERM_MAX = 50;
 const KEYTERM_WORDS = 5;
 const REPLACEMENT_MAX = 100;
@@ -202,11 +201,7 @@ export function parseVoiceSection(raw: unknown): {
 
   const { language, interims, punctuation, keyterms, replacements } = section;
   if (language !== undefined) {
-    if (
-      typeof language === "string" &&
-      language.length <= LANGUAGE_MAX &&
-      LANGUAGE.test(language)
-    )
+    if (typeof language === "string" && LANGUAGE.test(language))
       config.language = language;
     else
       problem(

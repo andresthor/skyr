@@ -4,8 +4,6 @@ import { existsSync } from "node:fs";
 import { PassThrough, type Readable } from "node:stream";
 import { VoiceError } from "./errors.js";
 
-export type AudioSource = () => Readable;
-
 const REC_ARGS = [
   "-q",
   "-V1",

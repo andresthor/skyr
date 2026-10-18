@@ -54,7 +54,6 @@ const DISCARD_NOTICE_MS = 2000;
 export interface VoiceOptions {
   /** What the terminal can show; read from the environment when not given. */
   mode?: VoiceMode;
-  env?: NodeJS.ProcessEnv;
   /** Test seam: the fetch the session_start token prewarm uses instead of the global one. */
   fetch?: typeof fetch;
   /** Test seam: replaces the live Corti session and microphone. */
@@ -104,8 +103,8 @@ export function startRefusal(
 }
 
 export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
-  const mode = opts.mode ?? voiceMode(opts.env ?? process.env);
-  const creds = resolveSttCredentials(opts.env ?? process.env);
+  const mode = opts.mode ?? voiceMode(process.env);
+  const creds = resolveSttCredentials();
 
   if (!creds) {
     pi.registerCommand("voice", {
@@ -285,7 +284,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       ed.palette = () => paletteFromTheme(ctxRef?.ui.theme);
       ed.decor.mode = mode;
       editor = ed;
-      tui = t as unknown as Tui;
+      tui = t;
       return ed;
     };
     ctx.ui.setEditorComponent(editorFactory);

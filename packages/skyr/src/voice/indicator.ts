@@ -29,6 +29,11 @@ export const DRY_MS = 300;
 
 /** One smoothed bar cell per this many ms of recording. */
 const BAR_MS = 100;
+/** Bars kept: 4.8 s, the window the meter auto-ranges its peak over. */
+const HISTORY_BARS = 48;
+/** The share of the gap to the newest level closed per tick, rising and falling. */
+const ATTACK = 0.8;
+const DECAY = 0.5;
 
 /** What the terminal can show: `mono` is NO_COLOR (glyphs and attributes, no colour), `ascii` is TERM=dumb. */
 export type VoiceMode = "color" | "mono" | "ascii";
@@ -126,12 +131,7 @@ export interface LevelHistory {
 }
 
 /** Fast attack, quick decay, so syllables stand apart instead of merging. */
-export function createLevelHistory({
-  size = 48,
-  attack = 0.8,
-  decay = 0.5,
-  barMs = BAR_MS,
-} = {}): LevelHistory {
+export function createLevelHistory(): LevelHistory {
   const bars: number[] = [];
   let pending = 0;
   let cur = 0;
@@ -142,14 +142,14 @@ export function createLevelHistory({
       pending = Math.max(pending, clamp01(level));
     },
     sample(dt) {
-      cur += (pending - cur) * (pending > cur ? attack : decay);
+      cur += (pending - cur) * (pending > cur ? ATTACK : DECAY);
       pending = 0;
       held = Math.max(held, cur);
       since += dt;
-      if (since >= barMs) {
-        since -= barMs;
+      if (since >= BAR_MS) {
+        since -= BAR_MS;
         bars.unshift(held);
-        if (bars.length > size) bars.length = size;
+        if (bars.length > HISTORY_BARS) bars.length = HISTORY_BARS;
         held = cur;
       }
       return bars.slice();

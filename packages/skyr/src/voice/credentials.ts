@@ -8,19 +8,35 @@ export interface SttCredentials {
 }
 
 /**
- * Resolve STT credentials from the environment. All four must be set; anything
- * less leaves voice unregistered. Browser sign-in will become a second source here.
+ * Resolving the environment: full credentials, or — when voice cannot register — the
+ * names of the variables that are unset (`missing`; values are never echoed), or the
+ * one variable that failed its pattern (`invalid`). Both patterns are hostname-grade:
+ * the environment and tenant are spliced into corti.app hostnames and URL paths.
  */
+export type CredentialResult =
+  | { creds: SttCredentials }
+  | { missing: string[] }
+  | { invalid: string };
+
 export function resolveSttCredentials(
   env: NodeJS.ProcessEnv = process.env,
-): SttCredentials | undefined {
+): CredentialResult {
   const environment = env.CORTI_ENVIRONMENT?.trim();
   const tenant = env.CORTI_TENANT_NAME?.trim();
   const clientId = env.CORTI_CLIENT_ID?.trim();
   const clientSecret = env.CORTI_CLIENT_SECRET?.trim();
-  if (!environment || !tenant || !clientId || !clientSecret) return undefined;
+  if (!environment || !tenant || !clientId || !clientSecret) {
+    const missing = [
+      ...(!environment ? ["CORTI_ENVIRONMENT"] : []),
+      ...(!tenant ? ["CORTI_TENANT_NAME"] : []),
+      ...(!clientId ? ["CORTI_CLIENT_ID"] : []),
+      ...(!clientSecret ? ["CORTI_CLIENT_SECRET"] : []),
+    ];
+    return { missing };
+  }
   // both are spliced into hostnames and URL paths
-  if (!/^[a-z0-9-]+$/i.test(environment) || !/^[\w.-]+$/.test(tenant))
-    return undefined;
-  return { environment, tenant, clientId, clientSecret };
+  if (!/^[a-z0-9-]+$/i.test(environment))
+    return { invalid: "CORTI_ENVIRONMENT" };
+  if (!/^[\w.-]+$/.test(tenant)) return { invalid: "CORTI_TENANT_NAME" };
+  return { creds: { environment, tenant, clientId, clientSecret } };
 }

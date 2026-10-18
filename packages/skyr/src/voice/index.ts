@@ -33,7 +33,7 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
-import { startBlocked } from "./errors.js";
+import { credentialsNotice, startBlocked } from "./errors.js";
 import {
   createLevelHistory,
   meterUnit,
@@ -98,20 +98,21 @@ export function startRefusal(
 
 export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   const mode = opts.mode ?? voiceMode(process.env);
-  const creds = resolveSttCredentials();
+  const resolved = resolveSttCredentials();
 
-  if (!creds) {
+  if (!("creds" in resolved)) {
+    const notice = credentialsNotice(resolved);
     pi.registerCommand("voice", {
-      description: "Dictate with Corti speech-to-text",
+      description:
+        "Dictate with Corti speech-to-text (needs CORTI_* credentials)",
       handler: async (_args: string, ctx: ExtensionCommandContext) => {
-        ctx.ui.notify(
-          "Voice needs Corti speech credentials (CORTI_CLIENT_ID and friends).",
-          "info",
-        );
+        // "info" only reaches the transient status line, so a registration problem is a warning
+        ctx.ui.notify(notice, "warning");
       },
     });
     return;
   }
+  const creds = resolved.creds;
 
   // The live TUI instance, handed over at mount so a repaint can be asked for; gone when the
   // session is, so a stale session never paints.

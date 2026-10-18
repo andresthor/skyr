@@ -7,6 +7,7 @@
  */
 import { basename } from "node:path";
 import { errnoOf, oneLine } from "../tools/render.js";
+import type { CredentialResult, SttCredentials } from "./credentials.js";
 
 export class VoiceError extends Error {
   constructor(message: string) {
@@ -101,6 +102,27 @@ export const micBlocked = () =>
 /** The chat notice when the shortcut cannot start: a card or selector holds the keyboard. */
 export const startBlocked = (shortcut: string) =>
   `voice: a card or selector has the keyboard; close it, then press ${shortcut} again`;
+
+/** What each checkable variable must look like, for the notice that names an invalid one. */
+const CRED_FORMS: Record<string, string> = {
+  CORTI_ENVIRONMENT: 'letters, digits or "-"',
+  CORTI_TENANT_NAME: 'letters, digits, "_", "." or "-"',
+};
+
+/** The stub's one line, naming only the variable that kept voice from registering. */
+export function credentialsNotice(
+  from: Exclude<CredentialResult, { creds: SttCredentials }>,
+): string {
+  if ("missing" in from) {
+    const names = from.missing;
+    const listed =
+      names.length < 2
+        ? (names[0] ?? "")
+        : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+    return `voice: set ${listed} to dictate`;
+  }
+  return `voice: ${from.invalid} must be ${CRED_FORMS[from.invalid]}; voice is off`;
+}
 
 /**
  * The errno inside a fetch failure. undici wraps the real error (DNS, TLS) in its cause

@@ -64,12 +64,35 @@ function recording() {
 
 test("without credentials only the stub /voice exists, and it says so once", async () => {
   const pi = registeredVoice({ mode: "ascii" });
-  expect(pi.commands.get("voice")?.description).toContain("speech-to-text");
+  expect(pi.commands.get("voice")?.description).toBe(
+    "Dictate with Corti speech-to-text (needs CORTI_* credentials)",
+  );
   expect([...pi.shortcuts.keys()]).toEqual([]);
   const ctx = voiceCtx();
   await pi.commands.get("voice")!.handler("", ctx);
   expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
-  expect(ctx.ui.notify.mock.calls[0]?.[0]).toContain("CORTI_CLIENT_ID");
+  expect(ctx.ui.notify.mock.calls[0]).toEqual([
+    "voice: set CORTI_ENVIRONMENT, CORTI_TENANT_NAME, CORTI_CLIENT_ID and CORTI_CLIENT_SECRET to dictate",
+    "warning",
+  ]);
+});
+
+test("a set but malformed variable is named with the form it must take, in a warning", async () => {
+  withCreds();
+  process.env.CORTI_ENVIRONMENT = "eu.";
+  onTestFinished(() => {
+    process.env.CORTI_ENVIRONMENT = CREDS.environment;
+  });
+  const pi = registeredVoice({ mode: "ascii" });
+  expect([...pi.shortcuts.keys()]).toEqual([]);
+  const ctx = voiceCtx();
+  await pi.commands.get("voice")!.handler("", ctx);
+  expect(ctx.ui.notify.mock.calls[0]).toEqual([
+    `voice: CORTI_ENVIRONMENT must be letters, digits or "-"; voice is off`,
+    "warning",
+  ]);
+  // the value the user mistyped is never echoed
+  expect(ctx.ui.notify.mock.calls[0]?.[0]).not.toContain("eu.");
 });
 
 test("with credentials, a headless session_start reads the config but mounts no UI", async () => {

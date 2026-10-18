@@ -497,7 +497,7 @@ export interface VoiceKeys {
 
 interface RuleOptions {
   width: number;
-  /** Text rows scrolled out below the editor: Pi's `↓ N more` label takes the hints' place. */
+  /** Text rows scrolled out below the editor: Pi's `↓ N more` label sits on the right, in place of any hints. */
   hiddenBelow?: number;
   /** The editor's `borderColor`: Pi colours its rules by thinking level and bash mode. */
   rule: (s: string) => string;
@@ -554,7 +554,8 @@ export function renderRule(
       visibleWidth(full) <= room
         ? full
         : `${sliceByColumn(full, 0, room - 1, true)}…`;
-    return first([compose(`${mark}${fg(T.muted, ` ${text}`)}`, "")]);
+    const cause = `${mark}${fg(T.muted, ` ${text}`)}`;
+    return first([compose(cause, more ?? ""), compose(cause, "")]);
   }
   if (!phase) {
     return s.discarded

@@ -66,7 +66,9 @@ test("every row is exactly the width, at every width, in every state and mode", 
     for (const s of STATES)
       for (let width = 9; width <= 140; width++) {
         const row = draw(s, { width, mode, hiddenBelow: width % 3 });
-        // undefined hands the row to Pi's own rule, which is exactly the width too
+        // undefined hands the row to Pi's own rule; 16 columns hold every state's last rung
+        if (width >= 16)
+          expect(row, `${mode} ${s.state} @${width}`).toBeDefined();
         if (row !== undefined)
           expect(visibleWidth(row), `${mode} ${s.state} @${width}`).toBe(width);
       }
@@ -155,6 +157,9 @@ test("a scrolled editor's ↓ N more takes the hints' place, ahead of any adviso
   expect(plain({ state: "idle", discarded: true }, { hiddenBelow: 3 })).toMatch(
     /^── discarded ─+ ↓ 3 more ──$/,
   );
+  expect(
+    plain({ state: "error", message: "connection lost" }, { hiddenBelow: 3 }),
+  ).toMatch(/^── ✗ connection lost ─+ ↓ 3 more ──$/);
 });
 
 test("the meter drops before an advisory: a narrow rule still says time is running out", () => {

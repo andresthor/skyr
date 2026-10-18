@@ -110,7 +110,7 @@ test("a cursor row with room only in the padding still keeps every row within wi
 });
 
 test("escape bytes in the ghost text never reach any rendered row", () => {
-  const ghost = "hi \x1b[31mred\x1b[0m \x1b_pi:evil\x07 tail";
+  const ghost = "hi \x1b[31mred\x1b[0m \x1b_pi:evil\x07 \x1b[2J\u202etail";
   const lines = spliceGhost(editorBase("x", 30, { paddingX: 1 }), {
     width: 30,
     paddingX: 1,
@@ -122,6 +122,19 @@ test("escape bytes in the ghost text never reach any rendered row", () => {
   expect(all).not.toContain("\x1b[0m");
   expect(all).not.toContain("_pi:evil");
   expect(stripAnsi(all).replace(/\s+/g, "")).toContain("hiredtail");
+});
+
+test("a newline or tab in the ghost never reaches a row: the ghost is one display line", () => {
+  const lines = spliceGhost(editorBase("x", 30), {
+    width: 30,
+    ghost: "first line\nsecond\tthird",
+    palette: T,
+  });
+  for (const line of lines) {
+    expect(line).not.toMatch(/[\n\t]/);
+    expect(visibleWidth(line)).toBe(30);
+  }
+  expect(stripAnsi(lines.join(" "))).toContain("first line second third");
 });
 
 test("an editor without the cursor cell draws no ghost and no wet colouring", () => {

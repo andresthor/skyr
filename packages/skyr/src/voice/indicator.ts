@@ -21,6 +21,7 @@ import {
   type TerminalColorMode,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { sanitize } from "../tools/render.js";
 import { SPEECH_DBFS, type VoiceState } from "./dictation.js";
 
 export const TICK_MS = 50;
@@ -409,9 +410,8 @@ export function spliceGhost(
 
   // faint carries the ghost where the theme's dim is close to its text colour, and under NO_COLOR
   const style = (s: string) => `\x1b[2m\x1b[3m${fg(T.dim, s)}\x1b[23m\x1b[22m`;
-  // the client strips terminal sequences from server text; stripping again keeps the wrap cuts
-  // between characters, never inside colour markup
-  const g = stripAnsi(ghost).replace(/^\s+/, "");
+  // one display line: a newline would move the terminal's cursor inside a row Pi measured as one
+  const g = sanitize(ghost).trimStart();
   const sep =
     visibleWidth(beforeText) > paddingX && !/\s$/.test(beforeText) ? " " : "";
   // the editor's own layout width: with padding the cursor may overflow into it, without it one column is kept

@@ -451,6 +451,7 @@ function keyHint(): string {
  * Asks Tavily, then Exa, then Parallel, each with its own 15 s deadline, and returns the first
  * answer. Zero results is an answer. Throws when a key the user set is refused, or when every
  * provider fails.
+ * @internal
  */
 export async function webSearch(
   query: string,
@@ -476,6 +477,10 @@ export async function webSearch(
   );
 }
 
+/**
+ * The text the model reads: the sanitised query, then numbered results or a retry hint.
+ * @internal
+ */
 export function formatResults(query: string, results: SearchResult[]): string {
   const quoted = `"${sanitize(query).trim()}"`;
   if (results.length === 0)

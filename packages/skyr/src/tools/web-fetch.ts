@@ -77,6 +77,7 @@ async function resolveHost(
 /**
  * Throws unless the URL is http(s) and every address its host resolves to is public. A refusal
  * is usually a mistake the model cannot fix alone, so the message sends it to the user.
+ * @internal
  */
 export async function assertPublicUrl(
   u: URL,
@@ -229,7 +230,10 @@ turndown.remove([
   "aside",
 ]);
 
-/** Converts HTML to markdown. Synchronous, and superlinear in input size: cap the caller's input. */
+/**
+ * Converts HTML to markdown. Synchronous, and superlinear in input size: cap the caller's input.
+ * @internal
+ */
 export function htmlToMarkdown(html: string): string {
   return turndown.turndown(html);
 }
@@ -256,6 +260,7 @@ function isText(mime: string): boolean {
  *
  * Text over Pi's limits is cut, and the whole converted text written beside it in the OS
  * temp dir, named after `toolCallId` so parallel calls cannot overwrite each other.
+ * @internal
  */
 export async function webFetch(
   rawUrl: string,

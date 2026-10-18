@@ -23,6 +23,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { sanitize } from "../tools/render.js";
 import { SPEECH_DBFS, type VoiceState } from "./dictation.js";
+import { dbfs } from "./mic.js";
 
 export const TICK_MS = 50;
 export const DRY_MS = 300;
@@ -460,8 +461,7 @@ const METER_SPAN_DB = 50;
 
 /** A chunk's RMS as the meter's 0..1 unit: −60…−10 dBFS, so close-mic speech never clips. */
 export function meterUnit(rms: number): number {
-  const db = rms > 0 ? 20 * Math.log10(rms) : METER_FLOOR_DB;
-  return clamp01((db - METER_FLOOR_DB) / METER_SPAN_DB);
+  return clamp01((dbfs(rms) - METER_FLOOR_DB) / METER_SPAN_DB);
 }
 
 const METER_CELLS = 8;

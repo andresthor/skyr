@@ -95,3 +95,8 @@ export function pcmRms(buf: Buffer): number {
   }
   return Math.sqrt(sum / (n || 1)) / 32768;
 }
+
+/** An RMS that is 0..1 of full scale, in dBFS; silence is −Infinity. */
+export function dbfs(rms: number): number {
+  return 20 * Math.log10(rms);
+}

@@ -9,7 +9,6 @@ import type { SessionOptions, SttSession } from "../src/voice/client.js";
 import {
   DictationController,
   type DictationTiming,
-  levelFromRms,
   SPEECH_DBFS,
 } from "../src/voice/dictation.js";
 import { VoiceError } from "../src/voice/errors.js";
@@ -354,15 +353,24 @@ test("heardSpeech latches on the first chunk above the speech threshold, and res
   expect(h.controller.heardSpeech).toBe(false);
 });
 
-test("listeners get each chunk's raw RMS, and SPEECH_DBFS is where the level curve crosses speech", () => {
+test("listeners get each chunk's raw RMS", () => {
   const seen: number[] = [];
   const h = harness({}, { onLevel: (rms) => seen.push(rms) });
   h.controller.toggle();
   h.opts().onLevel?.(0.5);
   expect(seen).toEqual([0.5]);
-  const rmsAtGate = 10 ** (SPEECH_DBFS / 20);
-  expect(levelFromRms(rmsAtGate)).toBeCloseTo(0.15, 6);
-  expect(SPEECH_DBFS).toBeCloseTo(-49.8, 1);
+});
+
+test("speech starts at SPEECH_DBFS: a chunk just under it is not heard, one just over it is", () => {
+  const atDb = (db: number) => 10 ** (db / 20);
+  const h = harness();
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.opts().onLevel?.(atDb(SPEECH_DBFS - 0.1));
+  expect(h.controller.heardSpeech).toBe(false);
+  h.opts().onLevel?.(atDb(SPEECH_DBFS + 0.1));
+  expect(h.controller.heardSpeech).toBe(true);
+  h.controller.cancel();
 });
 
 test("an open mic that stops delivering fails as microphone stopped, keeping what was said", async () => {

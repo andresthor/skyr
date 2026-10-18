@@ -18,7 +18,7 @@ import {
 } from "./client.js";
 import type { SttCredentials } from "./credentials.js";
 import { VoiceError } from "./errors.js";
-import { micSource } from "./mic.js";
+import { dbfs, micSource } from "./mic.js";
 
 export type VoiceState =
   | "idle"
@@ -67,21 +67,13 @@ const DEFAULT_TIMING: DictationTiming = {
   stallMs: 1500,
 };
 
-/** Meter level that counts as someone speaking; room noise sits around 0.05–0.15, speech well above. */
-const SPEECH_LEVEL = 0.15;
-/** The RMS the level curve calls full scale: ordinary close-mic speech reaches it. */
-const FULL_RMS = 2500 / 32768;
-const LEVEL_CURVE = 0.6;
-/** SPEECH_LEVEL in dBFS, so a display drawing decibels gates exactly where the controller does. */
-export const SPEECH_DBFS =
-  20 * Math.log10(FULL_RMS * SPEECH_LEVEL ** (1 / LEVEL_CURVE));
+/**
+ * A chunk louder than this is speech, about −49.8 dBFS; room noise sits below it. Written as its
+ * derivation, 0.15 on a 0.6-power curve with full scale at 2,500/32,768 RMS, so the gate is exact.
+ */
+export const SPEECH_DBFS = 20 * Math.log10((2500 / 32768) * 0.15 ** (1 / 0.6));
 /** ~1.5 s of chunks that are exactly zero: macOS hands a mic-denied process silence, not an error. */
 const ZERO_CHUNKS_BLOCKED = 24;
-
-/** RMS (0..1 of full scale) to a perceptual 0..1 for the meter; linear reads as flat. */
-export function levelFromRms(rms: number): number {
-  return Math.min(1, (rms / FULL_RMS) ** LEVEL_CURVE);
-}
 
 export interface DictationControllerOptions {
   creds: SttCredentials;
@@ -94,7 +86,7 @@ export interface DictationControllerOptions {
   keyterms?: readonly string[];
   replacements?: readonly { find: string; replace: string }[];
   onChange: () => void;
-  /** Each chunk's raw RMS (0..1 of full scale), before the level curve clips it. */
+  /** Each chunk's raw RMS, 0..1 of full scale. */
   onLevel?: (rms: number) => void;
   source?: () => Readable;
   timing?: Partial<DictationTiming>;
@@ -148,7 +140,7 @@ export class DictationController {
     return this.timing.maxMs - this.sinceStartMs;
   }
 
-  /** This dictation has heard someone: a chunk above SPEECH_LEVEL, or any text from Corti. */
+  /** This dictation has heard someone: a chunk above SPEECH_DBFS, or any text from Corti. */
   get heardSpeech(): boolean {
     return this.heard;
   }
@@ -312,7 +304,6 @@ export class DictationController {
   }
 
   private level(rms: number): void {
-    const level = levelFromRms(rms);
     this.o.onLevel?.(rms);
     if (this.mic === "waiting") this.mic = "open";
     this.lastChunkAt = Date.now();
@@ -339,8 +330,9 @@ export class DictationController {
       return;
     }
     this.zeroChunks = -Infinity;
-    if (level > SPEECH_LEVEL) this.speechHeard();
-    if (this.state === "listening" && level > SPEECH_LEVEL) {
+    if (dbfs(rms) <= SPEECH_DBFS) return;
+    this.speechHeard();
+    if (this.state === "listening") {
       const gen = this.generation;
       if (this.flushTimer) this.cancelTimer(this.flushTimer);
       this.flushTimer = this.later(this.timing.flushMs, () => {

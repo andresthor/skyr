@@ -1,20 +1,16 @@
 /**
- * The ghost's contract with pi-tui. `CURSOR_CELL` must be exactly the end-of-line fake-cursor
- * cell a focused editor emits; `spliceGhost` anchors on it, keeps every row within the width,
- * and must never let an escape byte inside transcription text reach the terminal.
+ * The ghost drawn into Pi's editor rows. `spliceGhost` anchors on `CURSOR_CELL` (pinned to
+ * pi-tui in voice-pi-contract.test.ts), keeps every row within the width, and must never let
+ * an escape byte inside transcription text reach the terminal.
  */
 
-import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import {
-  CURSOR_MARKER,
   colorToOklch,
   parseColor,
-  renderFakeCursor,
   rgbColor,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
-import { createVoiceEditorClass } from "../src/voice/editor.js";
 import {
   CURSOR_CELL,
   DRY_MS,
@@ -23,7 +19,7 @@ import {
   spliceGhost,
   stripAnsi,
 } from "../src/voice/indicator.js";
-import { editorRows, keybindings, snap } from "./voice.js";
+import { editorRows } from "./voice.js";
 
 const T = FALLBACK_PALETTE;
 
@@ -37,10 +33,6 @@ const editorBase = (
   ...editorRows(text, width, o),
   "─".repeat(width),
 ];
-
-test("CURSOR_CELL is CURSOR_MARKER followed by the fake-cursor space, per the pinned pi-tui", () => {
-  expect(CURSOR_CELL).toBe(`${CURSOR_MARKER}${renderFakeCursor(" ")}`);
-});
 
 test("the ghost lands right after the cursor cell, on the cursor's own row", () => {
   const lines = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
@@ -329,18 +321,4 @@ test("emoji with a variation selector never push a ghost or drying row past the 
     for (const row of lines)
       expect(visibleWidth(row), `@${width}`).toBeLessThanOrEqual(width);
   }
-});
-
-test("pi's real editor calls the bottom-border hook, so the voice rule reaches the screen", () => {
-  const VoiceEditor = createVoiceEditorClass(CustomEditor);
-  const ed = new VoiceEditor(
-    { terminal: { rows: 40 }, requestRender: () => {} } as never,
-    { borderColor: (s: string) => s, selectList: {} } as never,
-    keybindings(),
-  );
-  ed.focused = true;
-  ed.decor.rule = snap();
-  const bottom = ed.render(60).at(-1) ?? "";
-  expect(stripAnsi(bottom)).toContain("● listening");
-  expect(visibleWidth(bottom)).toBe(60);
 });

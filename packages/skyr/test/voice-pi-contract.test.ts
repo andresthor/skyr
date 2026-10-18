@@ -7,16 +7,10 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
-// Pi builds its app bindings with this class but does not export it from its root
-import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { createVoiceEditorClass } from "../src/voice/editor.js";
 import { VOICE_SHORTCUT } from "../src/voice/index.js";
 import { CURSOR_CELL, stripAnsi } from "../src/voice/indicator.js";
-import { scratchDir } from "./session.js";
 import { keybindings, snap } from "./voice.js";
-
-/** Pi's resolved app bindings with no keybindings.json, as interactive mode builds them. */
-const piBindings = () => KeybindingsManager.create(scratchDir("agent"));
 
 /** A real Pi editor, focused, with voice's subclass on top. */
 function realEditor() {
@@ -54,12 +48,12 @@ test.each([
 ] as const)(
   "pi binds %s by default, so voice's key hook and hints have a key to match",
   (id) => {
-    expect(piBindings().getKeys(id).length).toBeGreaterThan(0);
+    expect(keybindings().getKeys(id).length).toBeGreaterThan(0);
   },
 );
 
 test("no built-in binding claims ctrl+space, so Pi neither skips nor shadows the voice shortcut", () => {
-  const claimed = Object.entries(piBindings().getEffectiveConfig()).filter(
+  const claimed = Object.entries(keybindings().getEffectiveConfig()).filter(
     ([, keys]) => [keys ?? []].flat().includes(VOICE_SHORTCUT),
   );
   expect(claimed).toEqual([]);

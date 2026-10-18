@@ -1,21 +1,15 @@
 /**
  * Fixtures shared by the voice tests: a snapshot builder, editor rows as Pi draws them, Pi's
- * real key bindings, credentials, and a fake Pi that captures what voice registers through
+ * own key bindings, credentials, and a fake Pi that captures what voice registers through
  * narrow local types, so a test that passes the wrong shape fails to compile.
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type {
-  ExtensionAPI,
-  KeybindingsManager,
-} from "@earendil-works/pi-coding-agent";
-import {
-  type Color,
-  type TerminalColorMode,
-  TUI_KEYBINDINGS,
-  KeybindingsManager as TuiKeybindingsManager,
-} from "@earendil-works/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Color, TerminalColorMode } from "@earendil-works/pi-tui";
 import { type Mock, onTestFinished, vi } from "vitest";
+// Pi builds its app bindings with this class but does not export it from its root
+import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { registerSkyr } from "../src/index.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
 import type { createVoiceEditorClass } from "../src/voice/editor.js";
@@ -42,15 +36,9 @@ export const HINT_KEYS: VoiceKeys = {
   undo: "ctrl+-",
 };
 
-/**
- * Pi's default key bindings for the `tui.*` ids voice reads. Pi's app manager spreads
- * TUI_KEYBINDINGS into its own (pi-coding-agent dist/core/keybindings.js:159) but does not
- * export the class as a value, so the pi-tui base stands in for it.
- */
+/** Pi's default app key bindings, as interactive mode hands them to the editor with no keybindings.json. */
 export function keybindings(): KeybindingsManager {
-  return new TuiKeybindingsManager(
-    TUI_KEYBINDINGS,
-  ) as unknown as KeybindingsManager;
+  return new KeybindingsManager();
 }
 
 const atDb = (db: number) => meterUnit(10 ** (db / 20));

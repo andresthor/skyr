@@ -111,7 +111,12 @@ function withCreds(
   process.env.CORTI_CLIENT_ID = creds.clientId;
   process.env.CORTI_CLIENT_SECRET = creds.clientSecret;
   onTestFinished(() => {
-    for (const k of CORTI) process.env[k] = before.get(k);
+    for (const k of CORTI) {
+      // assigning undefined to process.env stores the string "undefined"
+      const v = before.get(k);
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   });
   return Promise.resolve(run(creds));
 }

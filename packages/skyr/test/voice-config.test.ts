@@ -3,7 +3,7 @@
  * a broken user file must never throw, a broken section must degrade per field, and the
  * case-insensitive replacement trap must be caught here — never as CONFIG_DENIED live.
  */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, onTestFinished, test } from "vitest";
@@ -18,7 +18,7 @@ import {
 
 function agentDir(file?: string): string {
   const dir = mkdtempSync(join(tmpdir(), "skyr-test-agent-"));
-  onTestFinished(() => void dir);
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
   if (file !== undefined) writeFileSync(join(dir, "skyr.json"), file);
   return dir;
 }

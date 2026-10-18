@@ -2,7 +2,8 @@
  * Voice's rule and footer rows, and the meter both draw: `renderRule()` is the editor's
  * bottom rule while voice is on (meter, mic light, state, keys), `renderStatus()` the same
  * marks as a footer row for when the editor can't carry them, and the meter's level history
- * turns mic levels in at whatever rate they arrive into one smoothed bar per BAR_MS.
+ * turns mic levels in at whatever rate they arrive into one smoothed bar per BAR_MS. All
+ * wording is decided once in `voiceView()`; the two renderers are layout only.
  *
  * Every glyph is in U+2580–259F or is a width-1 symbol. Never braille.
  */
@@ -89,74 +90,115 @@ export function renderStatus(
 ): string | undefined {
   const { colors: T, ascii, fg } = paint;
   const label = fg(T.muted, "voice");
-  if (s.state === "error") {
-    const text = sliceByColumn(s.message, 0, ERROR_COLS - 8, true);
+  const view = voiceView(s);
+  if (view.kind === "error") {
+    const text = sliceByColumn(view.message, 0, ERROR_COLS - 8, true);
     return `${label} ${fg(T.error, ascii ? "x" : "✗")}${fg(T.muted, ` ${text}`)}`;
   }
-  const phase = phaseOf(s);
-  if (s.state === "discarded") return `${label} ${fg(T.muted, "discarded")}`;
-  if (!phase) return undefined;
-  const { light, word, advisories } = marks(s, phase, paint, false);
+  if (view.kind === "off") return undefined;
+  if (view.kind === "discarded") return `${label} ${fg(T.muted, "discarded")}`;
+  const light = view.recording
+    ? ascii
+      ? "[rec]"
+      : fg(T.accent, "●")
+    : ascii
+      ? "[...]"
+      : fg(T.muted, "○");
+  // the footer collapses runs of spaces, so the ellipsis is drawn without its rule-side padding
+  const word =
+    fg(T.muted, view.word) +
+    (view.dots ? fg(T.dim, (ascii ? "." : "·").repeat(view.dots)) : "");
   const sep = ascii ? ", " : fg(T.dim, " · ");
   // the footer collapses runs of spaces, so silence is dim rule cells rather than padding
   const silence = (x: string) => fg(T.dim, ascii ? x.replaceAll("─", "-") : x);
-  const meter =
-    phase === "listening" || phase === "tail"
-      ? meterCells(s.bars, silence, paint)
-      : silence("─".repeat(METER_CELLS));
+  const meter = view.recording
+    ? meterCells(s.bars, silence, paint)
+    : silence("─".repeat(METER_CELLS));
+  const advisories = view.advisories.map((a) => fg(T[a.tone], a.text));
   return `${[`${label} ${light} ${word}`, ...advisories].join(sep)} ${meter}`;
 }
 
-/**
- * The marks both surfaces draw: the mic light, the state word and the advisories. `steady` keeps
- * the finishing ellipsis in a fixed three cells, for the rule; the footer collapses that padding.
- */
-function marks(
-  s: VoiceSnapshot,
-  phase: Phase,
-  paint: Paint,
-  steady: boolean,
-): { light: string; word: string; advisories: string[] } {
-  const { colors: T, ascii, fg } = paint;
-  const light =
-    phase === "listening" || phase === "tail"
-      ? ascii
-        ? "[rec]"
-        : fg(T.accent, "●")
-      : ascii
-        ? "[...]"
-        : fg(T.muted, "○");
-  let word = fg(
-    T.muted,
+/** An advisory line: `tone` picks the palette token it draws in. */
+interface Advisory {
+  text: string;
+  tone: "warning" | "muted";
+}
+
+/** What voice can say about one moment, with every wording decision made: no ANSI, no layout. */
+type VoiceView =
+  | { kind: "off" }
+  | { kind: "error"; message: string }
+  | { kind: "discarded" }
+  | {
+      kind: "live";
+      /** The mic is open: the light stays on through the tail after Enter. */
+      recording: boolean;
+      word: "starting" | "listening" | "finishing";
+      /** Steps of the finishing ellipsis: server work, never motion in the meter. */
+      dots: 0 | 1 | 2 | 3;
+      /** Enter keeps only what the server will transcribe: speech, on an accepted session. */
+      canKeep: boolean;
+      /** What the bound keys would do right now. */
+      offer: "keep" | "cancel" | "discard";
+      advisories: Advisory[];
+    };
+
+/** Reads the facts once, deciding everything the displays then only have to draw. */
+export function voiceView(s: VoiceSnapshot): VoiceView {
+  const phase = phaseOf(s);
+  if (s.state === "error") return { kind: "error", message: s.message };
+  if (s.state === "discarded") return { kind: "discarded" };
+  if (!phase) return { kind: "off" };
+  const word =
     phase === "starting"
       ? "starting"
       : phase === "listening"
         ? "listening"
-        : "finishing",
-  );
-  if (phase === "tail" || phase === "finishing") {
-    // server work is a slow textual ellipsis, never motion in the meter
-    const n = (Math.floor(s.stateMs / ELLIPSIS_MS) % 3) + 1;
-    word += fg(T.dim, (ascii ? "." : "·").repeat(n));
-    if (steady) word += " ".repeat(3 - n);
-  }
-  const advisories: string[] = [];
+        : "finishing";
+  // one step of the finishing ellipsis per ELLIPSIS_MS, wrapping after three: server work,
+  // never motion in the meter
+  const step = (Math.floor(s.stateMs / ELLIPSIS_MS) % 3) + 1;
+  const dots: 0 | 1 | 2 | 3 =
+    phase === "tail" || phase === "finishing"
+      ? step === 1
+        ? 1
+        : step === 2
+          ? 2
+          : 3
+      : 0;
+  const advisories: Advisory[] = [];
   if (phase === "starting" && s.sinceStartMs > SLOW_START_MS)
-    advisories.push(fg(T.warning, "no audio yet"));
+    advisories.push({ text: "no audio yet", tone: "warning" });
   if (s.state === "arming" && s.micOpen && s.sinceStartMs > SLOW_START_MS)
-    advisories.push(fg(T.muted, "connecting"));
+    advisories.push({ text: "connecting", tone: "muted" });
   // half the failure window, so "no voice yet" can never appear after the "nothing heard" failure
   if (
     phase === "listening" &&
     !s.heardSpeech &&
     s.sinceStartMs > s.noSpeechMs / 2
   )
-    advisories.push(fg(T.warning, "no voice yet"));
+    advisories.push({ text: "no voice yet", tone: "warning" });
   if (s.state === "listening" && s.capLeftMs <= CAP_WARN_MS)
-    advisories.push(
-      fg(T.warning, `${Math.ceil(Math.max(0, s.capLeftMs) / 1000)}s left`),
-    );
-  return { light, word, advisories };
+    advisories.push({
+      text: `${Math.ceil(Math.max(0, s.capLeftMs) / 1000)}s left`,
+      tone: "warning",
+    });
+  const canKeep = s.heardSpeech && s.accepted;
+  return {
+    kind: "live",
+    // the light stays on through the tail after Enter, so the meter runs as long as the mic
+    recording: phase === "listening" || phase === "tail",
+    word,
+    dots,
+    canKeep,
+    offer:
+      phase === "listening" && canKeep
+        ? "keep"
+        : phase === "listening" || phase === "starting"
+          ? "cancel"
+          : "discard",
+    advisories,
+  };
 }
 
 /** What a voice display needs to know at one moment: the controller's facts plus the meter bars. */
@@ -231,7 +273,7 @@ export function renderRule(
   }: RuleOptions,
 ): string | undefined {
   const { colors: T, ascii, fg } = paint;
-  const phase = phaseOf(s);
+  const view = voiceView(s);
   const line = (n: number) => rule("─".repeat(Math.max(0, n)));
   const key = (k: string, what: string) =>
     k ? `${fg(T.dim, k)}${fg(T.muted, ` ${what}`)}` : "";
@@ -251,10 +293,10 @@ export function renderRule(
     rows.find((r) => r !== undefined);
   const more = hiddenBelow > 0 ? rule(`↓ ${hiddenBelow} more`) : undefined;
 
-  if (s.state === "error") {
+  if (view.kind === "error") {
     const mark = fg(T.error, ascii ? "x" : "✗");
     const room = Math.max(0, width - 9);
-    const full = s.message;
+    const full = view.message;
     const text =
       visibleWidth(full) <= room
         ? full
@@ -262,37 +304,46 @@ export function renderRule(
     const cause = `${mark}${fg(T.muted, ` ${text}`)}`;
     return first([compose(cause, more ?? ""), compose(cause, "")]);
   }
-  if (s.state === "discarded") {
+  if (view.kind === "discarded") {
     const notice = fg(T.muted, "discarded");
     return first([
       compose(notice, more ?? key(keys.undo, "undo")),
       compose(notice, ""),
     ]);
   }
-  if (!phase) return undefined;
+  if (view.kind === "off") return undefined;
 
-  const { light, word, advisories } = marks(s, phase, paint, true);
+  const light = view.recording
+    ? ascii
+      ? "[rec]"
+      : fg(T.accent, "●")
+    : ascii
+      ? "[...]"
+      : fg(T.muted, "○");
+  // the ellipsis keeps a fixed three cells on the rule, so the row never shifts under it
+  const word =
+    fg(T.muted, view.word) +
+    (view.dots
+      ? fg(T.dim, (ascii ? "." : "·").repeat(view.dots)) +
+        " ".repeat(3 - view.dots)
+      : "");
+  const advisories = view.advisories.map((a) => fg(T[a.tone], a.text));
+  const lw = `${light} ${word}`;
+  const phrase = advisories.length ? [lw, ...advisories].join(sep) : lw;
 
-  // Enter keeps only what the server will transcribe: speech, on an accepted session
-  const canKeep = s.heardSpeech && s.accepted;
   // an unbound id draws no hint at all: the rule never names a key that isn't there
   const hints =
-    phase === "listening" && canKeep
+    view.offer === "keep"
       ? [key(keys.submit, "keep"), key(keys.cancel, "discard")]
           .filter(Boolean)
           .join(sep)
-      : phase === "listening" || phase === "starting"
-        ? key(keys.cancel, "cancel")
-        : key(keys.cancel, "discard");
+      : key(keys.cancel, view.offer);
   const fewerHints =
-    phase === "listening" && canKeep ? key(keys.cancel, "discard") : hints;
+    view.offer === "keep" ? key(keys.cancel, "discard") : hints;
 
-  const meter =
-    phase === "listening" || phase === "tail"
-      ? meterCells(s.bars, rule, paint)
-      : line(METER_CELLS);
-  const lw = `${light} ${word}`;
-  const phrase = advisories.length ? [lw, ...advisories].join(sep) : lw;
+  const meter = view.recording
+    ? meterCells(s.bars, rule, paint)
+    : line(METER_CELLS);
   return first([
     compose(phrase, more ?? hints, meter),
     compose(phrase, more ?? fewerHints, meter),

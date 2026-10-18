@@ -418,3 +418,28 @@ test("a chunk that arrives in the same pass as the stall check still counts: no 
   expect(h.states).not.toContain("error");
   h.controller.cancel();
 });
+
+test("a toggle while the last words drain is ignored: it neither restarts nor stops twice", async () => {
+  const h = harness({}, { stopNeverResolves: true });
+  h.controller.toggle();
+  h.opts().onReady?.();
+  h.opts().onFinal?.("still draining");
+  h.controller.toggle();
+  await vi.advanceTimersByTimeAsync(TIMING.tailMs);
+  expect(h.controller.state).toBe("transcribing");
+  h.controller.toggle();
+  expect(h.controller.state).toBe("transcribing");
+  expect(h.sessions).toHaveLength(1);
+  expect(h.sessions[0]?.stopCalls).toBe(1);
+  expect(h.sessions[0]?.canceled).toBe(false);
+});
+
+test("the hard cap stops only a listening dictation: one still connecting is left to its own timeout", async () => {
+  const h = harness({ maxMs: 1_000 });
+  h.controller.toggle();
+  h.opts().onLevel?.(SPEECH);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(h.controller.state).toBe("arming");
+  expect(h.sessions[0]?.stopCalls).toBe(0);
+  h.controller.cancel();
+});

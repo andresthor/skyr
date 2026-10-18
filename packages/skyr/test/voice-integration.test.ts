@@ -350,3 +350,16 @@ test.each(HEADLESS)(
     expect(ctx.ui.setEditorComponent).not.toHaveBeenCalled();
   },
 );
+
+test("each TUI session_start asks for a token ahead of the first dictation; a headless one does not", async () => {
+  withCreds();
+  agentDirWith();
+  const pi = registeredVoice({ mode: "ascii" });
+  const start = pi.handlers.get("session_start")!;
+  await start(null, voiceCtx({ mode: "json" }));
+  expect(pi.signIns).toEqual([]);
+  await start(null, voiceCtx());
+  await start(null, voiceCtx());
+  expect(pi.signIns).toHaveLength(2);
+  expect(pi.signIns[0]).toMatch(/^https:\/\/auth\.test-env\.corti\.app\//);
+});

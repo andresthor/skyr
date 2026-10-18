@@ -568,7 +568,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           ? run.behind
             ? ` · behind ${run.behind}`
             : ""
-          : ` · ${count(run.turns, "turn")} · ${count(run.toolCalls, "tool")}${run.activity ? ` · ${run.activity}` : ""}${run.worktree ? " · worktree" : ""}${run.stalled ? " · stalled" : ""}`;
+          : ` · ${count(run.turns, "turn")} · ${count(run.toolCalls, "tool")}${run.tool ? ` · ${run.tool}` : ""}${run.worktree ? " · worktree" : ""}${run.activity === "unknown" ? " · stalled" : ""}`;
       const line = `${mark} ${labelOf(run)}${progress} · ${Math.round((now - run.startedAt) / 1000)}s · ${run.id.slice(0, 8)}`;
       return truncateToWidth(sanitize(line), WIDGET_WIDTH);
     });
@@ -653,23 +653,22 @@ export function registerSubagent(pi: ExtensionAPI): void {
             errorText(error),
           error,
         );
-      // From the store while the child is live, else the last snapshot this call sent: the
-      // store is empty once the child has ended, or when a reload cleared it mid-run.
+      // The store's snapshot while the child is live, else the last one this call sent (the store
+      // is empty once the child has ended, or when a reload cleared it mid-run); either way
+      // without the live-only `activity`.
       const ended = (
         status: RunStatus,
         text: string,
         isError = true,
         extra: Partial<RunSnapshot> = {},
-      ): Outcome => ({
-        text,
-        isError,
-        details: {
-          ...(store.byToolCall(toolCallId) ?? sent),
-          status,
-          endedAt: Date.now(),
-          ...extra,
-        },
-      });
+      ): Outcome => {
+        const { activity: _, ...last } = store.byToolCall(toolCallId) ?? sent;
+        return {
+          text,
+          isError,
+          details: { ...last, status, endedAt: Date.now(), ...extra },
+        };
+      };
 
       const finish = async (): Promise<Outcome> => {
         try {
@@ -832,10 +831,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
         return toolRow(theme, [
           ["accent", "● running"],
           ...summary(run),
-          ["muted", run.activity ? ` · ${run.activity}` : ""],
+          ["muted", run.tool ? ` · ${run.tool}` : ""],
           ...runTime(run),
           ["muted", run.worktree ? " · worktree" : ""],
-          ["muted", run.stalled ? " · stalled" : ""],
+          ["muted", run.activity === "unknown" ? " · stalled" : ""],
         ]);
       return toolRow(theme, [
         ["success", "✓ done"],

@@ -75,7 +75,7 @@ export function processRunner(
             ).then(readSnapshot, () => undefined);
             if (snap === undefined) return;
             while (snap.toolCalls > last.toolCalls) {
-              // Delta tool calls share the snapshot's latest activity name.
+              // Delta tool calls share the snapshot's latest tool name.
               onEvent({ type: "tool", name: snap.activity ?? "" });
               last.toolCalls += 1;
             }

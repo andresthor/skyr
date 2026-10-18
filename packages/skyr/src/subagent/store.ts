@@ -18,15 +18,15 @@ export interface RunSnapshot {
   /** Input plus output tokens, summed over the child's turns. */
   tokens: number;
   /** Name of the child's latest tool call. */
-  activity?: string;
+  tool?: string;
+  /** Set by the store while running: `unknown` once the child's heartbeat goes stale, which is no evidence either way. */
+  activity?: "working" | "unknown";
   /** Label of the writer directly ahead; present only while queued. */
   behind?: string;
   /** The call returned at once; the answer is delivered as a message. */
   background?: true;
   /** The child writes in its own fresh git worktree, not the parent's tree. */
   worktree?: { path: string; branch: string };
-  /** Relative to the child's own heartbeat clock: quiet turns never stall. */
-  stalled?: true;
   /** Delivered from a recovered job dir after a restarted session; not a live child. */
   recovered?: true;
   sessionFile?: string;
@@ -40,8 +40,9 @@ type RunEvent =
 
 export interface RunStore {
   /**
-   * `start` creates or replaces an entry and `end` removes it; events for an unknown id, such as
-   * a child's late progress after `clear`, are ignored. Snapshots already handed out never change.
+   * `start` creates or replaces an entry, marking a running one `working`, and `end` removes it;
+   * events for an unknown id, such as a child's late progress after `clear`, are ignored.
+   * Snapshots already handed out never change.
    */
   apply(id: string, event: RunEvent): void;
   /** Undefined once the child has ended. */
@@ -62,7 +63,13 @@ export function createRunStore(): RunStore {
   return {
     apply(id, event) {
       if (event.type === "start") {
-        runs.set(id, event.snapshot);
+        const { snapshot } = event;
+        runs.set(
+          id,
+          snapshot.status === "running"
+            ? { ...snapshot, activity: "working" }
+            : snapshot,
+        );
         return changed();
       }
       const run = runs.get(id);
@@ -71,16 +78,15 @@ export function createRunStore(): RunStore {
       else if (event.type === "tool")
         runs.set(id, {
           ...run,
-          activity: event.name,
+          tool: event.name,
           toolCalls: run.toolCalls + 1,
         });
-      else if (event.type === "stalled") {
-        const { stalled: _, ...rest } = run;
-        runs.set(
-          id,
-          event.stalled ? { ...rest, stalled: true as const } : rest,
-        );
-      } else if (event.type === "turn")
+      else if (event.type === "stalled")
+        runs.set(id, {
+          ...run,
+          activity: event.stalled ? "unknown" : "working",
+        });
+      else if (event.type === "turn")
         runs.set(id, {
           ...run,
           turns: run.turns + 1,

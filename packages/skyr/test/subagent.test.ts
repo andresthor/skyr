@@ -102,6 +102,27 @@ function resultRow(
   );
 }
 
+test("a running row says stalled only while the child's activity is unknown", () => {
+  const tool = registered();
+  const running = {
+    id: "1",
+    toolCallId: "t",
+    description: "look",
+    status: "running",
+    startedAt: Date.now(),
+    turns: 1,
+    toolCalls: 1,
+    tokens: 0,
+    tool: "grep",
+  };
+  const row = (activity: string) =>
+    resultRow(tool, "t", { content: [], details: { ...running, activity } })[0];
+  expect(row("unknown")).toMatch(
+    /^● running · 1 turn · 1 tool · grep · .* · stalled\s*$/,
+  );
+  expect(row("working")).not.toContain("stalled");
+});
+
 test("a child never receives the subagent tool, nor any extension installed for the user or the repo", async () => {
   const parent = await parentSession({
     respond: router([call({ agent: "scout", task: "look" })], () =>
@@ -145,7 +166,7 @@ test("a child's text and description cannot reach the terminal as escapes, the r
     turns: 1,
     toolCalls: 2,
     tokens: 0,
-    activity: hostile,
+    tool: hostile,
   };
   const callRow = (args: Record<string, string>, width: number) =>
     tool.renderCall?.(args, plain, {} as RenderContext).render(width) ?? [];
@@ -698,6 +719,7 @@ test("the row and status count follow the store while a child runs, and a resume
     id: (updates[0] as { id: string }).id,
     status: "done",
   });
+  expect(saved?.details).not.toHaveProperty("activity");
   expect(
     resultRow(registered(), "s", {
       content: [],

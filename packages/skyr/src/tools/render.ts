@@ -85,7 +85,8 @@ export function errorRow(
 export interface Timing {
   startedAt?: number;
   endedAt?: number;
-  ticker?: ReturnType<typeof setInterval>;
+  /** Present while the shared ticker redraws the row. */
+  redraw?: () => void;
 }
 
 export function seconds(ms: number): Segment[] {
@@ -93,8 +94,31 @@ export function seconds(ms: number): Segment[] {
 }
 
 // Pi can drop a running row before its result renders (a chat rebuild, an HTML export), and
-// only `took` stops the ticker; this bound, well past any web tool's deadline, stops it otherwise.
+// only `took` stops its ticking; this bound, well past any web tool's deadline, stops it otherwise.
 const TICK_LIMIT_MS = 5 * 60_000;
+
+/** The running rows, redrawn each second by one ticker that runs only while a row is here. */
+const ticking = new Set<Timing>();
+let ticker: ReturnType<typeof setInterval> | undefined;
+
+function startTicking(state: Timing, redraw: () => void): void {
+  state.redraw = redraw;
+  ticking.add(state);
+  ticker ??= setInterval(() => {
+    const now = Date.now();
+    for (const row of ticking)
+      if (now - (row.startedAt ?? now) < TICK_LIMIT_MS) row.redraw?.();
+      else stopTicking(row);
+  }, 1000);
+}
+
+function stopTicking(state: Timing): void {
+  ticking.delete(state);
+  state.redraw = undefined;
+  if (ticking.size > 0 || ticker === undefined) return;
+  clearInterval(ticker);
+  ticker = undefined;
+}
 
 /**
  * For `renderCall`: starts the clock when Pi starts executing the call and redraws the row each
@@ -109,12 +133,8 @@ export function elapsed(context: {
 }): Segment[] {
   const { state } = context;
   if (context.executionStarted && state.startedAt === undefined) {
-    const startedAt = Date.now();
-    state.startedAt = startedAt;
-    state.ticker = setInterval(() => {
-      if (Date.now() - startedAt < TICK_LIMIT_MS) context.invalidate();
-      else clearInterval(state.ticker);
-    }, 1000);
+    state.startedAt = Date.now();
+    startTicking(state, context.invalidate);
   }
   if (state.startedAt === undefined || state.endedAt !== undefined) return [];
   return seconds(Date.now() - state.startedAt);
@@ -134,7 +154,6 @@ export function took(context: {
   if (context.isPartial && !context.isError)
     return seconds(Date.now() - state.startedAt);
   state.endedAt ??= Date.now();
-  clearInterval(state.ticker);
-  state.ticker = undefined;
+  stopTicking(state);
   return seconds(state.endedAt - state.startedAt);
 }

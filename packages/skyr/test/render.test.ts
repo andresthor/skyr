@@ -136,6 +136,8 @@ describe("row timing", () => {
   });
 
   afterEach(() => {
+    // the ticker is shared across rows: past the tick limit, every row a test left running drops
+    vi.advanceTimersByTime(5 * 60_000);
     vi.useRealTimers();
   });
 
@@ -181,6 +183,25 @@ describe("row timing", () => {
     vi.advanceTimersByTime(1_000);
     elapsed(call(state, true));
     expect(vi.getTimerCount()).toBe(1);
+  });
+
+  test("running rows share one ticker, which stops with the last row", () => {
+    const first: Timing = {};
+    const second: Timing = {};
+    const redrawn = { first: vi.fn(), second: vi.fn() };
+    elapsed(call(first, true, redrawn.first));
+    elapsed(call(second, true, redrawn.second));
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(1_000);
+    expect(redrawn.first).toHaveBeenCalledTimes(1);
+    expect(redrawn.second).toHaveBeenCalledTimes(1);
+
+    took({ state: first });
+    vi.advanceTimersByTime(1_000);
+    expect(redrawn.first).toHaveBeenCalledTimes(1);
+    expect(redrawn.second).toHaveBeenCalledTimes(2);
+    took({ state: second });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   test("a row Pi drops before its result stops ticking on its own", () => {

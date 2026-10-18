@@ -14,7 +14,6 @@ import type { DictationSink } from "../src/voice/dictation.js";
 import {
   DictationController,
   type DictationTiming,
-  SPEECH_DBFS,
 } from "../src/voice/dictation.js";
 import { VoiceError } from "../src/voice/errors.js";
 import { CREDS } from "./voice.js";
@@ -427,13 +426,14 @@ test("listeners get each chunk's level as the session measured it", () => {
   expect(seen).toEqual([-6]);
 });
 
-test("speech starts at SPEECH_DBFS: a chunk just under it is not heard, one just over it is", () => {
+test("speech starts above −49.8 dBFS: a chunk at or just under it is not heard, one just over it is", () => {
   const h = harness();
   h.controller.toggle();
   h.opts().onReady?.();
-  h.opts().onLevel?.(SPEECH_DBFS - 0.1);
+  h.opts().onLevel?.(-49.81);
+  h.opts().onLevel?.(-49.8);
   expect(h.controller.facts().heardSpeech).toBe(false);
-  h.opts().onLevel?.(SPEECH_DBFS + 0.1);
+  h.opts().onLevel?.(-49.79);
   expect(h.controller.facts().heardSpeech).toBe(true);
   h.controller.cancel();
 });

@@ -80,8 +80,8 @@ export const DEFAULT_TIMING: DictationTiming = {
   stallMs: 1_500,
 };
 
-/** A chunk louder than this is speech; room noise sits below it. */
-export const SPEECH_DBFS = -49.813823223897565;
+/** The speech gate in dBFS: room noise sits below it, speech above it. */
+export const SPEECH_DBFS = -49.8;
 /** ~1.5 s of chunks that are exactly zero: macOS hands a mic-denied process silence, not an error. */
 const ZERO_CHUNKS_BLOCKED = 24;
 

@@ -175,14 +175,18 @@ export function voiceCtx(
   } = {},
 ): VoiceCtx {
   const mode = o.mode ?? "tui";
+  // like Pi, the component getter answers with whatever was installed last
+  let installed = o.installed;
   return {
     mode,
     hasUI: o.hasUI ?? (mode === "tui" || mode === "rpc"),
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
-      setEditorComponent: vi.fn(),
-      getEditorComponent: vi.fn(() => o.installed),
+      setEditorComponent: vi.fn((factory) => {
+        installed = factory;
+      }),
+      getEditorComponent: vi.fn(() => installed),
       getEditorText: vi.fn(() => ""),
       setEditorText: vi.fn(),
       theme: o.theme,

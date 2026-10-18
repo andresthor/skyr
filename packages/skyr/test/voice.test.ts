@@ -195,6 +195,25 @@ test("a foreign editor keeps its place, and dictation still reaches the buffer t
   expect(ctx.ui.setEditorText).toHaveBeenLastCalledWith("draft hello there");
 });
 
+test("an editor another extension installs after ours takes over: voice still starts, and dictation reaches it through setEditorText", async () => {
+  withCreds();
+  agentDirWith();
+  const { starts, start } = recording();
+  const pi = registeredVoice({ mode: "ascii", controller: { start } });
+  const ctx = voiceCtx();
+  ctx.ui.getEditorText.mockReturnValue("draft");
+  await pi.handlers.get("session_start")!(null, ctx);
+  const ours = mountedEditor(ctx.ui);
+  // Pi focuses the newcomer, which leaves ours detached and unfocused
+  ctx.ui.setEditorComponent((() => ({})) as never);
+  ours.focused = false;
+  await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+  expect(ctx.ui.notify).not.toHaveBeenCalled();
+  starts[0]!.onReady?.();
+  starts[0]!.onFinal("hello there");
+  expect(ctx.ui.setEditorText).toHaveBeenLastCalledWith("draft hello there");
+});
+
 test("skyr.json problems are told once in the TUI too, and voice still mounts", async () => {
   withCreds();
   agentDirWith('{"voice": {"language": "english"}}');

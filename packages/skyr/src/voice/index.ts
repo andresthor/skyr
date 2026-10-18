@@ -101,6 +101,8 @@ function startRefusal(
   return startBlocked(VOICE_SHORTCUT);
 }
 
+type EditorFactory = Parameters<ExtensionUIContext["setEditorComponent"]>[0];
+
 export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   const mode = opts.mode ?? voiceMode(process.env);
   const resolved = resolveSttCredentials();
@@ -122,9 +124,10 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   // The live TUI instance, handed over at mount so a repaint can be asked for; gone when the
   // session is, so a stale session never paints.
   let tui: Tui | undefined;
-  // The mounted voice editor, set once Pi calls the factory; undefined until then, or when
-  // another extension owns the input.
+  // The mounted voice editor, set once Pi calls the factory; read it through ours().
   let editor: VoiceEditorLike | undefined;
+  // Kept by reference, so a later mount and ours() can recognise it.
+  let editorFactory: EditorFactory | undefined;
   // The session context of the last mount or toggle, for reading the buffer and theme outside a
   // callback; no dictation starts without one (toggle sets it), so reads never race a session.
   let ctxRef: ExtensionContext | undefined;
@@ -138,8 +141,13 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   let bars: number[] = [];
 
   const repaint = () => tui?.requestRender();
+  // Ours only while Pi still has our factory installed: an extension may replace it at any time.
+  const ours = () =>
+    editorFactory && ctxRef?.ui.getEditorComponent() === editorFactory
+      ? editor
+      : undefined;
   const sink = editorSink(
-    () => editor,
+    ours,
     {
       get: () => ctxRef?.ui.getEditorText() ?? "",
       set: (t) => ctxRef?.ui.setEditorText(t),
@@ -154,7 +162,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
   // Every route to the screen in one place: present the snapshot, decide the tick, repaint.
   const refresh = () => {
     presenter?.update(snapshot());
-    if (controller.state !== "idle" || editor?.animating) startTimer();
+    if (controller.state !== "idle" || ours()?.animating) startTimer();
     else stopTimer();
     repaint();
   };
@@ -206,7 +214,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
 
   const toggle = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
-    const refusal = startRefusal(controller.active, editor);
+    const refusal = startRefusal(controller.active, ours());
     if (refusal) {
       ctx.ui.notify(refusal, "warning");
       return;
@@ -221,9 +229,6 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     controller.toggle();
   };
 
-  type EditorFactory = Parameters<ExtensionUIContext["setEditorComponent"]>[0];
-  /** Once created, kept by reference: session_start later distinguishes ours from a foreign one. */
-  let editorFactory: EditorFactory | undefined;
   const mount = async (ctx: ExtensionContext) => {
     ctxRef = ctx;
     const installed = ctx.ui.getEditorComponent();
@@ -281,7 +286,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     await mount(ctx);
     presenter = voicePresenter({
-      editor: () => editor,
+      editor: ours,
       status: ctx.ui,
       paint: () => paintFor(ctxRef?.ui.theme, mode),
     });

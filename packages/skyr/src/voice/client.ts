@@ -9,14 +9,13 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { stripInvisible } from "../tools/render.js";
 import type { SttCredentials } from "./credentials.js";
 import { VoiceError } from "./errors.js";
-import { pcmRms } from "./mic.js";
+import { pcmRms, SAMPLE_RATE_HZ } from "./mic.js";
 
-const PCM =
-  "audio/pcm; rate=16000; channels=1; bits=16; endian=little; encoding=sint";
+const PCM = `audio/pcm; rate=${SAMPLE_RATE_HZ}; channels=1; bits=16; endian=little; encoding=sint`;
 /** 250 ms at 16 kHz s16le, Corti's recommended chunk; the hard cap is 64 000 B. */
-const CHUNK = 8000;
+const CHUNK_BYTES = 8_000;
 /** Past this after `end` the caller keeps the last interim; flushing on quiet usually has the final in already. */
-const END_TIMEOUT_MS = 2500;
+const END_TIMEOUT_MS = 2_500;
 
 /** Corti's two punctuation modes: inferred from the audio, or only where the speaker says it. */
 export type Punctuation = "automatic" | "spoken";
@@ -69,6 +68,8 @@ let cached: { key: string; token: string; exp: number } | undefined;
 /** Sign-in deadline: shorter than the controller's 10 s arm window, so a dead auth is
  * named for what it is before the whole session gives up. */
 export const TOKEN_TIMEOUT_MS = 8_000;
+/** A token this close to expiry is not worth starting a session on. */
+const TOKEN_MARGIN_S = 60;
 
 /** Seam for tests: global fetch offline, and a deadline a test can shorten. */
 export interface TokenDeps {
@@ -110,7 +111,11 @@ export async function getSttToken(
   if (typeof token !== "string" || typeof expiresIn !== "number")
     throw new VoiceError("Corti sign-in sent an unreadable answer");
   // a token only has to be valid at connect time; the margin keeps a session from starting on a dying one
-  cached = { key, token, exp: Date.now() + (expiresIn - 60) * 1000 };
+  cached = {
+    key,
+    token,
+    exp: Date.now() + (expiresIn - TOKEN_MARGIN_S) * 1000,
+  };
   return token;
 }
 
@@ -181,11 +186,11 @@ export function startSession(o: SessionOptions): SttSession {
     while (
       accepted &&
       !stopping &&
-      pending.length >= CHUNK &&
+      pending.length >= CHUNK_BYTES &&
       ws?.readyState === Socket.OPEN
     ) {
-      ws.send(pending.subarray(0, CHUNK));
-      pending = pending.subarray(CHUNK);
+      ws.send(pending.subarray(0, CHUNK_BYTES));
+      pending = pending.subarray(CHUNK_BYTES);
     }
   };
 

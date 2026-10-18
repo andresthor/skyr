@@ -24,7 +24,7 @@ import {
 import { VOICE_DEFAULTS } from "./config.js";
 import type { SttCredentials } from "./credentials.js";
 import { VoiceError } from "./errors.js";
-import { dbfs, micSource } from "./mic.js";
+import { dbfs, FULL_SCALE, micSource } from "./mic.js";
 
 export type VoiceState =
   | "idle"
@@ -69,19 +69,20 @@ export interface DictationTiming {
 export const DEFAULT_TIMING: DictationTiming = {
   tailMs: 400,
   flushMs: 900,
-  noSpeechMs: 8000,
+  noSpeechMs: 8_000,
   maxMs: 120_000,
   armTimeoutMs: 10_000,
-  errorHoldMs: 4000,
-  discardHoldMs: 2000,
-  stallMs: 1500,
+  errorHoldMs: 4_000,
+  discardHoldMs: 2_000,
+  stallMs: 1_500,
 };
 
 /**
  * A chunk louder than this is speech, about −49.8 dBFS; room noise sits below it. Written as its
- * derivation, 0.15 on a 0.6-power curve with full scale at 2,500/32,768 RMS, so the gate is exact.
+ * derivation, 0.15 on a 0.6-power curve at 2,500/32,768 RMS, so the gate is exact.
  */
-export const SPEECH_DBFS = 20 * Math.log10((2500 / 32768) * 0.15 ** (1 / 0.6));
+export const SPEECH_DBFS =
+  20 * Math.log10((2500 / FULL_SCALE) * 0.15 ** (1 / 0.6));
 /** ~1.5 s of chunks that are exactly zero: macOS hands a mic-denied process silence, not an error. */
 const ZERO_CHUNKS_BLOCKED = 24;
 

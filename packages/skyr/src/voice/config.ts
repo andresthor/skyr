@@ -67,12 +67,16 @@ export const VOICE_DEFAULTS: VoiceConfig = {
 /** Corti's locale form: 2–3 letters + optional `-<2–8 letters>`; it rides in the config JSON
  * body, not a hostname, so credential-grade hostname rules don't apply (credentials.ts). */
 const LANGUAGE = /^[a-z]{2,3}(-[a-zA-Z]{2,8})?$/;
-const KEYTERM_MAX = 50;
+/** Corti caps one keyterm at this many characters. */
+const KEYTERM_CHARS = 50;
+/** Corti caps one keyterm at this many words. */
 const KEYTERM_WORDS = 5;
-const REPLACEMENT_MAX = 100;
+/** Corti caps each side of a replacement at this many characters. */
+const REPLACEMENT_CHARS = 100;
+/** Corti caps each side of a replacement at this many words. */
 const REPLACEMENT_WORDS = 10;
-/** Corti takes 1,000 per connection; the built-ins are sent too, so user entries leave room. */
-const ITEM_LIMIT = 1000;
+/** Corti takes 1,000 terms per connection; the built-ins are sent too, so user entries leave room. */
+const MAX_TERMS = 1_000;
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
 
 /** Echoes a failed value into a problem string without flooding one. */
@@ -99,9 +103,9 @@ function parseKeyterms(raw: unknown, problem: Problem): string[] {
       problem("empty keyterm dropped");
       continue;
     }
-    if (term.length > KEYTERM_MAX) {
+    if (term.length > KEYTERM_CHARS) {
       problem(
-        `keyterm ${quoted(term)} exceeds ${KEYTERM_MAX} characters, dropped`,
+        `keyterm ${quoted(term)} exceeds ${KEYTERM_CHARS} characters, dropped`,
       );
       continue;
     }
@@ -113,11 +117,11 @@ function parseKeyterms(raw: unknown, problem: Problem): string[] {
     }
     out.push(term);
   }
-  const room = ITEM_LIMIT - CODING_KEYTERMS.length;
+  const room = MAX_TERMS - CODING_KEYTERMS.length;
   if (out.length > room) {
     out.length = room;
     problem(
-      `more than ${room} keyterms (${ITEM_LIMIT} including the built-ins), extras dropped`,
+      `more than ${room} keyterms (${MAX_TERMS} including the built-ins), extras dropped`,
     );
   }
   return out;
@@ -141,9 +145,9 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
       );
       continue;
     }
-    if (find.length > REPLACEMENT_MAX || replace.length > REPLACEMENT_MAX) {
+    if (find.length > REPLACEMENT_CHARS || replace.length > REPLACEMENT_CHARS) {
       problem(
-        `replacement ${quoted(find)} exceeds ${REPLACEMENT_MAX} characters, dropped`,
+        `replacement ${quoted(find)} exceeds ${REPLACEMENT_CHARS} characters, dropped`,
       );
       continue;
     }
@@ -164,11 +168,11 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
     seen.add(key);
     out.push({ find, replace });
   }
-  const room = ITEM_LIMIT - CODING_REPLACEMENTS.length;
+  const room = MAX_TERMS - CODING_REPLACEMENTS.length;
   if (out.length > room) {
     out.length = room;
     problem(
-      `more than ${room} replacements (${ITEM_LIMIT} including the built-ins), extras dropped`,
+      `more than ${room} replacements (${MAX_TERMS} including the built-ins), extras dropped`,
     );
   }
   return out;

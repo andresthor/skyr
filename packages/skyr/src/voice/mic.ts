@@ -4,6 +4,11 @@ import { existsSync } from "node:fs";
 import { PassThrough, type Readable } from "node:stream";
 import { VoiceError } from "./errors.js";
 
+/** The capture format everything else derives: chunk arithmetic, the speech gate, the PCM string. */
+export const SAMPLE_RATE_HZ = 16_000;
+/** s16le full scale; PCM RMS and the speech gate are fractions of it. */
+export const FULL_SCALE = 32_768;
+
 const REC_ARGS = [
   "-q",
   "-V1",
@@ -16,7 +21,7 @@ const REC_ARGS = [
   "-e",
   "signed-integer",
   "-r",
-  "16000",
+  `${SAMPLE_RATE_HZ}`,
   "-t",
   "raw",
   "-",
@@ -31,7 +36,7 @@ const FFMPEG_ARGS = [
   "-ac",
   "1",
   "-ar",
-  "16000",
+  `${SAMPLE_RATE_HZ}`,
   "-f",
   "s16le",
   "pipe:1",
@@ -93,7 +98,7 @@ export function pcmRms(buf: Buffer): number {
     const v = buf.readInt16LE(i * 2);
     sum += v * v;
   }
-  return Math.sqrt(sum / (n || 1)) / 32768;
+  return Math.sqrt(sum / (n || 1)) / FULL_SCALE;
 }
 
 /** An RMS that is 0..1 of full scale, in dBFS; silence is −Infinity. */

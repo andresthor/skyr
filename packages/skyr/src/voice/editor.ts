@@ -54,7 +54,7 @@ export interface VoiceEditorLike {
    * voice somewhere else.
    */
   showRule(s: VoiceSnapshot | undefined): boolean;
-  /** True while a committed span is still drying; reading prunes the spans that finished. */
+  /** True while a committed span is still drying. */
   readonly animating: boolean;
 }
 
@@ -123,10 +123,11 @@ export function createVoiceEditorClass(
 
     override render(width: number): string[] {
       const base = super.render(width);
+      const t = now();
+      this.drying = this.drying.filter((s) => t - s.at < DRY_MS);
       if (!this.ghostText && !this.drying.length) return base;
       // this editor is permanent: a throw here would take the input bar down with it
       try {
-        const t = now();
         return spliceGhost(base, {
           width,
           paddingX: this.getPaddingX(),
@@ -186,8 +187,7 @@ export function createVoiceEditorClass(
 
     get animating(): boolean {
       const t = now();
-      this.drying = this.drying.filter((s) => t - s.at < DRY_MS);
-      return this.drying.length > 0;
+      return this.drying.some((s) => t - s.at < DRY_MS);
     }
 
     reset(): void {
@@ -223,7 +223,7 @@ export function createVoiceEditorClass(
           lead: insert.length - insert.trimStart().length,
           at: t,
         },
-        ...this.drying.filter((s) => t - s.at < DRY_MS),
+        ...this.drying,
       ];
     }
   };

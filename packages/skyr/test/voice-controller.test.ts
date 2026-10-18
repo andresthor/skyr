@@ -281,6 +281,20 @@ test("never hearing speech at all fails with nothing heard", async () => {
   expect(h.controller.state).toBe("idle");
 });
 
+test("text arriving while the meter stays under the speech gate keeps the dictation alive", async () => {
+  const h = harness();
+  h.controller.toggle();
+  h.opts().onReady?.();
+  // a soft voice: every chunk is below the gate, but Corti still hears words
+  await chunks(h, 2_000, QUIET);
+  h.opts().onInterim?.("soft words");
+  await chunks(h, TIMING.noSpeechMs, QUIET);
+  expect(h.controller.state).toBe("listening");
+  expect(h.states).not.toContain("error");
+  expect(h.controller.heardSpeech).toBe(true);
+  h.controller.cancel();
+});
+
 test("a session that never accepts fails with didn't answer", async () => {
   const h = harness({ noSpeechMs: 20_000 });
   h.controller.toggle();

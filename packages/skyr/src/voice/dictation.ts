@@ -151,7 +151,7 @@ export class DictationController {
     return this.timing.maxMs - this.sinceStartMs;
   }
 
-  /** Something above SPEECH_LEVEL arrived in this dictation. */
+  /** This dictation has heard someone: a chunk above SPEECH_LEVEL, or any text from Corti. */
   get heardSpeech(): boolean {
     return this.heard;
   }
@@ -215,11 +215,13 @@ export class DictationController {
       },
       onInterim: (segment) => {
         if (!live()) return;
+        this.speechHeard();
         this.pendingInterim = segment;
         this.o.sink.interim(segment);
       },
       onFinal: (segment) => {
         if (!live()) return;
+        this.speechHeard();
         this.pendingInterim = "";
         this.finals++;
         this.o.sink.final(segment);
@@ -234,7 +236,7 @@ export class DictationController {
   finish(): void {
     if (this.state !== "arming" && this.state !== "listening") return;
     // nothing said and nothing shown: changing your mind is not an error
-    if (!this.heard && !this.finals && !this.pendingInterim) {
+    if (!this.heard) {
       this.session?.cancel();
       this.done();
       return;
@@ -345,11 +347,7 @@ export class DictationController {
       return;
     }
     this.zeroChunks = -Infinity;
-    if (level > SPEECH_LEVEL) {
-      this.heard = true;
-      if (this.quietStartTimer) this.cancelTimer(this.quietStartTimer);
-      this.quietStartTimer = undefined;
-    }
+    if (level > SPEECH_LEVEL) this.speechHeard();
     if (this.state === "listening" && level > SPEECH_LEVEL) {
       const gen = this.generation;
       if (this.flushTimer) this.cancelTimer(this.flushTimer);
@@ -358,6 +356,13 @@ export class DictationController {
           this.session?.flush?.();
       });
     }
+  }
+
+  /** A loud chunk and a transcript are the same evidence: nothing-heard can no longer fire. */
+  private speechHeard(): void {
+    this.heard = true;
+    if (this.quietStartTimer) this.cancelTimer(this.quietStartTimer);
+    this.quietStartTimer = undefined;
   }
 
   private setState(s: VoiceState): void {

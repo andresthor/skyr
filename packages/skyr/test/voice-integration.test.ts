@@ -304,3 +304,23 @@ test("session_shutdown, even twice, cancels the dictation once, clears the foote
   expect(h.ctx.ui.setStatus.mock.calls.at(-1)).toEqual(["voice", undefined]);
   expect(vi.getTimerCount()).toBe(0);
 });
+
+const HEADLESS = (["rpc", "json", "print"] as const).flatMap((mode) =>
+  [true, false].map((hasUI) => ({ mode, hasUI })),
+);
+
+test.each(HEADLESS)(
+  "outside the TUI ($mode, hasUI $hasUI), /voice and ctrl+space never start the microphone",
+  async ({ mode, hasUI }) => {
+    withCreds();
+    agentDirWith();
+    const { starts, start } = recording();
+    const pi = registeredVoice({ mode: "ascii", controller: { start } });
+    const ctx = voiceCtx({ mode, hasUI });
+    await pi.handlers.get("session_start")!(null, ctx);
+    await pi.commands.get("voice")!.handler("", ctx);
+    await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+    expect(starts).toHaveLength(0);
+    expect(ctx.ui.setEditorComponent).not.toHaveBeenCalled();
+  },
+);

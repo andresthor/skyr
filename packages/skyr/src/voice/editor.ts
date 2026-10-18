@@ -29,11 +29,7 @@ import {
 } from "./indicator.js";
 
 /** The text to insert so a segment reads naturally between what is before and after the cursor. */
-export function spacedSegment(
-  before: string,
-  after: string,
-  segment: string,
-): string {
+function spacedSegment(before: string, after: string, segment: string): string {
   const text = segment.trim();
   if (!text) return "";
   const lead = before && !/\s$/.test(before) ? " " : "";

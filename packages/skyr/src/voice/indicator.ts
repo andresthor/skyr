@@ -124,7 +124,7 @@ const ANSI =
 export const stripAnsi = (s: string) => s.replace(ANSI, "");
 const graphemes = new Intl.Segmenter();
 
-export interface LevelHistory {
+interface LevelHistory {
   push(level: number): void;
   /** Advance `dt` ms; returns the committed bars, newest first. */
   sample(dt: number): number[];

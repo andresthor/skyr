@@ -9,7 +9,6 @@ import { describe, expect, test } from "vitest";
 import {
   createVoiceEditorClass,
   editorSink,
-  spacedSegment,
   type VoiceEditorLike,
 } from "../src/voice/editor.js";
 import {
@@ -130,15 +129,21 @@ function fresh(
 const baseRender = (editor: FakeEditor, width = 40): string[] =>
   FakeEditor.prototype.render.call(editor, width);
 
-test("spacedSegment joins a segment into its surroundings with a single space on each side, only where missing", () => {
-  expect(spacedSegment("", "", "hi")).toBe("hi");
-  expect(spacedSegment("hello", ", and", "world")).toBe(" world");
-  expect(spacedSegment("hello ", "x", "world")).toBe("world ");
-  expect(spacedSegment("before", '"quoted"', "{ ")).toBe(" { ");
-  expect(spacedSegment("some", "", "   ")).toBe("");
-});
-
 describe("commit", () => {
+  test.each([
+    ["", 0, "hi", "hi"],
+    ["hello, and", 5, "world", "hello world, and"],
+    ["hello x", 6, "world", "hello world x"],
+    ['before"quoted"', 6, "{ ", 'before { "quoted"'],
+  ])(
+    "a final joins %j at column %i with one space on each side, only where missing",
+    (text, cursorCol, segment, after) => {
+      const editor = fresh(text, { cursorCol });
+      editor.commit(segment);
+      expect(editor.text).toBe(after);
+    },
+  );
+
   test("a final commits at the cursor and marks it wet", () => {
     const editor = fresh("hello ", { cursorCol: 6 });
     editor.commit("world");

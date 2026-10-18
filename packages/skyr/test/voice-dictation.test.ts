@@ -35,6 +35,7 @@ const CONFIG: SttConfig = {
   punctuation: "automatic",
   keyterms: [],
   replacements: [],
+  formatting: {},
 };
 
 /** Chunk levels in dBFS: well above the speech gate, and room noise well below it. */

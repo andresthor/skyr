@@ -9,7 +9,7 @@
  */
 
 import { quoted } from "../tools/render.js";
-import type { Replacement, SttConfig } from "./client.js";
+import type { Formatting, Replacement, SttConfig } from "./client.js";
 
 /** Case-sensitive written forms; Corti caps each at 50 chars / 5 words. */
 const CODING_KEYTERMS: readonly string[] = [
@@ -59,7 +59,21 @@ const VOICE_DEFAULTS: SttConfig = {
   punctuation: "automatic",
   keyterms: [],
   replacements: [],
+  formatting: {},
 };
+
+/** Corti's documented values per field, its default first; a value Corti adds later is refused
+ * here until it is listed. */
+const FORMATTING: Readonly<Record<keyof Formatting, readonly string[]>> = {
+  dates: ["locale:long", "locale:medium", "locale:short", "iso", "as_dictated"],
+  times: ["locale", "h24", "h12"],
+  numbers: ["numerals_above_nine", "numerals", "as_dictated"],
+  measurements: ["abbreviated", "as_dictated"],
+  numericRanges: ["numerals", "as_dictated"],
+  ordinals: ["numerals_above_nine", "numerals", "as_dictated"],
+};
+const isFormattingField = (key: string): key is keyof Formatting =>
+  Object.hasOwn(FORMATTING, key);
 
 /** Corti's locale form: 2–3 letters + optional `-<2–8 letters>`; it rides in the config JSON
  * body, not a hostname, so credential-grade hostname rules don't apply (credentials.ts). */
@@ -187,6 +201,31 @@ function parseReplacements(raw: unknown, problem: Problem): Replacement[] {
   return out;
 }
 
+function parseFormatting(raw: unknown, problem: Problem): Formatting {
+  const out: Formatting = {};
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    problem("formatting", "must be an object; using Corti's defaults");
+    return out;
+  }
+  for (const [key, value] of Object.entries(raw)) {
+    if (!isFormattingField(key)) {
+      problem(
+        `formatting.${key}`,
+        `is not a setting; ignored (settings: ${Object.keys(FORMATTING).join(", ")})`,
+      );
+      continue;
+    }
+    const allowed = FORMATTING[key];
+    if (typeof value === "string" && allowed.includes(value)) out[key] = value;
+    else
+      problem(
+        `formatting.${key}`,
+        `must be one of ${allowed.map((v) => JSON.stringify(v)).join(", ")}; using Corti's default ${JSON.stringify(allowed[0])}`,
+      );
+  }
+  return out;
+}
+
 /**
  * The Corti config the section asks for, with the built-in coding vocabulary merged in: what a
  * session is started with. Never throws; a wrong-typed field drops to its default, and each
@@ -220,7 +259,14 @@ function userSettings(raw: unknown, problems: string[]): SttConfig {
         `is not a setting; ignored (settings: ${Object.keys(VOICE_DEFAULTS).join(", ")})`,
       );
 
-  const { language, interims, punctuation, keyterms, replacements } = section;
+  const {
+    language,
+    interims,
+    punctuation,
+    keyterms,
+    replacements,
+    formatting,
+  } = section;
   if (language !== undefined) {
     if (typeof language === "string" && LANGUAGE.test(language))
       config.language = language;
@@ -251,6 +297,8 @@ function userSettings(raw: unknown, problems: string[]): SttConfig {
     config.keyterms = parseKeyterms(keyterms, problem);
   if (replacements !== undefined)
     config.replacements = parseReplacements(replacements, problem);
+  if (formatting !== undefined)
+    config.formatting = parseFormatting(formatting, problem);
   return config;
 }
 

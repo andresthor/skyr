@@ -69,6 +69,7 @@ describe("parseVoiceSection", () => {
       punctuation: "spoken",
       keyterms: [...DEFAULTS.keyterms, "Skýr"],
       replacements: DEFAULTS.replacements,
+      formatting: {},
     });
     expect(problems[0]).toBe(
       "skyr.json: voice.replacements must be an array; sending the built-in rules only",
@@ -82,7 +83,7 @@ describe("parseVoiceSection", () => {
     });
     expect(config.language).toBe("da");
     expect(problems).toEqual([
-      "skyr.json: voice.colors is not a setting; ignored (settings: language, interims, punctuation, keyterms, replacements)",
+      "skyr.json: voice.colors is not a setting; ignored (settings: language, interims, punctuation, keyterms, replacements, formatting)",
     ]);
   });
 
@@ -188,6 +189,51 @@ describe("parseVoiceSection", () => {
       expect(config[key]).toHaveLength(1000);
     },
   );
+});
+
+describe("formatting", () => {
+  test("nothing set sends nothing, so every field keeps Corti's default", () => {
+    expect(DEFAULTS.formatting).toEqual({});
+  });
+
+  test("documented values pass through as given", () => {
+    const { config, problems } = parseVoiceSection({
+      formatting: { numbers: "numerals", times: "h24", dates: "iso" },
+    });
+    expect(problems).toEqual([]);
+    expect(config.formatting).toEqual({
+      numbers: "numerals",
+      times: "h24",
+      dates: "iso",
+    });
+  });
+
+  test("a wrong value or unknown field is dropped alone, naming what is allowed", () => {
+    const { config, problems } = parseVoiceSection({
+      language: "da",
+      formatting: {
+        numbers: "words",
+        times: "as_dictated",
+        ordinals: "numerals",
+        units: "si",
+      },
+    });
+    expect(config.language).toBe("da");
+    expect(config.formatting).toEqual({ ordinals: "numerals" });
+    expect(problems).toEqual([
+      'skyr.json: voice.formatting.numbers must be one of "numerals_above_nine", "numerals", "as_dictated"; using Corti\'s default "numerals_above_nine"',
+      'skyr.json: voice.formatting.times must be one of "locale", "h24", "h12"; using Corti\'s default "locale"',
+      "skyr.json: voice.formatting.units is not a setting; ignored (settings: dates, times, numbers, measurements, numericRanges, ordinals)",
+    ]);
+  });
+
+  test("a formatting that is not an object leaves every field to Corti", () => {
+    const { config, problems } = parseVoiceSection({ formatting: ["iso"] });
+    expect(config.formatting).toEqual({});
+    expect(problems).toEqual([
+      "skyr.json: voice.formatting must be an object; using Corti's defaults",
+    ]);
+  });
 });
 
 describe("the built-in vocabulary", () => {

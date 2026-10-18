@@ -32,6 +32,19 @@ export interface Replacement {
   replace: string;
 }
 
+/** How Corti writes each kind of value; a field left out keeps Corti's default. */
+export type Formatting = Partial<
+  Record<
+    | "dates"
+    | "times"
+    | "numbers"
+    | "measurements"
+    | "numericRanges"
+    | "ordinals",
+    string
+  >
+>;
+
 /** What a Corti session is configured with: the settings the skyr.json voice section carries. */
 export interface SttConfig {
   /** Corti primaryLanguage. */
@@ -43,6 +56,7 @@ export interface SttConfig {
   /** Sent as given; voice/config.ts merges the built-ins in. */
   keyterms: readonly string[];
   replacements: readonly Replacement[];
+  formatting: Formatting;
 }
 
 export interface SessionOptions extends SttConfig {
@@ -317,6 +331,9 @@ export function startSession(
                 : {}),
               ...(o.replacements.length
                 ? { replacements: o.replacements }
+                : {}),
+              ...(Object.keys(o.formatting).length
+                ? { formatting: o.formatting }
                 : {}),
             },
           }),

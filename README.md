@@ -65,7 +65,8 @@ Behaviour knobs live in `<agentDir>/skyr.json` under the `voice` key:
     "interims": true,
     "punctuation": "automatic",
     "keyterms": ["TypeScript"],
-    "replacements": [{ "find": "type script", "replace": "TypeScript" }]
+    "replacements": [{ "find": "type script", "replace": "TypeScript" }],
+    "formatting": { "numbers": "numerals", "times": "h24" }
   }
 }
 ```
@@ -74,6 +75,10 @@ Behaviour knobs live in `<agentDir>/skyr.json` under the `voice` key:
 next session. A malformed section degrades to the defaults and is reported once per session,
 never a startup failure. Term caps are Corti's: 50 chars / 5 words per keyterm, 100 chars / 10 words per
 replacement, 1,000 per connection.
+
+`formatting` sets how Corti writes `dates`, `times`, `numbers`, `measurements`, `numericRanges`
+and `ordinals`, with the values in [Corti's formatting docs](https://docs.corti.ai/stt/formatting);
+a field left out keeps Corti's default.
 
 ## Subagents
 

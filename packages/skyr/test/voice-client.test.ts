@@ -96,6 +96,7 @@ const CONFIG: SttConfig = {
   punctuation: "automatic",
   keyterms: [],
   replacements: [],
+  formatting: {},
 };
 
 let salt = 0;
@@ -316,6 +317,16 @@ test("interims off is sent as off, automatic punctuation as its one flag, and an
   expect(config.spokenPunctuation).toBeUndefined();
   expect(config.keyterms).toBeUndefined();
   expect(config.replacements).toBeUndefined();
+  expect(config.formatting).toBeUndefined();
+  h.session.cancel();
+});
+
+test("formatting reaches Corti's config with only the fields set", async () => {
+  const h = await drive({ formatting: { numbers: "numerals" } });
+  h.sock.onopen?.();
+  h.sock.server({ type: "CONFIG_ACCEPTED" });
+  const config = h.sock.control()[0]!.configuration as Record<string, unknown>;
+  expect(config.formatting).toEqual({ numbers: "numerals" });
   h.session.cancel();
 });
 

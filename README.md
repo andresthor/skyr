@@ -97,8 +97,10 @@ You are a scout. …
 
 Pi looks for agents in `agents/` under its config dir (`~/.pi/agent/agents/` by default) and, in
 a project Pi trusts, in `.pi/agents/`. A project agent replaces a user agent of the same name.
-Edits apply after `/reload`. Without `tools`, an agent gets `read`, `grep`, `find`, `ls`,
-`bash`, `web_search` and `web_fetch`. Pi lists the agents to the model.
+Edits apply after `/reload`. An agent with a field skyr does not act on, such as Claude Code's
+`disallowedTools` or another extension's, still loads; the field is named in a warning. Without
+`tools`, an agent gets `read`, `grep`, `find`, `ls`, `bash`, `web_search` and `web_fetch`. Pi
+lists the agents to the model.
 
 A call needs no agent file: without `agent` the model gets a general-purpose subagent with Pi's
 own prompt, the default tools, the parent's model and working directory. On any call, `prompt`

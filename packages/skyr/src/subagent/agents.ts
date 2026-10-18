@@ -2,7 +2,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { loadPi } from "../pi.js";
-import { errnoOf } from "../tools/render.js";
+import { errnoOf, quoted, sanitize } from "../tools/render.js";
 
 export interface AgentDef {
   name: string;
@@ -51,6 +51,15 @@ const CLAUDE_CODE_TOOLS: Record<string, string> = {
   WebSearch: "web_search",
 };
 
+export const READ_FIELDS: readonly string[] = [
+  "name",
+  "description",
+  "tools",
+  "model",
+];
+// Claude Code's color only tints its UI, so it does not warn
+const QUIET_FIELDS = new Set([...READ_FIELDS, "color"]);
+
 type ParseFrontmatter = (content: string) => {
   frontmatter: unknown;
   body: string;
@@ -90,7 +99,7 @@ function parseAgent(
   file: string,
   content: string,
   parseFrontmatter: ParseFrontmatter,
-): AgentDef {
+): { agent: AgentDef; ignored: string[] } {
   const { frontmatter, body } = parseFrontmatter(content);
   if (
     typeof frontmatter !== "object" ||
@@ -113,12 +122,15 @@ function parseAgent(
     throw new Error("model must be a provider/model string or inherit");
 
   return {
-    name,
-    description: description.trim(),
-    tools: parseTools(fields.tools),
-    model: model === undefined || model === "inherit" ? undefined : model,
-    body,
-    source: file,
+    agent: {
+      name,
+      description: description.trim(),
+      tools: parseTools(fields.tools),
+      model: model === undefined || model === "inherit" ? undefined : model,
+      body,
+      source: file,
+    },
+    ignored: Object.keys(fields).filter((key) => !QUIET_FIELDS.has(key)),
   };
 }
 
@@ -126,6 +138,7 @@ async function loadDir(
   dir: string,
   parseFrontmatter: ParseFrontmatter,
   errors: string[],
+  warnings: string[],
 ): Promise<Map<string, AgentDef>> {
   const agents = new Map<string, AgentDef>();
   let entries: string[];
@@ -140,7 +153,7 @@ async function loadDir(
   for (const entry of entries.filter((e) => e.endsWith(".md")).sort()) {
     const file = join(dir, entry);
     try {
-      const agent = parseAgent(
+      const { agent, ignored } = parseAgent(
         file,
         await readFile(file, "utf8"),
         parseFrontmatter,
@@ -151,6 +164,10 @@ async function loadDir(
           `defines "${agent.name}", already defined by ${first.source}; skipped`,
         );
       agents.set(agent.name, agent);
+      if (ignored.length > 0)
+        warnings.push(
+          `${sanitize(file)}: ${ignored.map((key) => quoted(sanitize(key), 40)).join(", ")}`,
+        );
     } catch (error: unknown) {
       // yaml ends its first line with ":" and appends a multi-line code frame
       const reason =
@@ -167,17 +184,23 @@ async function loadDir(
  * Reads the `*.md` agent files in each dir. A missing dir contributes nothing. A project agent
  * replaces a user agent of the same name; within one dir the first file by name wins. A file
  * or dir that cannot be read, parsed or validated is skipped and described in `errors`; nothing
- * throws for one bad file.
+ * throws for one bad file. A loaded file with frontmatter fields skyr does not act on, such as
+ * another tool's agent format, is described in `warnings`.
  */
 export async function loadAgents(dirs: {
   user: string;
   project?: string;
-}): Promise<{ agents: Map<string, AgentDef>; errors: string[] }> {
+}): Promise<{
+  agents: Map<string, AgentDef>;
+  errors: string[];
+  warnings: string[];
+}> {
   const { parseFrontmatter } = await loadPi();
   const errors: string[] = [];
-  const user = await loadDir(dirs.user, parseFrontmatter, errors);
+  const warnings: string[] = [];
+  const user = await loadDir(dirs.user, parseFrontmatter, errors, warnings);
   const project = dirs.project
-    ? await loadDir(dirs.project, parseFrontmatter, errors)
+    ? await loadDir(dirs.project, parseFrontmatter, errors, warnings)
     : new Map<string, AgentDef>();
-  return { agents: new Map([...user, ...project]), errors };
+  return { agents: new Map([...user, ...project]), errors, warnings };
 }

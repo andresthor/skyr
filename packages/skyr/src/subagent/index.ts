@@ -32,6 +32,7 @@ import {
   DEFAULT_TOOLS,
   loadAgents,
   parseTools,
+  READ_FIELDS,
 } from "./agents.js";
 import { readStoredResult } from "./child/protocol.js";
 import { type ChildResult, runnerFor } from "./runner.js";
@@ -1014,6 +1015,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
     if (loadErrors.length > 0)
       ctx.ui.notify(
         `subagent: agent files that failed to load:\n${loadErrors.join("\n")}`,
+        "warning",
+      );
+    if (loaded.warnings.length > 0)
+      ctx.ui.notify(
+        `subagent: agent files with fields skyr ignores (it reads ${READ_FIELDS.join(", ")}):\n${loaded.warnings.join("\n")}`,
         "warning",
       );
 

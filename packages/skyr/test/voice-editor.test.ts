@@ -390,12 +390,25 @@ describe("editorSink", () => {
   function pair(editor?: EditorInstance) {
     const edits: string[] = [];
     const snap = "previous words typed";
+    // a buffer like Pi's: getEditorText reads back what setEditorText wrote
+    let buffer = snap;
+    const taken = { count: 0 };
     const sink = editorSink(
       () => editor,
-      { get: () => snap, set: (t) => edits.push(t) },
+      {
+        get: () => buffer,
+        set: (t) => {
+          edits.push(t);
+          buffer = t;
+        },
+      },
       () => {},
+      () => taken.count++,
     );
-    return { editor, sink, edits, snap };
+    const userTypes = (text: string) => {
+      buffer = text;
+    };
+    return { editor, sink, edits, snap, taken, userTypes };
   }
 
   /** Whether the editor's own render currently draws the italic ghost. */
@@ -434,6 +447,7 @@ describe("editorSink", () => {
       () => ed,
       { get: () => "", set: () => {} },
       () => {},
+      () => {},
     );
     sink.begin();
     sink.final("and more");
@@ -455,27 +469,33 @@ describe("editorSink", () => {
     expect(editor.text).toBe("start");
   });
 
-  test("without an editor the dictation rides setEditorText: the final replaces the live interim, revert restores the snapshot", () => {
+  test("without an editor the dictation rides setEditorText: finals only, never a half-heard interim, and revert restores the snapshot", () => {
     const { edits, sink, snap } = pair();
     sink.begin();
-    expect(edits).toEqual([]);
     sink.interim("tree data");
-    expect(edits).toEqual([`${snap} tree data`]);
     sink.interim("tree data structures");
-    expect(edits).toEqual([
-      `${snap} tree data`,
-      `${snap} tree data structures`,
-    ]);
+    // an interim in someone else's editor is text Enter would send
+    expect(edits).toEqual([]);
     sink.final("tree data structures");
-    expect(edits).toEqual([
-      `${snap} tree data`,
-      `${snap} tree data structures`,
-      `${snap} tree data structures`,
-    ]);
+    expect(edits).toEqual([`${snap} tree data structures`]);
     sink.end();
-    expect(edits.at(-1)).toBe(`${snap} tree data structures`);
-    // the buffer changed, but the fallback falls to plain text: no undo is on offer
+    // the fallback's writes are plain text: no undo is on offer
     expect(sink.revert()).toBe(false);
     expect(edits.at(-1)).toBe(snap);
+  });
+
+  test("once the user sends or edits the foreign buffer, voice stops writing, says so once, and leaves their text on revert", () => {
+    const { edits, sink, snap, taken, userTypes } = pair();
+    sink.begin();
+    sink.final("one");
+    expect(edits).toEqual([`${snap} one`]);
+    // Enter sent it, so the foreign editor is empty again
+    userTypes("");
+    sink.final("two");
+    sink.final("three");
+    expect(edits).toEqual([`${snap} one`]);
+    expect(taken.count).toBe(1);
+    expect(sink.revert()).toBe(false);
+    expect(edits).toEqual([`${snap} one`]);
   });
 });

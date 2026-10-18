@@ -229,16 +229,28 @@ export function createVoiceEditorClass(
 }
 
 /**
- * Routes dictation into whichever VoiceEditor is current, or into plain
- * `setEditorText` when another extension owns the editor (no ghost there).
+ * Routes dictation into whichever VoiceEditor is current, or into plain `setEditorText` when
+ * another extension owns the editor. Voice sees no keys there, so the fallback writes finals
+ * only, and only while the buffer still holds exactly what voice last wrote; once the user has
+ * sent or edited it, voice writes nothing more, calls `taken` once, and leaves it on revert.
  */
 export function editorSink(
   target: () => VoiceEditorLike | undefined,
   fallback: { get(): string; set(text: string): void },
   repaint: () => void,
+  taken: () => void,
 ): DictationSink {
   let snapshot = "";
   let committed = "";
+  let theirs = false;
+  // true once the user changed the fallback buffer under voice; reports it the first time
+  const userTook = () => {
+    if (theirs) return true;
+    if (fallback.get() === committed) return false;
+    theirs = true;
+    taken();
+    return true;
+  };
   return {
     // a dictation can only start while our editor is focused, so nothing is held pending now
     begin() {
@@ -246,13 +258,12 @@ export function editorSink(
       // expanded, because setText drops the paste store a marker points into
       snapshot = ed ? ed.getExpandedText() : fallback.get();
       committed = snapshot;
+      theirs = false;
       ed?.reset();
       repaint();
     },
     interim(segment) {
-      const ed = target();
-      if (ed) ed.ghost(segment);
-      else fallback.set(committed + spacedSegment(committed, "", segment));
+      target()?.ghost(segment);
       repaint();
     },
     final(segment) {
@@ -260,7 +271,7 @@ export function editorSink(
       if (ed) {
         ed.ghost("");
         ed.commit(segment);
-      } else {
+      } else if (!userTook()) {
         committed += spacedSegment(committed, "", segment);
         fallback.set(committed);
       }
@@ -279,7 +290,7 @@ export function editorSink(
         repaint();
         return changed;
       }
-      fallback.set(snapshot);
+      if (!userTook()) fallback.set(snapshot);
       repaint();
       // the fallback's writes are each their own undo step, so there is no one undo to offer
       return false;

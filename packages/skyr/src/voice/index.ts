@@ -146,6 +146,8 @@ export function wireVoice(pi: ExtensionAPI, deps: VoiceDeps = {}): void {
       set: (t) => ctxRef?.ui.setEditorText(t),
     },
     repaint,
+    // the user sent or edited the text under a foreign editor: stop rather than write past them
+    () => controller.finish(),
   );
 
   const display = createVoiceDisplay({

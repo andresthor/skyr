@@ -189,6 +189,34 @@ test("a foreign editor keeps its place, and dictation still reaches the buffer t
   expect(ctx.ui.setEditorText).toHaveBeenLastCalledWith("draft hello there");
 });
 
+test("under a foreign editor, sending the text ends the dictation instead of writing it back", async () => {
+  withCreds();
+  agentDirWith();
+  const { starts, start, ends } = recording();
+  const pi = registeredVoice({ mode: "ascii", controller: { start } });
+  const ctx = voiceCtx({ installed: () => ({}) });
+  // a buffer like Pi's: getEditorText reads back what setEditorText wrote
+  let buffer = "draft";
+  ctx.ui.getEditorText.mockImplementation(() => buffer);
+  ctx.ui.setEditorText.mockImplementation((t) => {
+    buffer = t;
+  });
+  await pi.handlers.get("session_start")!(null, ctx);
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+  starts[0]!.onReady?.();
+  starts[0]!.onFinal("hello there");
+  expect(buffer).toBe("draft hello there");
+  // Enter reached the foreign editor and sent it
+  buffer = "";
+  starts[0]!.onFinal("and more");
+  expect(buffer).toBe("");
+  // the stop keeps the usual tail before it ends the session
+  await vi.advanceTimersByTimeAsync(400);
+  expect(ends[0]?.stopped).toBe(1);
+});
+
 test("an editor another extension installs after ours takes over: voice still starts, and dictation reaches it through setEditorText", async () => {
   withCreds();
   agentDirWith();

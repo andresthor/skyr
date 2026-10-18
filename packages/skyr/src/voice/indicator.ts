@@ -70,7 +70,7 @@ export function createLevelHistory(): LevelHistory {
 
 /** The footer's whole error row: the `voice ✗` prefix plus the message;
  * pi truncates further to the terminal's width. */
-export const ERROR_COLS = 60;
+const ERROR_COLS = 60;
 const ERROR_PREFIX_COLS = 8;
 /** Non-message columns in the rule's `── ✗ <message> ──`, plus one spare as compose keeps. */
 const ERROR_ROW_MARGIN = 9;
@@ -144,15 +144,13 @@ type VoiceView =
       word: "starting" | "listening" | "finishing";
       /** Steps of the finishing ellipsis: server work, never motion in the meter. */
       dots: 0 | 1 | 2 | 3;
-      /** Enter keeps only what the server will transcribe: speech, on an accepted session. */
-      canKeep: boolean;
       /** What the bound keys would do right now. */
       offer: "keep" | "cancel" | "discard";
       advisories: Advisory[];
     };
 
 /** Reads the facts once, deciding everything the displays then only have to draw. */
-export function voiceView(s: VoiceSnapshot): VoiceView {
+function voiceView(s: VoiceSnapshot): VoiceView {
   const phase = phaseOf(s);
   if (s.state === "error") return { kind: "error", message: s.message };
   if (s.state === "discarded") return { kind: "discarded" };
@@ -191,13 +189,13 @@ export function voiceView(s: VoiceSnapshot): VoiceView {
       text: `${Math.ceil(Math.max(0, s.capLeftMs) / 1000)}s left`,
       tone: "warning",
     });
+  // Enter keeps only what the server will transcribe: speech, on an accepted session
   const canKeep = s.heardSpeech && s.accepted;
   return {
     kind: "live",
     recording: phase === "listening" || phase === "tail",
     word,
     dots,
-    canKeep,
     offer:
       phase === "listening" && canKeep
         ? "keep"

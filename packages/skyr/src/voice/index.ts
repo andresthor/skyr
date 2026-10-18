@@ -45,7 +45,7 @@ import {
 import { paintFor, type VoiceMode } from "./palette.js";
 import { type VoicePresenter, voicePresenter } from "./presenter.js";
 
-export const VOICE_SHORTCUT = "ctrl+space";
+const VOICE_SHORTCUT = "ctrl+space";
 
 export interface VoiceOptions {
   /** What the terminal can show; read from the environment when not given. */
@@ -62,7 +62,10 @@ interface Tui {
   requestRender(): void;
 }
 
-/** TERM=dumb gets ASCII; NO_COLOR forbids colour, not glyphs or italics, unless FORCE_COLOR overrides it. */
+/**
+ * TERM=dumb gets ASCII; NO_COLOR forbids colour, not glyphs or italics, unless FORCE_COLOR overrides it.
+ * @internal
+ */
 export function voiceMode(env: NodeJS.ProcessEnv): VoiceMode {
   if (env.TERM === "dumb") return "ascii";
   const forcedOn =
@@ -89,7 +92,7 @@ async function readVoiceConfig(): Promise<{
  * Why ctrl+space cannot start dictating right now, or undefined to proceed. Dictating into
  * a hidden editor (an approval card or selector has the keyboard) would surprise.
  */
-export function startRefusal(
+function startRefusal(
   active: boolean,
   editor: { focused: boolean } | undefined,
 ): string | undefined {

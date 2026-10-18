@@ -34,7 +34,7 @@ const END_TIMEOUT_MS = 2_500;
 const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
 /** Corti's two punctuation modes: inferred from the audio, or only where the speaker says it. */
-export type Punctuation = "automatic" | "spoken";
+type Punctuation = "automatic" | "spoken";
 
 /** A rewrite Corti applies to the transcript; `find` matches case-insensitively. */
 export interface Replacement {
@@ -84,8 +84,10 @@ export interface SttSession {
 
 let cached: { key: string; token: string; exp: number } | undefined;
 
-/** Sign-in deadline: shorter than the controller's 10 s arm window, so a dead auth is
- * named for what it is before the whole session gives up. */
+/** Sign-in deadline: shorter than the controller's arm window, so a dead auth is
+ * named for what it is before the whole session gives up.
+ * @internal
+ */
 export const TOKEN_TIMEOUT_MS = 8_000;
 /** A token this close to expiry is not worth starting a session on. */
 const TOKEN_MARGIN_S = 60;
@@ -101,6 +103,7 @@ export interface TokenDeps {
  * cached, reused until `TOKEN_MARGIN_S` before its expiry. Throws `VoiceError` only: auth
  * unreachable, the sign-in deadline passing, credentials refused, unknown tenant, or a
  * failed or unreadable answer.
+ * @internal
  */
 export async function getSttToken(
   creds: SttCredentials,

@@ -10,23 +10,19 @@ import {
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import type { VoiceSnapshot } from "../src/voice/indicator.js";
-import { ERROR_COLS, renderStatus } from "../src/voice/indicator.js";
+import { renderStatus } from "../src/voice/indicator.js";
 import {
   FALLBACK_PALETTE,
   paintFor,
   type VoiceMode,
 } from "../src/voice/palette.js";
-import {
-  type RuleEditor,
-  VOICE_STATUS_KEY,
-  voicePresenter,
-} from "../src/voice/presenter.js";
+import { type RuleEditor, voicePresenter } from "../src/voice/presenter.js";
 import { snap } from "./voice.js";
 
 class FakeStatusUi {
   lines: (string | undefined)[] = [];
   setStatus = (key: string, text: string | undefined) => {
-    expect(key).toBe(VOICE_STATUS_KEY);
+    expect(key).toBe("skyr.voice");
     this.lines.push(text);
   };
   get last() {
@@ -147,7 +143,8 @@ test("the error row names the cause, truncated by whole columns", () => {
   )!;
   expect(stripTerminalSequences(short)).toBe("voice ✗ microphone blocked");
   const long = renderStatus(snap({ state: "error", message: "x".repeat(90) }))!;
-  expect(visibleWidth(long)).toBe(ERROR_COLS);
+  // the footer's error row is 60 columns whole, prefix included
+  expect(visibleWidth(long)).toBe(60);
 });
 
 test("TERM=dumb and NO_COLOR forms: ASCII marks, or the glyphs without colour", () => {

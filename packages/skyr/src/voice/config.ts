@@ -12,7 +12,7 @@ import { clip } from "../tools/render.js";
 import type { Replacement, SttConfig } from "./client.js";
 
 /** Case-sensitive written forms; Corti caps each at 50 chars / 5 words. */
-export const CODING_KEYTERMS: readonly string[] = [
+const CODING_KEYTERMS: readonly string[] = [
   "npm",
   "pnpm",
   "npx",
@@ -44,7 +44,7 @@ export const CODING_KEYTERMS: readonly string[] = [
  * Deterministic fixes for misses measured on the live endpoint. `find` matches
  * case-insensitively, and two rules differing only in case are CONFIG_DENIED.
  */
-export const CODING_REPLACEMENTS: readonly Replacement[] = [
+const CODING_REPLACEMENTS: readonly Replacement[] = [
   { find: "vitist", replace: "vitest" },
   { find: "vi test", replace: "vitest" },
   { find: "async await", replace: "async/await" },

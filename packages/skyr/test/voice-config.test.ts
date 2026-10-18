@@ -6,12 +6,13 @@
  */
 import { describe, expect, test } from "vitest";
 import {
-  CODING_KEYTERMS,
-  CODING_REPLACEMENTS,
   mergeVocabulary,
   parseVoiceSection,
   VOICE_DEFAULTS,
 } from "../src/voice/config.js";
+
+/** The built-in coding vocabulary, as the merge hands it to Corti when the user adds nothing. */
+const BUILT_IN = mergeVocabulary(VOICE_DEFAULTS);
 
 describe("parseVoiceSection", () => {
   test("an absent section parses to the defaults with no problems", () => {
@@ -173,11 +174,7 @@ describe("parseVoiceSection", () => {
             }));
       const { config, problems } = parseVoiceSection({ [key]: entries });
       // the parser leaves room for the built-ins, so the merged list lands exactly on the cap
-      const room =
-        1000 -
-        (key === "keyterms"
-          ? CODING_KEYTERMS.length
-          : CODING_REPLACEMENTS.length);
+      const room = 1000 - BUILT_IN[key].length;
       expect(problems).toEqual([
         `skyr.json: voice.${key} has over ${room} entries; the rest dropped`,
       ]);
@@ -201,7 +198,7 @@ describe("mergeVocabulary", () => {
     expect(merged.keyterms).toContain("NPM");
     expect(merged.keyterms).not.toContain("npm");
     expect(merged.keyterms).toContain("Skýr");
-    expect(merged.keyterms).toHaveLength(CODING_KEYTERMS.length + 1);
+    expect(merged.keyterms).toHaveLength(BUILT_IN.keyterms.length + 1);
     expect(merged.replacements).toContainEqual({
       find: "type script",
       replace: "TS! ",
@@ -216,13 +213,23 @@ describe("mergeVocabulary", () => {
     });
     // one-for-one: every replacement removed a built-in instead of growing the list,
     // so the merged counts stay inside Corti's 1,000 cap
-    expect(merged.replacements).toHaveLength(CODING_REPLACEMENTS.length + 1);
+    expect(merged.replacements).toHaveLength(BUILT_IN.replacements.length + 1);
   });
 
-  test("the merged lists are untouched when the user adds nothing", () => {
-    expect(mergeVocabulary(VOICE_DEFAULTS)).toEqual({
-      keyterms: [...CODING_KEYTERMS],
-      replacements: [...CODING_REPLACEMENTS],
+  test("with nothing from the user, the built-in coding vocabulary goes to Corti", () => {
+    expect(BUILT_IN.keyterms).toContain("pnpm");
+    expect(BUILT_IN.replacements).toContainEqual({
+      find: "vitist",
+      replace: "vitest",
     });
+  });
+
+  test("the built-in vocabulary stays inside what Corti accepts: short terms, finds unique in any case", () => {
+    for (const term of BUILT_IN.keyterms) {
+      expect(term.length).toBeLessThanOrEqual(50);
+      expect(term.split(/\s+/).length).toBeLessThanOrEqual(5);
+    }
+    const finds = BUILT_IN.replacements.map((r) => r.find.toLowerCase());
+    expect(new Set(finds).size).toBe(finds.length);
   });
 });

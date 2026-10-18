@@ -10,8 +10,7 @@ import { parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
 import type { SessionOptions } from "../src/voice/client.js";
 import { VoiceError } from "../src/voice/errors.js";
-import { startRefusal, VOICE_SHORTCUT, voiceMode } from "../src/voice/index.js";
-import { VOICE_STATUS_KEY } from "../src/voice/presenter.js";
+import { voiceMode } from "../src/voice/index.js";
 import { parentSession } from "./session.js";
 import {
   agentDirWith,
@@ -24,6 +23,10 @@ import {
   voiceCtx,
   withCreds,
 } from "./voice.js";
+
+// what voice promises Pi and the user: the key it binds and the footer status it owns
+const VOICE_SHORTCUT = "ctrl+space";
+const VOICE_STATUS_KEY = "skyr.voice";
 
 /** A theme stub where every token is one colour, so any glyph names the theme. */
 const theme = (hex: string): ThemeStub => {
@@ -157,15 +160,6 @@ test("the voice editor keeps Pi's working status in its top rule, as Pi's own ed
   const ctx = voiceCtx();
   await pi.handlers.get("session_start")!(null, ctx);
   expect(mountedEditor(ctx.ui).embedWorkingStatus).toBe(true);
-});
-
-test("ctrl+space while a card has the keyboard refuses to start, and only then", () => {
-  expect(startRefusal(true, { focused: false })).toBeUndefined();
-  expect(startRefusal(false, undefined)).toBeUndefined();
-  expect(startRefusal(false, { focused: true })).toBeUndefined();
-  expect(startRefusal(false, { focused: false })).toMatch(
-    /a card or selector has the keyboard/,
-  );
 });
 
 test("a second session_start reinstates the voice editor while ours is the one installed", async () => {
@@ -372,6 +366,18 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
       "warning",
     );
   });
+
+  test("ctrl+space still stops a running dictation after a card takes the keyboard", async () => {
+    const h = await mounted();
+    await h.toggle();
+    h.starts[0]!.onReady?.();
+    h.starts[0]!.onFinal("hello there");
+    h.ed.focused = false;
+    await h.toggle();
+    await vi.advanceTimersByTimeAsync(TAIL_MS);
+    expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+    expect(h.ends[0]).toEqual({ stopped: 1, cancelled: 0 });
+  });
 });
 
 test("session_shutdown, even twice, cancels the dictation once, clears the footer and leaves no timer", async () => {
@@ -473,7 +479,6 @@ describe("registerSkyr", () => {
     const pi = registeredSkyr();
     expect(pi.commands.has("voice")).toBe(true);
     expect([...pi.shortcuts.keys()]).toEqual([VOICE_SHORTCUT]);
-    expect(VOICE_SHORTCUT).toBe("ctrl+space");
   });
 });
 

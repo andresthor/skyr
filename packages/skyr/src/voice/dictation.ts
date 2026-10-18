@@ -74,6 +74,10 @@ export interface DictationTiming {
   stallMs: number;
 }
 
+/**
+ * The controller's timing for every field the caller's `timing` leaves out.
+ * @internal
+ */
 export const DEFAULT_TIMING: DictationTiming = {
   tailMs: 400,
   flushMs: 900,

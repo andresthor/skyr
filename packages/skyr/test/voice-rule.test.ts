@@ -15,7 +15,6 @@ import {
   meterUnit,
   renderRule,
   type VoiceSnapshot,
-  voiceView,
 } from "../src/voice/indicator.js";
 import {
   FALLBACK_PALETTE,
@@ -69,55 +68,6 @@ test("every row is exactly the width, at every width, in every state and mode", 
         if (row !== undefined)
           expect(visibleWidth(row), `${mode} ${s.state} @${width}`).toBe(width);
       }
-});
-
-test("the view decides each mark once, before any layout", () => {
-  expect(voiceView(snap({ state: "idle" }))).toEqual({ kind: "off" });
-  expect(voiceView(snap({ state: "discarded" }))).toEqual({
-    kind: "discarded",
-  });
-  expect(voiceView(snap({ state: "error", message: "mic gone" }))).toEqual({
-    kind: "error",
-    message: "mic gone",
-  });
-  expect(voiceView(snap())).toEqual({
-    kind: "live",
-    recording: true,
-    word: "listening",
-    dots: 0,
-    canKeep: true,
-    offer: "keep",
-    advisories: [],
-  });
-  // the tail keeps the light on after Enter, the offer turns to discard, and the ellipsis steps
-  expect(voiceView(snap({ state: "transcribing", stateMs: 700 }))).toEqual({
-    kind: "live",
-    recording: true,
-    word: "finishing",
-    dots: 3,
-    canKeep: true,
-    offer: "discard",
-    advisories: [],
-  });
-  expect(
-    voiceView(
-      snap({
-        state: "arming",
-        micOpen: false,
-        accepted: false,
-        heardSpeech: false,
-        sinceStartMs: 2000,
-      }),
-    ),
-  ).toEqual({
-    kind: "live",
-    recording: false,
-    word: "starting",
-    dots: 0,
-    canKeep: false,
-    offer: "cancel",
-    advisories: [{ text: "no audio yet", tone: "warning" }],
-  });
 });
 
 test("idle draws nothing, so Pi's own rule stands", () => {

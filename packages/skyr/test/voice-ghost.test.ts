@@ -17,7 +17,6 @@ import { DRY_MS, spliceGhost } from "../src/voice/ghost.js";
 import {
   FALLBACK_PALETTE,
   paintFor,
-  paletteFromTheme,
   type VoiceMode,
 } from "../src/voice/palette.js";
 import { CURSOR_CELL, editorRows } from "./voice.js";
@@ -221,29 +220,22 @@ test("TERM=dumb draws no decoration at all: the rows come back unchanged", () =>
   ).toEqual(base);
 });
 
-test("the palette is the theme's own colours and colour mode", () => {
+test("the palette is the theme's own colours, drawn in the theme's colour mode", () => {
   const c = (hex: string) => parseColor(hex);
-  const palette = paletteFromTheme({
-    colors: {
-      accent: c("#88acb5"),
-      text: c("#9a9aa7"),
-      muted: c("#898a96"),
-      dim: c("#72727d"),
-      error: c("#cc6666"),
-      warning: c("#d7af5f"),
-    },
-    getColorMode: () => "256color",
-  });
-  expect(palette.colors).toEqual({
+  const colors = {
     accent: c("#88acb5"),
     text: c("#9a9aa7"),
     muted: c("#898a96"),
     dim: c("#72727d"),
     error: c("#cc6666"),
     warning: c("#d7af5f"),
-  });
-  expect(palette.mode).toBe("256color");
-  expect(paletteFromTheme(undefined)).toBe(FALLBACK_PALETTE);
+  };
+  const themed = paintFor({ colors, getColorMode: () => "256color" }, "color");
+  expect(themed.colors).toEqual(colors);
+  // a 256-colour terminal gets indexed colour, never a 24-bit escape
+  expect(themed.fg(colors.accent, "x")).toContain("\x1b[38;5;");
+  expect(themed.fg(colors.accent, "x")).not.toContain("\x1b[38;2;");
+  expect(paintFor(undefined, "color").colors).toBe(FALLBACK_PALETTE.colors);
 });
 
 /** The 24-bit colour each SGR run opens with, in order. */

@@ -51,10 +51,8 @@ interface ThemeLike {
   readonly appearance?: ThemeAppearance;
 }
 
-/** The theme's token colours and the terminal colour mode it renders in; the fallback palette
- * when there is no theme. */
-export function paletteFromTheme(theme: ThemeLike | undefined): VoicePalette {
-  if (!theme) return FALLBACK_PALETTE;
+/** The theme's token colours and the terminal colour mode it renders in. */
+function paletteFromTheme(theme: ThemeLike): VoicePalette {
   const { accent, text, muted, dim, error, warning } = theme.colors;
   return {
     colors: { accent, text, muted, dim, error, warning },

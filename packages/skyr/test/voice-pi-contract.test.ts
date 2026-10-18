@@ -9,7 +9,6 @@ import {
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { createVoiceEditorClass } from "../src/voice/editor.js";
-import { VOICE_SHORTCUT } from "../src/voice/index.js";
 import { keybindings, snap } from "./voice.js";
 
 /** A real Pi editor, focused, with voice's subclass on top. */
@@ -58,7 +57,7 @@ test.each([
 
 test("no built-in binding claims ctrl+space, so Pi neither skips nor shadows the voice shortcut", () => {
   const claimed = Object.entries(keybindings().getEffectiveConfig()).filter(
-    ([, keys]) => [keys ?? []].flat().includes(VOICE_SHORTCUT),
+    ([, keys]) => [keys ?? []].flat().includes("ctrl+space"),
   );
   expect(claimed).toEqual([]);
 });

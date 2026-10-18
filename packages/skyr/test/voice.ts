@@ -17,7 +17,6 @@ import { type Mock, onTestFinished, vi } from "vitest";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { registerSkyr } from "../src/index.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
-import { DEFAULT_TIMING } from "../src/voice/dictation.js";
 import type { createVoiceEditorClass } from "../src/voice/editor.js";
 import { registerVoice, type VoiceOptions } from "../src/voice/index.js";
 import {
@@ -58,11 +57,11 @@ export const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({
   state: "listening",
   stateMs: 0,
   sinceStartMs: 2_000,
-  capLeftMs: DEFAULT_TIMING.maxMs,
+  capLeftMs: 120_000,
   micOpen: true,
   accepted: true,
   heardSpeech: true,
-  noSpeechMs: DEFAULT_TIMING.noSpeechMs,
+  noSpeechMs: 8_000,
   bars: PHRASE,
   message: "",
   ...s,

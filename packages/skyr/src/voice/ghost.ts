@@ -1,6 +1,6 @@
 /**
  * The ghost decoration voice draws into Pi's editor rows: interim text after the cursor as
- * dim italic ghost, and freshly committed words born in the accent colour, drying back to
+ * faint italic ghost, and freshly committed words born in the accent colour, drying back to
  * text over `DRY_MS`. Everything here decorates lines Pi's editor already rendered; nothing
  * draws from scratch, and only the cursor-at-end-of-line layout gets a ghost, which
  * dictation produces — the ghost hides until the cursor returns there.

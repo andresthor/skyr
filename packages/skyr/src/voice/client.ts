@@ -96,6 +96,12 @@ export interface TokenDeps {
   timeoutMs?: number;
 }
 
+/**
+ * A Keycloak sign-in token for the tenant. One token per environment, tenant and client id is
+ * cached, reused until `TOKEN_MARGIN_S` before its expiry. Throws `VoiceError` only: auth
+ * unreachable, the sign-in deadline passing, credentials refused, unknown tenant, or a
+ * failed or unreadable answer.
+ */
 export async function getSttToken(
   creds: SttCredentials,
   { fetch: doFetch = fetch, timeoutMs = TOKEN_TIMEOUT_MS }: TokenDeps = {},
@@ -133,7 +139,7 @@ export async function getSttToken(
       : {};
   if (typeof token !== "string" || typeof expiresIn !== "number")
     throw signInUnreadable();
-  // a token only has to be valid at connect time; the margin keeps a session from starting on a dying one
+  // a token only has to be valid at connect time
   cached = {
     key,
     token,
@@ -162,7 +168,12 @@ export function prewarmToken(creds: SttCredentials, deps?: TokenDeps): void {
   getSttToken(creds, deps).catch(() => {});
 }
 
-/** Opens the mic and a Corti session. No callback in `o` runs before this returns. */
+/**
+ * Opens the mic and a Corti session. Never throws, and no callback in `o` runs before this
+ * returns. Every failure arrives as `onError` and nowhere else; once `stop()` or `cancel()`
+ * has been called no failure ever does — `stop()` still lets the remaining finals drain, and
+ * its promise resolves even after a failure.
+ */
 export function startSession(o: SessionOptions): SttSession {
   const Socket = o.WebSocket ?? WebSocket;
   let ws: WebSocket | undefined;

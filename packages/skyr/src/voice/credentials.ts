@@ -1,4 +1,7 @@
-/** Corti speech-to-text credentials. The one place that decides whether voice exists at all. */
+/**
+ * Corti speech-to-text credentials, read from the environment and nowhere else: the one module
+ * that decides whether voice exists at all.
+ */
 
 export interface SttCredentials {
   environment: string;

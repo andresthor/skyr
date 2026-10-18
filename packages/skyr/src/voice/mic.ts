@@ -1,4 +1,8 @@
-/** Microphone capture: 16 kHz s16le mono PCM from a spawned recorder. */
+/**
+ * Microphone capture: 16 kHz s16le mono PCM from a spawned recorder — sox `rec` first, and
+ * ffmpeg only as a fallback for machines without sox: its input is avfoundation, so the
+ * fallback is macOS-only.
+ */
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { PassThrough, type Readable } from "node:stream";

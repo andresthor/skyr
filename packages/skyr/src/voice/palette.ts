@@ -51,7 +51,8 @@ interface ThemeLike {
   readonly appearance?: ThemeAppearance;
 }
 
-/** The theme's token colours and the terminal colour mode it renders in. */
+/** The theme's token colours and the terminal colour mode it renders in; the fallback palette
+ * when there is no theme. */
 export function paletteFromTheme(theme: ThemeLike | undefined): VoicePalette {
   if (!theme) return FALLBACK_PALETTE;
   const { accent, text, muted, dim, error, warning } = theme.colors;
@@ -77,7 +78,8 @@ export interface Paint {
   fg(c: Color, s: string): string;
 }
 
-/** One `Paint` for a frame, from a ready palette or straight from the theme. */
+/** One `Paint` for a frame, from a ready palette or straight from the theme; no theme at all
+ * means the fallback palette. */
 export function paintFor(
   source: VoicePalette | ThemeLike | undefined,
   mode: VoiceMode,

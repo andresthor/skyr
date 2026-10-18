@@ -1,8 +1,7 @@
 /**
- * Voice's rule and footer rows, and the meter both draw: `renderRule()` is the editor's
- * bottom rule while voice is on (meter, mic light, state, keys), `renderStatus()` the same
- * marks as a footer row for when the editor can't carry them, and the meter's level history
- * turns mic levels in at whatever rate they arrive into one smoothed bar per BAR_MS. All
+ * What voice shows of a dictation: `renderRule()` for the editor's bottom rule while voice is
+ * on, `renderStatus()` for the footer row when the editor can't carry it, and the level history
+ * that turns mic levels in at whatever rate they arrive into one smoothed bar per BAR_MS. All
  * wording is decided once in `voiceView()`; the two renderers are layout only.
  *
  * Every glyph is in U+2580–259F or is a width-1 symbol. Never braille.

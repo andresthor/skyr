@@ -1,8 +1,8 @@
 /**
- * The seam between the dictation core (client/mic/transcript/dictation — which render nothing)
- * and any display. A presenter swallows snapshots of state and produces presentation: the
- * editor's bottom rule while our editor is on screen, and the footer status row only when it
- * is not (another extension owns the editor, a card hides it, or its rule drawing failed).
+ * The seam between the dictation core (client, mic, dictation — none of which render) and the
+ * display. A presenter swallows snapshots of state and produces presentation: the editor's own
+ * bottom rule while our editor can carry it, and the footer status row when it cannot (another
+ * extension owns the editor, a card hides it, or its rule drawing failed).
  */
 import { renderStatus, type VoiceSnapshot } from "./indicator.js";
 import type { Paint } from "./palette.js";

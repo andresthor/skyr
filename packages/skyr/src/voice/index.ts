@@ -5,7 +5,9 @@
  * `ctrl+space` or `/voice` toggles listening, Esc cancels and restores the editor,
  * Enter stops-without-sending. Quiet never ends a dictation. Text is never auto-sent.
  *
- * All display wiring goes through `presenter.ts`; the core modules render nothing.
+ * The editor owns its decoration (ghost, drying spans, the bottom rule); `presenter.ts`
+ * routes what it cannot carry — a hidden editor, a foreign editor, a failed rule — to the
+ * footer. The core modules render nothing.
  */
 import type {
   ExtensionAPI,
@@ -276,7 +278,7 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
       paint: () => paintFor(ctxRef?.ui.theme, mode),
     });
     refresh();
-    // the token request is the slowest step of arming; a cached one makes ctrl+space feel instant
+    // a cached token makes ctrl+space feel instant
     prewarmToken(creds, { fetch: opts.fetch });
   });
 

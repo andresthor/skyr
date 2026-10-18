@@ -163,7 +163,7 @@ test("an idle buffer is returned exactly, and the rules stay Pi's: the ghost nev
   expect(dried[1]).toBe(base[1]);
 });
 
-test("a committed span is born brand-lime at the cursor and dries colourless after DRY_MS", () => {
+test("a committed span is born in the accent colour and dries colourless after DRY_MS", () => {
   const wet = spliceGhost(editorBase("hello", 40, { paddingX: 2 }), {
     width: 40,
     paddingX: 2,

@@ -143,7 +143,7 @@ loading the default export — see `packages/skyr/src/index.ts`.
 pnpm install
 pnpm test        # vitest across packages
 pnpm typecheck
-pnpm lint        # biome: formatting, lint and import order
+pnpm lint        # biome, then knip: nothing unused, and nothing exported only for tests unless @internal
 pnpm format      # biome: apply its fixes
 ```
 

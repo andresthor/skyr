@@ -6,11 +6,12 @@
   "scripts": {
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "lint": "biome check .",
+    "lint": "biome check . && knip && knip --production --exclude types",
     "format": "biome check --write ."
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.14"
+    "@biomejs/biome": "2.5.14",
+    "knip": "6.41.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

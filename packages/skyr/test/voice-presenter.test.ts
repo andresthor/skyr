@@ -7,28 +7,15 @@ import { parseColor, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import {
   FALLBACK_PALETTE,
-  meterUnit,
   renderStatus,
   stripAnsi,
-  type VoiceSnapshot,
 } from "../src/voice/indicator.js";
 import {
   type RuleEditor,
   VOICE_STATUS_KEY,
   voicePresenter,
 } from "../src/voice/presenter.js";
-
-const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({
-  state: "listening",
-  t: 0,
-  sinceStart: 2000,
-  micOpen: true,
-  accepted: true,
-  heardSpeech: true,
-  bars: [-30, -22, -40].map((db) => meterUnit(10 ** (db / 20))),
-  message: "",
-  ...s,
-});
+import { snap } from "./voice.js";
 
 class FakeStatusUi {
   lines: (string | undefined)[] = [];

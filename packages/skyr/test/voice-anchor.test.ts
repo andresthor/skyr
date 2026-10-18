@@ -23,29 +23,20 @@ import {
   spliceGhost,
   stripAnsi,
 } from "../src/voice/indicator.js";
+import { editorRows, keybindings, snap } from "./voice.js";
 
 const T = FALLBACK_PALETTE;
 
-/**
- * [top rule, ...text rows, bottom rule], as Pi's focused editor renders it around the plain
- * text; the cursor cell sits at end of the line it belongs to.
- */
-function editorBase(
+/** [top rule, ...text rows, bottom rule], as Pi's editor renders it around the plain text. */
+const editorBase = (
   text: string,
   width: number,
-  { focused = true, paddingX = 0 } = {},
-): string[] {
-  const pad = " ".repeat(paddingX);
-  const rows = ["─".repeat(width)];
-  for (const line of text.split("\n")) {
-    const textWidth = paddingX + line.length + (focused ? 1 : 0);
-    rows.push(
-      `${pad}${line}${focused ? CURSOR_CELL : ""}${" ".repeat(Math.max(0, width - textWidth))}`,
-    );
-  }
-  rows.push("─".repeat(width));
-  return rows;
-}
+  o: { focused?: boolean; paddingX?: number } = {},
+): string[] => [
+  "─".repeat(width),
+  ...editorRows(text, width, o),
+  "─".repeat(width),
+];
 
 test("CURSOR_CELL is CURSOR_MARKER followed by the fake-cursor space, per the pinned pi-tui", () => {
   expect(CURSOR_CELL).toBe(`${CURSOR_MARKER}${renderFakeCursor(" ")}`);
@@ -342,29 +333,13 @@ test("emoji with a variation selector never push a ghost or drying row past the 
 
 test("pi's real editor calls the bottom-border hook, so the voice rule reaches the screen", () => {
   const VoiceEditor = createVoiceEditorClass(CustomEditor);
-  const keys = {
-    getKeys: (id: string) =>
-      ({ "tui.input.submit": ["enter"], "tui.select.cancel": ["escape"] })[
-        id
-      ] ?? [],
-    matches: () => false,
-  };
   const ed = new VoiceEditor(
     { terminal: { rows: 40 }, requestRender: () => {} } as never,
     { borderColor: (s: string) => s, selectList: {} } as never,
-    keys as never,
+    keybindings(),
   );
   ed.focused = true;
-  ed.decor.rule = {
-    state: "listening",
-    t: 0,
-    sinceStart: 2000,
-    micOpen: true,
-    accepted: true,
-    heardSpeech: true,
-    bars: [],
-    message: "",
-  };
+  ed.decor.rule = snap();
   const bottom = ed.render(60).at(-1) ?? "";
   expect(stripAnsi(bottom)).toContain("● listening");
   expect(visibleWidth(bottom)).toBe(60);

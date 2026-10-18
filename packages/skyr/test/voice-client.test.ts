@@ -13,6 +13,7 @@ import {
   startSession,
 } from "../src/voice/client.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
+import { CREDS } from "./voice.js";
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -67,15 +68,8 @@ const sockets = () => FakeSocket.instances;
 const SocketMaker = FakeSocket as unknown as typeof WebSocket;
 
 let salt = 0;
-const creds = (): SttCredentials => {
-  salt++;
-  return {
-    environment: `env${salt}`,
-    tenant: `tenant${salt}`,
-    clientId: `id${salt}`,
-    clientSecret: "s",
-  };
-};
+/** A fresh identity per call, so the module's token cache never carries over between tests. */
+const creds = (): SttCredentials => ({ ...CREDS, clientId: `id${++salt}` });
 
 /** A fetch that always yields the wanted token; counted so cache tests can watch it. */
 function tokenFetch(
@@ -130,18 +124,8 @@ const writePcm = (source: PassThrough, bytes: number) =>
 test("getSttToken caches per env\\0tenant\\0clientId, with the 60 s margin", async () => {
   const a: number[] = [];
   const b: number[] = [];
-  const c = {
-    environment: "test-env",
-    tenant: "the-tenant",
-    clientId: "c-a",
-    clientSecret: "s",
-  };
-  const d = {
-    environment: "test-env",
-    tenant: "the-tenant",
-    clientId: "c-b",
-    clientSecret: "s",
-  };
+  const c = { ...CREDS, clientId: "c-a" };
+  const d = { ...CREDS, clientId: "c-b" };
   expect(await getSttToken(c, tokenFetch(a, "t-a", 3600))).toBe("t-a");
   expect(await getSttToken(c, tokenFetch(a, "t-a", 3600))).toBe("t-a");
   expect(await getSttToken(d, tokenFetch(b, "t-b", 3600))).toBe("t-b");
@@ -150,12 +134,7 @@ test("getSttToken caches per env\\0tenant\\0clientId, with the 60 s margin", asy
   expect(b).toHaveLength(1);
   // expires_in at the margin leaves nothing to live on: a dying token is refetched
   const e: number[] = [];
-  const f = {
-    environment: "test-env",
-    tenant: "the-tenant",
-    clientId: "c-e",
-    clientSecret: "s",
-  };
+  const f = { ...CREDS, clientId: "c-e" };
   await getSttToken(f, tokenFetch(e, "t-e", 60));
   await getSttToken(f, tokenFetch(e, "t-e", 60));
   expect(e).toHaveLength(2);
@@ -165,24 +144,14 @@ test("auth failures and network drops surface as auth / network errors, one toke
   const rejected: number[] = [];
   await expect(
     getSttToken(
-      {
-        environment: "test-env",
-        tenant: "auth-tenant",
-        clientId: "c",
-        clientSecret: "s",
-      },
+      { ...CREDS, clientId: "c" },
       (async () =>
         new Response("no", { status: 403 })) as unknown as typeof fetch,
     ),
   ).rejects.toMatchObject({ kind: "auth" });
   await expect(
     getSttToken(
-      {
-        environment: "test-env",
-        tenant: "auth-tenant",
-        clientId: "c",
-        clientSecret: "s",
-      },
+      { ...CREDS, clientId: "c" },
       (async () =>
         new Response("no", { status: 500 })) as unknown as typeof fetch,
     ),

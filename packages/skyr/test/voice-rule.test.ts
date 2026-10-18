@@ -14,25 +14,11 @@ import {
   type VoiceMode,
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
+import { HINT_KEYS, snap } from "./voice.js";
 
-const KEYS = { submit: "enter", cancel: "escape", undo: "ctrl+-" };
 const rule = (s: string) => s;
 const atDb = (db: number) => meterUnit(10 ** (db / 20));
-/** A spoken phrase: syllables between the gate and a −20 dBFS peak, newest first. */
-const SPEECH = [-30, -22, -40, -26, -45, -20, -35, -28].map(atDb);
 const SILENCE = Array.from({ length: 8 }, () => atDb(-58));
-
-const snap = (s: Partial<VoiceSnapshot> = {}): VoiceSnapshot => ({
-  state: "listening",
-  t: 0,
-  sinceStart: 2000,
-  micOpen: true,
-  accepted: true,
-  heardSpeech: true,
-  bars: SPEECH,
-  message: "",
-  ...s,
-});
 const draw = (
   s: Partial<VoiceSnapshot>,
   o: { width?: number; mode?: VoiceMode; hiddenBelow?: number } = {},
@@ -40,7 +26,7 @@ const draw = (
   renderRule(snap(s), {
     width: o.width ?? 72,
     rule,
-    keys: KEYS,
+    keys: HINT_KEYS,
     mode: o.mode,
     hiddenBelow: o.hiddenBelow,
   });
@@ -144,7 +130,7 @@ test("the rule keeps Pi's colour: every rule cell goes through the editor's own 
   const row = renderRule(snap({ bars: SILENCE }), {
     width: 40,
     rule: (s) => `<${s}>`,
-    keys: KEYS,
+    keys: HINT_KEYS,
   })!;
   expect(row.startsWith("<──>")).toBe(true);
   expect(row.endsWith("<──>")).toBe(true);
@@ -201,7 +187,7 @@ test("TERM=dumb marks are ASCII; NO_COLOR keeps the glyphs without colour; 256-c
   const indexed = renderRule(snap({}), {
     width: 72,
     rule,
-    keys: KEYS,
+    keys: HINT_KEYS,
     palette: { ...FALLBACK_PALETTE, mode: "256color" },
   })!;
   expect(indexed).not.toContain("\x1b[38;2;");

@@ -3,10 +3,7 @@
  * editor or into plain text. The fake implements only the surface these paths touch; Pi's
  * real editor and runtime stay out.
  */
-import type {
-  CustomEditor,
-  KeybindingsManager,
-} from "@earendil-works/pi-coding-agent";
+import type { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { parseColor } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import {
@@ -21,17 +18,8 @@ import {
   FALLBACK_PALETTE,
   stripAnsi,
   type VoicePalette,
-  type VoiceSnapshot,
 } from "../src/voice/indicator.js";
-
-const BINDINGS: Record<string, string[]> = {
-  "tui.input.submit": ["enter"],
-  "tui.select.cancel": ["escape", "ctrl+c"],
-  "tui.editor.undo": ["ctrl+-"],
-};
-const KEYS = {
-  getKeys: (id: string) => BINDINGS[id] ?? [],
-} as unknown as KeybindingsManager;
+import { editorRows, keybindings, snap } from "./voice.js";
 
 /** A minimal stand-in for pi-tui's Editor: [top rule, ...text rows, bottom rule], with the fake cursor at end of the cursor line. */
 class FakeEditor {
@@ -50,15 +38,14 @@ class FakeEditor {
 
   render(width: number): string[] {
     if (this.throwsOnRender) throw new Error("base render blew up");
-    const pad = " ".repeat(this.paddingX);
-    const rows = ["─".repeat(width)];
-    this.text.split("\n").forEach((line, i) => {
-      rows.push(
-        `${pad}${line}${i === this.cursorLine ? CURSOR_CELL : ""}${" ".repeat(Math.max(0, width - this.paddingX - line.length))}`,
-      );
-    });
-    rows.push(this.renderBottomBorder(width, 0));
-    return rows;
+    return [
+      "─".repeat(width),
+      ...editorRows(this.text, width, {
+        cursorLine: this.cursorLine,
+        paddingX: this.paddingX,
+      }),
+      this.renderBottomBorder(width, 0),
+    ];
   }
 
   renderBottomBorder(width: number, _hiddenLineCount: number): string {
@@ -129,7 +116,7 @@ function fresh(
   const ed = new VoiceEditor(
     {} as never,
     {} as never,
-    KEYS,
+    keybindings(),
   ) as unknown as EditorInstance;
   ed.text = text;
   ed.cursorCol = opts.cursorCol ?? 0;
@@ -255,16 +242,7 @@ describe("render", () => {
 });
 
 describe("bottom rule", () => {
-  const listening: VoiceSnapshot = {
-    state: "listening",
-    t: 0,
-    sinceStart: 2000,
-    micOpen: true,
-    accepted: true,
-    heardSpeech: true,
-    bars: [],
-    message: "",
-  };
+  const listening = snap();
 
   test("while voice is on, the bottom rule is the voice rule, in Pi's rule colour and Pi's key names", () => {
     const editor = fresh("hello");

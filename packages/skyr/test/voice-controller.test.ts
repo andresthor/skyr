@@ -6,7 +6,6 @@
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { SessionOptions, SttSession } from "../src/voice/client.js";
-import type { SttCredentials } from "../src/voice/credentials.js";
 import {
   DictationController,
   type DictationTiming,
@@ -14,13 +13,7 @@ import {
   SPEECH_DBFS,
 } from "../src/voice/dictation.js";
 import { VoiceError } from "../src/voice/errors.js";
-
-const CREDS: SttCredentials = {
-  environment: "dev",
-  tenant: "tenant",
-  clientId: "id",
-  clientSecret: "secret",
-};
+import { CREDS } from "./voice.js";
 
 const TIMING: DictationTiming = {
   tailMs: 400,

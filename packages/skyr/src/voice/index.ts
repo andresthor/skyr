@@ -250,8 +250,10 @@ export function registerVoice(pi: ExtensionAPI, opts: VoiceOptions = {}): void {
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const arg = args.trim();
       if (arg === "off") cancel();
-      // "on" is the explicit spelling of a bare /voice: both go through toggle
-      else if (arg === "" || arg === "on") toggle(ctx);
+      // "on" only ever starts; a bare /voice toggles like the shortcut
+      else if (arg === "on") {
+        if (!controller.active) toggle(ctx);
+      } else if (arg === "") toggle(ctx);
       else ctx.ui.notify(unknownVoiceArg(arg), "warning");
     },
   });

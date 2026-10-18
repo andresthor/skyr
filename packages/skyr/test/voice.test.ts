@@ -413,13 +413,25 @@ test("/voice with an argument it does not take is refused, naming the valid form
     'voice: "frobnicate" is not an option; use /voice, /voice on or /voice off',
     "warning",
   ]);
-  // "on" and a bare /voice stay dictation starts, "off" still cancels
+  // "on" and a bare /voice start a dictation, "off" cancels it
   await pi.commands.get("voice")!.handler("on", ctx);
   expect(starts).toHaveLength(1);
   await pi.commands.get("voice")!.handler("off", ctx);
   await pi.commands.get("voice")!.handler("", ctx);
   expect(starts).toHaveLength(2);
   expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
+});
+
+test("/voice on while a dictation runs leaves it running", async () => {
+  const h = await mounted();
+  await h.toggle();
+  h.starts[0]!.onReady?.();
+  h.starts[0]!.onFinal("hello there");
+  await h.pi.commands.get("voice")!.handler("on", h.ctx);
+  await vi.advanceTimersByTimeAsync(TAIL_MS);
+  expect(h.ends[0]).toEqual({ stopped: 0, cancelled: 0 });
+  expect(h.starts).toHaveLength(1);
+  expect(bottomRow(h.ed)).toContain("listening");
 });
 
 test("the command and shortcut descriptions say what they do", async () => {

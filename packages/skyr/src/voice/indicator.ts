@@ -219,7 +219,8 @@ const RISE = "▂▃▄▅▆▇█";
 /** Auto-ranging never stretches less than this much above the gate to full height, so a quiet room stays quiet. */
 const MIN_RANGE_DB = 15;
 
-/** The accent at a shifted OKLCH lightness, same hue: short bars recede, peaks come forward. */
+/** The accent at a shifted OKLCH lightness, same hue: short bars recede toward the
+ * background, peaks come forward — whichever side of the background the accent sits on. */
 function shade(c: Color, dL: number, chroma = 1): Color {
   const { l, c: ch, h } = colorToOklch(c);
   return oklchColor(
@@ -377,9 +378,12 @@ function meterCells(
       continue;
     }
     const top = k === RISE.length - 1;
+    // same direction rule as wetStart: the lightness runs away from the background, so a
+    // short bar recedes on a light theme exactly as it does on a dark one
+    const away = paint.light ? -1 : 1;
     const colour = shade(
       paint.colors.accent,
-      -0.22 + (0.22 * k) / (RISE.length - 1) + (top ? 0.04 : 0),
+      away * (-0.22 + (0.22 * k) / (RISE.length - 1) + (top ? 0.04 : 0)),
       top ? 1.3 : 1,
     );
     out += fg(colour, RISE.charAt(k));

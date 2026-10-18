@@ -3,7 +3,7 @@
  * one mark per fact (the meter for speech, the light for the mic, the word for the phase, the
  * keys for what they do now), and nothing drawn when voice has nothing to say.
  */
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { colorToOklch, parseColor, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { SPEECH_DBFS } from "../src/voice/dictation.js";
 import { stripAnsi } from "../src/voice/ghost.js";
@@ -156,6 +156,37 @@ test("the mic light stays on through the tail after Enter, and goes out when the
 test("silence is the rule itself: no meter cell rises for anything below the speech gate", () => {
   const quiet = SILENCE.map(() => atDb(SPEECH_DBFS - 0.5));
   expect(plain({ bars: quiet })).toMatch(/^─{11} ● listening/);
+});
+
+/** The rendered meter's glyph colours: glyph → OKLCH lightness of the colour it drew in. */
+function meterLightness(row: string): Record<string, number> {
+  const light: Record<string, number> = {};
+  for (const m of row.matchAll(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the escape bytes are exactly what the pattern must name
+    /\x1b\[38;2;(\d+);(\d+);(\d+)m([\u2582-\u2588])/g,
+  )) {
+    const [r, g, b, glyph] = m.slice(1) as [string, string, string, string];
+    const hex = (n: string) =>
+      Number(n).toString(16).padStart(2, "0").toUpperCase();
+    light[glyph] = colorToOklch(parseColor(`#${hex(r)}${hex(g)}${hex(b)}`)).l;
+  }
+  return light;
+}
+
+test("short bars recede toward the background on a light theme, as on a dark one", () => {
+  // a bar at the speech gate (▂) against one near full height (█)
+  const bars = [atDb(SPEECH_DBFS + 0.1), atDb(-20)];
+  const dark = meterLightness(draw({ bars }, { mode: "color" })!);
+  const light = meterLightness(
+    renderRule(snap({ bars }), {
+      width: 72,
+      rule,
+      keys: HINT_KEYS,
+      paint: paint("color", { ...FALLBACK_PALETTE, appearance: "light" }),
+    })!,
+  );
+  expect(dark["█"]!).toBeGreaterThan(dark["▂"]!);
+  expect(light["▂"]!).toBeGreaterThan(light["█"]!);
 });
 
 test("speech spans the full ramp against its own recent peak, so syllables stand apart", () => {

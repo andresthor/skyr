@@ -7,6 +7,8 @@
  * bundles a palette with a `VoiceMode` into one `Paint`, the single colour value every drawing
  * surface takes — nothing threads a (palette, mode) pair.
  */
+
+import type { ThemeAppearance } from "@earendil-works/pi-coding-agent";
 import {
   type Color,
   foregroundAnsi,
@@ -23,6 +25,8 @@ type VoiceToken = "accent" | "text" | "muted" | "dim" | "error" | "warning";
 interface VoicePalette {
   colors: Record<VoiceToken, Color>;
   mode: TerminalColorMode;
+  /** The background the palette is designed for; the meter shades away from it. */
+  appearance: ThemeAppearance;
 }
 
 /** Corti dark token values: the palette when there is no theme to read. */
@@ -36,12 +40,15 @@ export const FALLBACK_PALETTE: VoicePalette = {
     warning: parseColor("#d7af5f"),
   },
   mode: "truecolor",
+  appearance: "dark",
 };
 
 /** The narrow shape of Pi's Theme the palette reads; `colors` is concrete in every colour mode. */
 interface ThemeLike {
   readonly colors: Readonly<Record<VoiceToken, Color>>;
   getColorMode(): TerminalColorMode;
+  /** The background the theme is designed for; dark when the theme does not say. */
+  readonly appearance?: ThemeAppearance;
 }
 
 /** The theme's token colours and the terminal colour mode it renders in. */
@@ -51,6 +58,7 @@ export function paletteFromTheme(theme: ThemeLike | undefined): VoicePalette {
   return {
     colors: { accent, text, muted, dim, error, warning },
     mode: theme.getColorMode(),
+    appearance: theme.appearance ?? "dark",
   };
 }
 
@@ -63,6 +71,8 @@ export interface Paint {
   ascii: boolean;
   /** False under NO_COLOR: glyphs and attributes stay, colour goes. */
   colour: boolean;
+  /** True when the theme is designed for a light background: shades run the other way. */
+  light: boolean;
   /** Colours `s` with `c`, in the palette's mode; plain `s` when colour is out. */
   fg(c: Color, s: string): string;
 }
@@ -81,6 +91,7 @@ export function paintFor(
     colors: P.colors,
     ascii: mode === "ascii",
     colour: mode === "color",
+    light: P.appearance === "light",
     fg:
       mode === "color"
         ? (c, s) => `${foregroundAnsi(c, P.mode)}${s}\x1b[39m`

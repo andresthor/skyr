@@ -66,11 +66,11 @@ export interface MicDeps {
 }
 
 /**
- * Spawns sox `rec` (ffmpeg as a fallback) and returns its stdout. Destroying the
- * stream kills the recorder. A recorder that exits on its own before it is
- * stopped surfaces as a "microphone unavailable" error, which is how a busy device
- * or a permission problem shows. Throws `VoiceError` when neither recorder is found in
- * `dirs`, which defaults to the real search path.
+ * Spawns sox `rec`, or ffmpeg when no directory in `dirs` holds rec, and returns its stdout;
+ * `dirs` defaults to the real search path. Throws `VoiceError` when neither is found. The stream
+ * fails with a `VoiceError` when the recorder can't start, exits non-zero or dies on a signal,
+ * which is how a busy device or a permission problem shows, and ends after the last chunk when
+ * it exits 0. Destroying the stream kills the recorder.
  */
 export function micSource({ dirs = probeDirs() }: MicDeps = {}): Readable {
   const rec = findBinary("rec", dirs);
@@ -85,8 +85,8 @@ export function micSource({ dirs = probeDirs() }: MicDeps = {}): Readable {
     stdio: ["ignore", "pipe", "ignore"],
   });
   const out = new PassThrough();
-  let stopped = false;
-  child.stdout?.pipe(out);
+  // ended from "close" below: a stream that ended on its own would drop the exit's error
+  child.stdout?.pipe(out, { end: false });
   child.on("error", (error: unknown) =>
     out.destroy(
       new VoiceError(
@@ -94,9 +94,13 @@ export function micSource({ dirs = probeDirs() }: MicDeps = {}): Readable {
       ),
     ),
   );
-  child.on("exit", (code) => {
+  // "close", not "exit": it waits for stdout, so every chunk is through before the stream ends
+  child.on("close", (code) => {
+    // destroyed already: stopped by its reader, or failed to start
+    if (out.destroyed) return;
+    if (code === 0) out.end();
     // a signal, not a status code, leaves nothing to name
-    if (!stopped && code !== 0)
+    else
       out.destroy(
         code === null
           ? micFailed()
@@ -107,7 +111,6 @@ export function micSource({ dirs = probeDirs() }: MicDeps = {}): Readable {
   });
   const destroy = out.destroy.bind(out);
   out.destroy = (err?: Error) => {
-    stopped = stopped || !err;
     child.kill("SIGTERM");
     return destroy(err);
   };

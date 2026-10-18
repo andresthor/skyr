@@ -3,7 +3,15 @@
  * fake recorders in a temp dir that is the only one searched. Then the level its chunks are
  * measured at, which feeds the meter, the speech gate and the blocked-mic check.
  */
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { once } from "node:events";
+import {
+  chmodSync,
+  createReadStream,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
@@ -89,6 +97,49 @@ describe("micSource", () => {
     chmodSync(join(dir, "rec"), 0o644);
     const { error } = await drain(micSource({ dirs: [dir] }));
     expect(error?.message).toBe("can't start rec (EACCES)");
+  });
+
+  test("a recorder that exits non-zero fails the stream with its status", async () => {
+    const dirs = [recorders({ rec: "printf audio; exit 3" })];
+    const { error } = await drain(micSource({ dirs }));
+    expect(error?.message).toBe("microphone unavailable (rec exited 3)");
+  });
+
+  test("a recorder killed by a signal fails the stream as microphone unavailable", async () => {
+    const dirs = [recorders({ rec: "kill -KILL $$" })];
+    const { error } = await drain(micSource({ dirs }));
+    expect(error?.message).toBe("microphone unavailable");
+  });
+
+  test("output a recorder's own child writes after it exits 0 still arrives before the end", async () => {
+    const dirs = [
+      recorders({ rec: "(sleep 0.2; printf late) & printf early; exit 0" }),
+    ];
+    const { data, error } = await drain(micSource({ dirs }));
+    expect(error).toBeUndefined();
+    expect(data).toBe("earlylate");
+  });
+
+  test("destroying the stream kills the recorder", async () => {
+    // the recorder holds a fifo open for its whole life, so the fifo's end is its exit
+    const dir = recorders({
+      rec: 'held="$(dirname "$0")/held"; mkfifo "$held"; printf ready; exec 3>"$held"; echo $$ >&3; exec sleep 30',
+    });
+    const stream = micSource({ dirs: [dir] });
+    await once(stream, "data");
+    const held = createReadStream(join(dir, "held"), "utf8");
+    const [pid] = await once(held, "data");
+    stream.destroy();
+    await once(held, "end");
+    // dead: gone, or a zombie until Node reaps it
+    const { stdout } = spawnSync(
+      "ps",
+      ["-o", "stat=", "-p", String(pid).trim()],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(stdout.trim()).toMatch(/^(Z.*)?$/);
   });
 
   test("a recorder that exits 0 ends the stream after everything it wrote, without an error", async () => {

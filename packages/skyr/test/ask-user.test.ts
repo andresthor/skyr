@@ -20,7 +20,12 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { type Component, Editor } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  Editor,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { expect, test, vi } from "vitest";
 import { registerAskUser } from "../src/ask-user/index.js";
@@ -532,6 +537,36 @@ test.each([
     'ask_user: questions 1 and 2 both ask "which STORAGE should the cache use? "; each question must differ',
   ],
   [
+    {
+      questions: [
+        STORAGE,
+        { question: "Where should the cache live?", header: "Storage" },
+      ],
+    },
+    'ask_user: questions 1 and 2 both show the header "Storage"; give each question its own header of up to 12 columns',
+  ],
+  [
+    {
+      questions: [
+        STORAGE,
+        { question: "Where should the cache live?", header: "Storage " },
+      ],
+    },
+    'ask_user: questions 1 and 2 both show the header "Storage"; give each question its own header of up to 12 columns',
+  ],
+  [
+    {
+      questions: [
+        { ...STORAGE, header: "Storage engine" },
+        {
+          question: "Where should the cache live?",
+          header: "Storage engines",
+        },
+      ],
+    },
+    'ask_user: questions 1 and 2 both show the header "Storage eng…"; give each question its own header of up to 12 columns',
+  ],
+  [
     ask({ multiSelect: true, options: undefined }),
     'ask_user: question 1 ("Which storage should the cache use?") is multiSelect but has no options; give 2-4 options or drop multiSelect',
   ],
@@ -592,7 +627,7 @@ test("escape sequences and bidi overrides in model text never reach a rendered l
       } as Parameters<NonNullable<ToolDefinition["renderResult"]>>[3])
       .render(20) ?? [];
   expect(callRow).toHaveLength(1);
-  expect(resultRows).toHaveLength(2);
+  expect(resultRows).toHaveLength(1);
   const lines = [...dialogLines, ...callRow, ...resultRows];
   expect(result.content[0]).toMatchObject({
     text: expect.stringContaining(hostile),
@@ -627,4 +662,131 @@ test("escape sequences and bidi overrides in model text never reach a rendered l
   }
   press(review.component, ENTER);
   await two;
+});
+
+type ResultContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
+
+/** The result row as drawn, with the padding to the width cut off. */
+function resultRows(
+  tool: AskTool,
+  result: { content: { type: "text"; text: string }[]; details: unknown },
+  o: { isError?: boolean; width?: number } = {},
+): string[] {
+  const context = {
+    isError: o.isError ?? false,
+    state: {},
+    durationMs: 1200,
+  } as unknown as ResultContext;
+  return (
+    tool
+      .renderResult?.(
+        result as never,
+        { expanded: false, isPartial: false },
+        plain,
+        context,
+      )
+      .render(o.width ?? 80)
+      .map((row) => row.trimEnd()) ?? []
+  );
+}
+
+test("a persisted answered result draws its rows from details alone, as after a resume, with every answer starting at the same column", async () => {
+  const fake = dialogs();
+  const { session } = await parentSession({
+    mode: "tui",
+    ui: fake.ui,
+    respond: steps([
+      fauxToolCall(
+        "ask_user",
+        {
+          questions: [
+            STORAGE,
+            { question: "What should it be called?", header: "Name" },
+          ],
+        },
+        { id: "two" },
+      ),
+    ]),
+  });
+  const run = session.prompt("go");
+  press((await fake.nextOpen()).component, ENTER, "skyr", ENTER, ENTER);
+  await run;
+
+  const persisted = results(session).get("two")!;
+  expect(persisted.details).toEqual({
+    outcome: "answered",
+    answers: [
+      { header: "Storage", answer: "SQLite" },
+      { header: "Name", answer: "[own words] skyr" },
+    ],
+  });
+  const rows = resultRows(registered(), {
+    content: [],
+    details: persisted.details,
+  }).map((r) => stripTerminalSequences(r));
+  expect(rows).toEqual(["Storage  SQLite · 1.2s", "Name     [own words] skyr"]);
+  const column = (row: string, answer: string) =>
+    visibleWidth(row.slice(0, row.indexOf(answer)));
+  expect(column(rows[0]!, "SQLite")).toBe(column(rows[1]!, "[own words]"));
+});
+
+test("a thrown call draws the red error row with its first line", () => {
+  const rows = resultRows(
+    registered(),
+    {
+      content: [{ type: "text", text: `${NO_TERMINAL}\nsecond line` }],
+      details: undefined,
+    },
+    { isError: true, width: 400 },
+  );
+  expect(rows).toEqual([`${NO_TERMINAL} · 1.2s`]);
+});
+
+test("a successful result with no details or another details shape draws a plain row and never throws", () => {
+  const tool = registered();
+  for (const details of [
+    undefined,
+    null,
+    "answered",
+    { outcome: "answered" },
+    { outcome: "answered", answers: [{ header: 1, answer: "x" }] },
+    { outcome: "answered", answers: [{ header: "h", answer: 2 }] },
+    { outcome: "answered", answers: "x" },
+    { outcome: "answered", answers: [] },
+    { outcome: "cancelled" },
+    { outcome: "shrugged" },
+  ])
+    expect(
+      resultRows(tool, {
+        content: [{ type: "text", text: "The user answered.\n1. a -> b" }],
+        details,
+      }),
+    ).toEqual(["The user answered. · 1.2s"]);
+  expect(
+    resultRows(tool, { content: [], details: { outcome: "declined" } }),
+  ).toEqual(["declined · 1.2s"]);
+});
+
+test("the result row stays within a narrow width and keeps escapes out, whatever the answer holds", () => {
+  const hostile = `\u001b]52;c;aGk=\u0007${BIDI}漢字🙂${"wide ".repeat(40)}`;
+  const rows = resultRows(
+    registered(),
+    {
+      content: [],
+      details: {
+        outcome: "answered",
+        answers: [
+          { header: `漢字${hostile}`, answer: `[own words] ${hostile}` },
+          { header: "Name", answer: hostile },
+        ],
+      },
+    },
+    { width: 20 },
+  );
+  expect(rows).toHaveLength(2);
+  for (const row of rows) {
+    expect(visibleWidth(row)).toBeLessThanOrEqual(20);
+    expect(row).not.toContain("\u001b]");
+    expect(row).not.toContain(BIDI);
+  }
 });

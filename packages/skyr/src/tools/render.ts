@@ -7,7 +7,12 @@ import type {
   Theme,
   ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, TruncatedText } from "@earendil-works/pi-tui";
+import {
+  sliceByColumn,
+  stripTerminalSequences,
+  TruncatedText,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 
 export type Segment = [color: ThemeColor, text: string, bold?: boolean];
 
@@ -80,14 +85,46 @@ export function keyName(
     : key;
 }
 
-export function toolRow(theme: Theme, segments: Segment[]): TruncatedText {
-  const line = segments
-    .map(([color, raw, bold]) => {
-      const text = sanitize(raw);
-      return theme.fg(color, bold ? theme.bold(text) : text);
-    })
+/**
+ * `text` whole when it fits in `cols` columns, else cut by whole columns to end in `ellipsis`,
+ * with no escape added: unlike `truncateToWidth`, whose SGR reset around the ellipsis ends the
+ * colour or background the text is drawn in, and puts escapes into a TERM=dumb row.
+ */
+export function cutToWidth(
+  text: string,
+  cols: number,
+  ellipsis: string,
+): string {
+  return visibleWidth(text) <= cols
+    ? text
+    : `${sliceByColumn(text, 0, cols - visibleWidth(ellipsis), true)}${ellipsis}`;
+}
+
+/** Segments in their colours, as given: the caller has made their text safe to draw. */
+export function styled(
+  theme: Pick<Theme, "fg" | "bold">,
+  segments: Segment[],
+): string {
+  return segments
+    .map(([color, text, bold]) =>
+      theme.fg(color, bold ? theme.bold(text) : text),
+    )
     .join("");
-  return new TruncatedText(line);
+}
+
+export function toolRow(theme: Theme, segments: Segment[]): TruncatedText {
+  return new TruncatedText(
+    styled(
+      theme,
+      segments.map(([color, raw, bold]) => [color, sanitize(raw), bold]),
+    ),
+  );
+}
+
+/** The first line of a result's first text block; empty when it has none. */
+export function firstLine(content: { type: string; text?: string }[]): string {
+  const text = content.find((c) => c.type === "text")?.text ?? "";
+  return text.split("\n")[0] ?? "";
 }
 
 /** The first line of a thrown tool's message, for its red row, followed by `after`. */
@@ -96,8 +133,7 @@ export function errorRow(
   content: { type: string; text?: string }[],
   after: Segment[] = [],
 ): TruncatedText {
-  const text = content.find((c) => c.type === "text")?.text ?? "";
-  return toolRow(theme, [["error", text.split("\n")[0] ?? ""], ...after]);
+  return toolRow(theme, [["error", firstLine(content)], ...after]);
 }
 
 /** A timed row's clock, kept in the row's `context.state`, which Pi shares across its renders. */

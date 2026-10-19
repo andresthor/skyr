@@ -11,9 +11,9 @@ import {
   type Color,
   colorToOklch,
   oklchColor,
-  sliceByColumn,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { cutToWidth } from "../tools/render.js";
 import { type DictationFacts, SPEECH_DBFS } from "./dictation.js";
 import { clamp01, type Paint, styled } from "./palette.js";
 
@@ -146,13 +146,7 @@ function marks(paint: Paint) {
   const ellipsis = ascii ? "..." : "…";
   return {
     sep: ascii ? ", " : fg(T.dim, " · "),
-    // not truncateToWidth: it wraps its ellipsis in SGR resets, which end the muted colour early
-    // and put escapes into a TERM=dumb row
-    /** `text` whole when it fits in `cols` columns, else cut by whole columns to end in an ellipsis. */
-    cut: (text: string, cols: number) =>
-      visibleWidth(text) <= cols
-        ? text
-        : `${sliceByColumn(text, 0, cols - ellipsis.length, true)}${ellipsis}`,
+    cut: (text: string, cols: number) => cutToWidth(text, cols, ellipsis),
     discarded: fg(T.muted, "discarded"),
     /** The error mark, then `text`: the error's message, clipped to the display's room. */
     cause: (text: string) =>

@@ -207,6 +207,30 @@ test("across tabs a single choice keeps one answer: the last one taken with Ente
   expect(optionLast.done.mock.calls[0]?.[0]?.[0]).toEqual({ labels: ["A"] });
 });
 
+test("the Submit tab marks an answer in the user's own words as the transcript row does", () => {
+  const d = dialog([scope, naming]);
+  d.press(ENTER, ..."skyr", ENTER);
+  expect(d.text()).toContain(" Name   [own words] skyr");
+});
+
+test("a cut header keeps the style it is drawn in: no reset inside a chip or the Submit tab's header column", () => {
+  // Real SGR pairs, so a reset that ends a background or colour early shows in the line
+  const sgr = {
+    fg: (_color: string, text: string) => `\x1b[36m${text}\x1b[39m`,
+    bg: (_color: string, text: string) => `\x1b[44m${text}\x1b[49m`,
+    bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+  } as unknown as Theme;
+  const long = { ...scope, header: "Infrastructure choice" };
+  const d = dialog([long, storage], { theme: sgr });
+  const chips = d.component.render(80)[1] ?? "";
+  expect(stripTerminalSequences(chips)).toContain(" Infrastruct… ");
+  expect(chips).not.toContain("\x1b[0m");
+  d.press(ENTER, ENTER);
+  const review = d.component.render(80).join("\n");
+  expect(stripTerminalSequences(review)).toContain(" Infrastruct…  ");
+  expect(review).not.toContain("\x1b[0m");
+});
+
 test("a throw while drawing or handling a key closes the dialog with that error instead of reaching the TUI's stack", async () => {
   const throwing = {
     fg: () => {

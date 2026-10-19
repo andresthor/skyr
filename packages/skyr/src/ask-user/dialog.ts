@@ -17,7 +17,7 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { keyName, sanitize } from "../tools/render.js";
+import { cutToWidth, keyName, sanitize } from "../tools/render.js";
 import type { AskQuestion } from "./index.js";
 
 /** One question's answer: the picked labels as the model wrote them, and the user's own words. */
@@ -35,6 +35,27 @@ interface Deps {
 
 const PLACEHOLDER = "type an answer";
 export const HEADER_WIDTH = 12;
+
+/** A question's header as every ask_user surface draws it: sanitized, cut to `HEADER_WIDTH` columns. */
+export function shortHeader(raw: string): string {
+  return cutToWidth(sanitize(raw).trim(), HEADER_WIDTH, "…");
+}
+
+/**
+ * One answer as the model reads it and every ask_user surface shows it: the labels, then the
+ * user's own words, marked. Not sanitized: whoever draws it sanitizes it.
+ */
+export function answerLine(answer: Answer): string {
+  const parts = [...answer.labels];
+  if (answer.other !== undefined) parts.push(`[own words] ${answer.other}`);
+  return parts.join("; ");
+}
+
+/** Each header padded so the text after it starts at one column, two past the widest. */
+export function alignHeaders(headers: readonly string[]): string[] {
+  const widest = Math.max(...headers.map((h) => visibleWidth(h)));
+  return headers.map((h) => h + " ".repeat(widest - visibleWidth(h) + 2));
+}
 
 /** The question dialog. Sanitizes every model string itself, and calls `done` at most once. */
 export function createAskDialog(
@@ -68,7 +89,7 @@ class Page {
 
   constructor(question: AskQuestion, theme: Deps["theme"]) {
     this.text = sanitize(question.question);
-    this.header = truncateToWidth(sanitize(question.header), HEADER_WIDTH);
+    this.header = shortHeader(question.header);
     this.multi = question.multiSelect === true;
     this.options = (question.options ?? []).map((o) => ({
       raw: o.label,
@@ -332,21 +353,13 @@ class AskDialog implements Component, Focusable {
 
   private review(): string[] {
     const { theme } = this.deps;
-    const widest = Math.max(...this.pages.map((p) => visibleWidth(p.header)));
-    return this.pages.map((p) => {
-      const pad = " ".repeat(widest - visibleWidth(p.header) + 2);
+    const headers = alignHeaders(this.pages.map((p) => p.header));
+    return this.pages.map((p, i) => {
       const answer = p.answer();
-      const text = answer
-        ? sanitize(
-            [...answer.labels, ...(answer.other ? [answer.other] : [])].join(
-              "; ",
-            ),
-          )
-        : undefined;
-      return ` ${theme.fg("muted", p.header + pad)}${
-        text === undefined
-          ? theme.fg("warning", "not answered")
-          : theme.fg("text", text)
+      return ` ${theme.fg("muted", headers[i] ?? "")}${
+        answer
+          ? theme.fg("text", sanitize(answerLine(answer)))
+          : theme.fg("warning", "not answered")
       }`;
     });
   }

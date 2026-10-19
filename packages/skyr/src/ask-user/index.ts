@@ -7,17 +7,27 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, TruncatedText } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import {
+  clip,
   errorRow,
+  firstLine,
   oneLine,
   quoted,
   sanitize,
+  styled,
   took,
   toolRow,
 } from "../tools/render.js";
-import { type Answer, createAskDialog, HEADER_WIDTH } from "./dialog.js";
+import {
+  type Answer,
+  alignHeaders,
+  answerLine,
+  createAskDialog,
+  HEADER_WIDTH,
+  shortHeader,
+} from "./dialog.js";
 
 const MAX_QUESTIONS = 4;
 const MIN_OPTIONS = 2;
@@ -66,6 +76,8 @@ const ABORTED =
 const DECLINED =
   "The user declined to answer. Do not guess their answers or act as if they chose; end your turn and wait for their next message.";
 const ERROR_CHARS = 200;
+/** How much of each answer a result keeps for its transcript row. */
+const ANSWER_CHARS = 200;
 
 const asked = (question: string) => sanitize(question).trim().toLowerCase();
 
@@ -88,6 +100,12 @@ function validate(questions: readonly AskQuestion[]): void {
     if (same < i)
       throw new Error(
         `ask_user: questions ${same + 1} and ${n} both ask ${quoted(sanitize(q.question), 60)}; each question must differ`,
+      );
+    const header = shortHeader(q.header);
+    const twin = questions.findIndex((o) => shortHeader(o.header) === header);
+    if (twin < i)
+      throw new Error(
+        `ask_user: questions ${twin + 1} and ${n} both show the header ${quoted(header, 40)}; give each question its own header of up to ${HEADER_WIDTH} columns`,
       );
     const seen = new Set<string>();
     for (const option of q.options ?? []) {
@@ -123,12 +141,37 @@ function answerText(
   questions: readonly AskQuestion[],
   answers: readonly Answer[],
 ): string {
-  const lines = answers.map((a, i) => {
-    const parts = [...a.labels];
-    if (a.other !== undefined) parts.push(`[own words] ${a.other}`);
-    return `${i + 1}. ${questions[i]?.question} -> ${parts.join("; ")}`;
-  });
+  const lines = answers.map(
+    (a, i) => `${i + 1}. ${questions[i]?.question} -> ${answerLine(a)}`,
+  );
   return ["The user answered.", ...lines].join("\n");
+}
+
+/** What a result keeps for its transcript row, which Pi redraws from it on a resume. */
+type AskDetails =
+  | { outcome: "answered"; answers: { header: string; answer: string }[] }
+  | { outcome: "declined" };
+
+// Persisted details may come from an older build or another extension's tool of this name
+function isAsked(details: unknown): details is AskDetails {
+  if (typeof details !== "object" || details === null) return false;
+  if (!("outcome" in details)) return false;
+  if (details.outcome === "declined") return true;
+  if (details.outcome !== "answered" || !("answers" in details)) return false;
+  const { answers } = details;
+  return (
+    Array.isArray(answers) &&
+    answers.length > 0 &&
+    answers.every(
+      (a: unknown) =>
+        typeof a === "object" &&
+        a !== null &&
+        "header" in a &&
+        typeof a.header === "string" &&
+        "answer" in a &&
+        typeof a.answer === "string",
+    )
+  );
 }
 
 /**
@@ -230,7 +273,7 @@ export function registerAskUser(pi: ExtensionAPI): void {
           if (signal?.aborted) throw new Error(ABORTED);
           return {
             content: [{ type: "text", text: DECLINED }],
-            details: undefined,
+            details: { outcome: "declined" },
           };
         }
         // An answer given before a late abort is kept
@@ -238,7 +281,13 @@ export function registerAskUser(pi: ExtensionAPI): void {
           content: [
             { type: "text", text: answerText(params.questions, result) },
           ],
-          details: undefined,
+          details: {
+            outcome: "answered",
+            answers: result.map((a, i) => ({
+              header: params.questions[i]?.header ?? "",
+              answer: clip(answerLine(a), ANSWER_CHARS),
+            })),
+          },
         };
       } finally {
         release();
@@ -251,6 +300,7 @@ export function registerAskUser(pi: ExtensionAPI): void {
         ? args.questions
             .map((q) => q?.header)
             .filter((h): h is string => typeof h === "string")
+            .map(shortHeader)
         : [];
       return toolRow(theme, [
         ["toolTitle", "ask_user", true],
@@ -261,17 +311,27 @@ export function registerAskUser(pi: ExtensionAPI): void {
     renderResult(result, _options, theme, context) {
       const time = took(context);
       if (context.isError) return errorRow(theme, result.content, time);
-      // Pi's fallback row strips only ANSI and C0 controls; the content holds raw model text
-      const text = result.content
-        .map((c) => (c.type === "text" ? c.text : ""))
-        .join("");
-      const rows = new Container();
-      text.split("\n").forEach((line, i) => {
-        rows.addChild(
-          toolRow(theme, [["muted", line], ...(i === 0 ? time : [])]),
+      const { details } = result;
+      if (!isAsked(details))
+        return toolRow(theme, [["muted", firstLine(result.content)], ...time]);
+      if (details.outcome === "declined")
+        return toolRow(theme, [["warning", "declined"], ...time]);
+      // Built outside toolRow, whose sanitize would collapse the padding that aligns the answers
+      const headers = alignHeaders(
+        details.answers.map((a) => shortHeader(a.header)),
+      );
+      const suffix = styled(theme, time);
+      const box = new Container();
+      details.answers.forEach((a, i) => {
+        box.addChild(
+          new TruncatedText(
+            theme.fg("muted", headers[i] ?? "") +
+              theme.fg("text", sanitize(a.answer)) +
+              (i === 0 ? suffix : ""),
+          ),
         );
       });
-      return rows;
+      return box;
     },
   });
 }

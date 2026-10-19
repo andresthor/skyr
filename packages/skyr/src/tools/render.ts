@@ -65,9 +65,18 @@ export function oneLine(text: string, max: number): string {
   return clip(sanitize(text).trim(), max);
 }
 
-/** Echoed user input in a message: clipped, then JSON-quoted, so C0 controls, quotes and backslashes show as escapes. */
+/**
+ * Echoed user input in a message: clipped, then JSON-quoted, so controls, quotes and
+ * backslashes show as escapes, and so does every other invisible character, as `\uXXXX`
+ * (a tag character as its two surrogates).
+ */
 export function quoted(text: string, max: number): string {
-  return JSON.stringify(clip(text, max));
+  return JSON.stringify(clip(text, max)).replace(INVISIBLE, (c) =>
+    Array.from(
+      { length: c.length },
+      (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, "0")}`,
+    ).join(""),
+  );
 }
 
 /**

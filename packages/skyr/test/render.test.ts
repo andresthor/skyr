@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   elapsed,
   errorRow,
+  quoted,
   sanitize,
   stripInvisible,
   type Timing,
@@ -96,6 +97,24 @@ describe("stripInvisible", () => {
 
   test("drops C0 and C1 controls", () => {
     expect(stripInvisible("a\u0001b\u009bc")).toBe("abc");
+  });
+});
+
+describe("quoted", () => {
+  test("controls, quotes and backslashes show as JSON escapes", () => {
+    expect(quoted('a\u0007"b\\', 40)).toBe('"a\\u0007\\"b\\\\"');
+  });
+
+  test("every other invisible character shows as its \\u escape, a tag character as its two surrogates", () => {
+    expect(quoted("a\u009bb\u202ec\u200bd\ufeff\u{E0041}", 40)).toBe(
+      '"a\\u009bb\\u202ec\\u200bd\\ufeff\\udb40\\udc41"',
+    );
+  });
+
+  test("ZWJ and ZWNJ stay as they are", () => {
+    const family = "\u{1F468}\u200d\u{1F469}";
+    const persian = "\u0628\u200c\u0631";
+    expect(quoted(`${family} ${persian}`, 40)).toBe(`"${family} ${persian}"`);
   });
 });
 

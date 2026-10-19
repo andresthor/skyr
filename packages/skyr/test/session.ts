@@ -15,6 +15,7 @@ import {
   CONFIG_DIR_NAME,
   createAgentSession,
   DefaultResourceLoader,
+  defineTool,
   type ExtensionContext,
   type ExtensionUIContext,
   ModelRuntime,
@@ -22,6 +23,7 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { onTestFinished } from "vitest";
 import { registerSkyr } from "../src/index.js";
 
@@ -285,6 +287,37 @@ export function advisorRouter(
   };
   return { respond, calls };
 }
+
+/** A `skyr.json` that turns the advisor on, on faux-2. */
+export const ADVISOR_ON = { advisor: { model: "faux/faux-2" } };
+
+/** The main model sends `turns` in order, one per request, then answers "done". */
+export function script(
+  ...turns: ReturnType<typeof fauxAssistantMessage>[]
+): FauxResponseFactory {
+  let next = 0;
+  return () => turns[next++] ?? fauxAssistantMessage("done");
+}
+
+export const advisorCall = (id = "adv") => fauxToolCall("advisor", {}, { id });
+
+/** The session's advisor results, in order. */
+export function advisorResults(session: AgentSession) {
+  return session.messages.flatMap((m) =>
+    m.role === "toolResult" && m.toolName === "advisor" ? [m] : [],
+  );
+}
+
+/** A tool that answers "echoed", for a call in the transcript with a result after it. */
+export const echo = defineTool({
+  name: "echo",
+  label: "echo",
+  description: "Echoes.",
+  parameters: Type.Object({ x: Type.Optional(Type.Number()) }),
+  async execute() {
+    return { content: [{ type: "text", text: "echoed" }], details: {} };
+  },
+});
 
 /** The parent's tool results by tool-call id, which `call` sets to the task. */
 export function results(session: AgentSession) {

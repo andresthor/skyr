@@ -3,14 +3,12 @@
  * receives, what the agent gets back, and the row.
  */
 import {
-  type FauxResponseFactory,
   fauxAssistantMessage,
   fauxThinking,
   fauxToolCall,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
-  type AgentSession,
   defineTool,
   type Theme,
   type ToolDefinition,
@@ -20,17 +18,21 @@ import { Type } from "typebox";
 import { describe, expect, test } from "vitest";
 import { parseAdvisorSection } from "../src/advisor/config.js";
 import {
+  ADVISOR_ON,
+  advisorCall,
+  advisorResults,
   advisorRouter,
   call,
+  echo,
   hold,
   parentSession,
   router,
+  script,
   taskOf,
   textOf,
   toolsSeen,
 } from "./session.js";
 
-const ON = { advisor: { model: "faux/faux-2" } };
 const OSC52 = "\u001b]52;c;cHduZWQ=\u0007";
 
 const plain = {
@@ -46,16 +48,6 @@ const advise =
   () =>
     fauxAssistantMessage(text);
 
-/** The main model sends `turns` in order, one per request, then answers "done". */
-function script(
-  ...turns: ReturnType<typeof fauxAssistantMessage>[]
-): FauxResponseFactory {
-  let next = 0;
-  return () => turns[next++] ?? answer();
-}
-
-const advisorCall = (id = "adv") => fauxToolCall("advisor", {}, { id });
-
 /** The text of a request's user messages, which hold the transcript. */
 function transcript(context: TranscriptContext): string {
   return context.messages
@@ -63,22 +55,6 @@ function transcript(context: TranscriptContext): string {
     .map(textOf)
     .join("\n");
 }
-
-function advisorResults(session: AgentSession) {
-  return session.messages.flatMap((m) =>
-    m.role === "toolResult" && m.toolName === "advisor" ? [m] : [],
-  );
-}
-
-const echo = defineTool({
-  name: "echo",
-  label: "echo",
-  description: "Echoes.",
-  parameters: Type.Object({ x: Type.Optional(Type.Number()) }),
-  async execute() {
-    return { content: [{ type: "text", text: "echoed" }], details: {} };
-  },
-});
 
 describe("activation and config", () => {
   test("with no advisor section the tool is not declared and the system prompt never mentions it", async () => {
@@ -94,7 +70,7 @@ describe("activation and config", () => {
   });
 
   test("with a known model configured, the first request declares advisor with its snippet and guidelines", async () => {
-    const parent = await parentSession({ respond: answer, skyr: ON });
+    const parent = await parentSession({ respond: answer, skyr: ADVISOR_ON });
     await parent.session.prompt("go");
 
     expect(toolsSeen(parent.requests[0]!)).toContain("advisor");
@@ -242,7 +218,7 @@ describe("activation and config", () => {
     );
     const parent = await parentSession({
       respond,
-      skyr: ON,
+      skyr: ADVISOR_ON,
       customTools: [caller],
     });
     await parent.session.prompt("go");
@@ -257,7 +233,7 @@ describe("activation and config", () => {
       router([call({ task: "look" })], () => fauxAssistantMessage("found")),
       advise(),
     );
-    const parent = await parentSession({ respond, skyr: ON });
+    const parent = await parentSession({ respond, skyr: ADVISOR_ON });
     await parent.session.prompt("go");
 
     const child = parent.requests.find((r) => taskOf(r) === "look");
@@ -278,7 +254,7 @@ describe("the request", () => {
     );
     const parent = await parentSession({
       respond,
-      skyr: ON,
+      skyr: ADVISOR_ON,
       customTools: [echo],
     });
     await parent.session.prompt("go");
@@ -324,7 +300,7 @@ describe("the request", () => {
     );
     const parent = await parentSession({
       respond,
-      skyr: ON,
+      skyr: ADVISOR_ON,
       customTools: [echo, fails],
     });
     await parent.session.prompt("go");
@@ -349,7 +325,7 @@ describe("the request", () => {
     );
     const parent = await parentSession({
       respond,
-      skyr: ON,
+      skyr: ADVISOR_ON,
       customTools: [echo],
     });
     await parent.session.prompt("go");
@@ -380,7 +356,7 @@ describe("the request", () => {
     );
     const parent = await parentSession({
       respond,
-      skyr: ON,
+      skyr: ADVISOR_ON,
       customTools: [echo],
     });
     await parent.session.prompt("go");
@@ -415,7 +391,7 @@ describe("the request", () => {
     );
     const parent = await parentSession({
       respond,
-      skyr: ON,
+      skyr: ADVISOR_ON,
       customTools: [big],
     });
     await parent.session.prompt("go");
@@ -441,7 +417,7 @@ describe("the request", () => {
     );
     const parent = await parentSession({
       respond,
-      skyr: ON,
+      skyr: ADVISOR_ON,
       customTools: [echo],
     });
     await parent.session.prompt("go");
@@ -483,7 +459,7 @@ describe("the request", () => {
     );
     const parent = await parentSession({
       respond,
-      skyr: ON,
+      skyr: ADVISOR_ON,
       customTools: [shots],
     });
     await parent.session.prompt("go");
@@ -513,7 +489,7 @@ describe("the request", () => {
       script(fauxAssistantMessage([advisorCall()])),
       advise(),
     );
-    const parent = await parentSession({ respond, skyr: ON });
+    const parent = await parentSession({ respond, skyr: ADVISOR_ON });
     await parent.session.prompt("go");
 
     expect(calls).toHaveLength(1);
@@ -532,7 +508,7 @@ describe("the result", () => {
       script(fauxAssistantMessage([advisorCall()])),
       advise(advice),
     );
-    const parent = await parentSession({ respond, skyr: ON });
+    const parent = await parentSession({ respond, skyr: ADVISOR_ON });
     await parent.session.prompt("go");
 
     const [result] = advisorResults(parent.session);
@@ -552,7 +528,7 @@ describe("the result", () => {
       script(fauxAssistantMessage([advisorCall()])),
       advise(`keep ${OSC52}going‮​\r\nnow\tplease`),
     );
-    const parent = await parentSession({ respond, skyr: ON });
+    const parent = await parentSession({ respond, skyr: ADVISOR_ON });
     await parent.session.prompt("go");
 
     const text = textOf(advisorResults(parent.session)[0]!);
@@ -564,7 +540,7 @@ describe("the result", () => {
       script(fauxAssistantMessage([advisorCall()])),
       () => fauxAssistantMessage("Check the", { stopReason: "length" }),
     );
-    const parent = await parentSession({ respond, skyr: ON });
+    const parent = await parentSession({ respond, skyr: ADVISOR_ON });
     await parent.session.prompt("go");
 
     const [result] = advisorResults(parent.session);
@@ -599,7 +575,7 @@ describe("the result", () => {
         script(fauxAssistantMessage([advisorCall()])),
         () => reply,
       );
-      const parent = await parentSession({ respond, skyr: ON });
+      const parent = await parentSession({ respond, skyr: ADVISOR_ON });
       await parent.session.prompt("go");
 
       const [result] = advisorResults(parent.session);
@@ -616,7 +592,7 @@ describe("the result", () => {
       script(fauxAssistantMessage([advisorCall()])),
       held.step,
     );
-    const parent = await parentSession({ respond, skyr: ON });
+    const parent = await parentSession({ respond, skyr: ADVISOR_ON });
     const run = parent.session.prompt("go");
     await held.entered;
     await parent.session.abort();
@@ -633,7 +609,7 @@ describe("the result", () => {
 
 describe("the row", () => {
   test("the advisor row fits a narrow terminal and lets no terminal sequence through, collapsed or expanded", async () => {
-    const parent = await parentSession({ respond: answer, skyr: ON });
+    const parent = await parentSession({ respond: answer, skyr: ADVISOR_ON });
     const tool = parent.session.getToolDefinition("advisor");
     const result = {
       content: [
@@ -679,7 +655,7 @@ describe("the row", () => {
   });
 
   test("a successful result whose details the row does not recognise draws a muted row, not an error", async () => {
-    const parent = await parentSession({ respond: answer, skyr: ON });
+    const parent = await parentSession({ respond: answer, skyr: ADVISOR_ON });
     const tool = parent.session.getToolDefinition("advisor");
     const tagged = {
       fg: (color: string, text: string) => `<${color}>${text}`,

@@ -11,24 +11,19 @@ import {
   fauxToolCall,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import {
-  type AgentSession,
-  defineTool,
-  estimateTokens,
-} from "@earendil-works/pi-coding-agent";
+import { defineTool, estimateTokens } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { expect, test } from "vitest";
-import { advisorRouter, parentSession, textOf } from "./session.js";
-
-const ON = { advisor: { model: "faux/faux-2" } };
-
-/** The main model sends `turns` in order, one per request, then answers "done". */
-function script(
-  ...turns: ReturnType<typeof fauxAssistantMessage>[]
-): FauxResponseFactory {
-  let next = 0;
-  return () => turns[next++] ?? fauxAssistantMessage("done");
-}
+import {
+  ADVISOR_ON,
+  advisorCall,
+  advisorResults,
+  advisorRouter,
+  echo,
+  parentSession,
+  script,
+  textOf,
+} from "./session.js";
 
 /** Numbered advice, so each reply can be told apart. */
 function numbered(): FauxResponseFactory {
@@ -36,26 +31,8 @@ function numbered(): FauxResponseFactory {
   return () => fauxAssistantMessage(`ADVICE ${++n}`);
 }
 
-const advisorCall = (id: string) => fauxToolCall("advisor", {}, { id });
-
-const echo = defineTool({
-  name: "echo",
-  label: "echo",
-  description: "Echoes.",
-  parameters: Type.Object({}),
-  async execute() {
-    return { content: [{ type: "text", text: "echoed" }], details: {} };
-  },
-});
-
 const json = (messages: TranscriptContext["messages"]) =>
   JSON.stringify(messages);
-
-function advisorResults(session: AgentSession) {
-  return session.messages.flatMap((m) =>
-    m.role === "toolResult" && m.toolName === "advisor" ? [m] : [],
-  );
-}
 
 test("every earlier part renders byte-identically on the next call, reasoning and instruction included", async () => {
   const { respond, calls } = advisorRouter(
@@ -68,7 +45,7 @@ test("every earlier part renders byte-identically on the next call, reasoning an
   );
   const parent = await parentSession({
     respond,
-    skyr: ON,
+    skyr: ADVISOR_ON,
     customTools: [echo],
   });
   await parent.session.prompt("go");
@@ -97,7 +74,7 @@ test("earlier advice appears once, as the advisor's own turn", async () => {
     ),
     numbered(),
   );
-  const parent = await parentSession({ respond, skyr: ON });
+  const parent = await parentSession({ respond, skyr: ADVISOR_ON });
   await parent.session.prompt("go");
 
   const messages = calls[1]!.context.messages;
@@ -117,7 +94,7 @@ test("two advisor calls in one message give one advice turn, in call order", asy
     ),
     numbered(),
   );
-  const parent = await parentSession({ respond, skyr: ON });
+  const parent = await parentSession({ respond, skyr: ADVISOR_ON });
   await parent.session.prompt("go");
 
   const [a1, a2] = advisorResults(parent.session);
@@ -144,7 +121,7 @@ test("a sibling's later result opens the next part and leaves the earlier part u
   );
   const parent = await parentSession({
     respond,
-    skyr: ON,
+    skyr: ADVISOR_ON,
     customTools: [echo],
   });
   await parent.session.prompt("go");
@@ -171,7 +148,7 @@ test("a failed advisor call does not end a part; it reads as an ordinary call", 
           })
         : fauxAssistantMessage("ADVICE"),
   );
-  const parent = await parentSession({ respond, skyr: ON });
+  const parent = await parentSession({ respond, skyr: ADVISOR_ON });
   await parent.session.prompt("go");
 
   expect(advisorResults(parent.session)[0]?.isError).toBe(true);

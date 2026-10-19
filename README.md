@@ -38,7 +38,8 @@ in the `Other` row. The option the model recommends is marked and the cursor sta
 is ticked for you. Esc declines, and the model is told to stop and wait; on a row holding text,
 Esc first clears it. It can ask up to four questions at once: Tab and Shift+Tab move between
 them, and a Submit tab shows every answer before you send them. The answers stay in the
-transcript as one row per question, after a resume too.
+transcript as one row per question, after a resume too. The terminal bell rings when a question
+opens.
 
 Only an interactive terminal offers the tool: print, JSON and RPC runs hide it from the model,
 and subagents never get it. A half-typed draft comes back when the dialog closes; a large paste

@@ -790,3 +790,13 @@ test("the result row stays within a narrow width and keeps escapes out, whatever
     expect(row).not.toContain(BIDI);
   }
 });
+
+test("opening a question rings the terminal bell once", async () => {
+  const fake = dialogs();
+  const call = execute(registered(), fake.ui);
+  const opened = await fake.nextOpen();
+  expect(opened.write.mock.calls).toEqual([["\x07"]]);
+  press(opened.component, ENTER);
+  await call;
+  expect(opened.write).toHaveBeenCalledTimes(1);
+});

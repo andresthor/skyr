@@ -222,9 +222,11 @@ async function show(
   let onAbort: (() => void) | undefined;
   try {
     return await ui.custom<Answer[] | undefined | Error>(
-      (_tui, theme, keys, done) => {
+      (tui, theme, keys, done) => {
         onAbort = () => done(undefined);
         signal?.addEventListener("abort", onAbort, { once: true });
+        // The factory is the only place with the terminal
+        tui.terminal.write("\x07");
         return createAskDialog(questions, { theme, keys, done });
       },
     );

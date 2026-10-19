@@ -13,7 +13,8 @@ import { clip, errnoOf, quoted } from "./tools/render.js";
 /** One key per module that reads the file; a section is added with the code that reads it. */
 const SECTIONS = ["voice", "advisor"] as const;
 
-type ConfigFile = Partial<Record<(typeof SECTIONS)[number], unknown>>;
+type Section = (typeof SECTIONS)[number];
+type ConfigFile = Partial<Record<Section, unknown>>;
 
 export interface SkyrFile {
   data: ConfigFile;
@@ -33,9 +34,21 @@ export function reportSkyrFile(pi: ExtensionAPI): void {
 }
 
 /**
+ * The `key` section of `<agentDir>/skyr.json`, unchecked, for its module to validate; undefined
+ * when the file or the section is missing, or the file is unreadable or not a JSON object.
+ * Never throws. The file's own problems are `reportSkyrFile`'s to report, so a module reports
+ * only its section's.
+ */
+export async function readSkyrSection(key: Section): Promise<unknown> {
+  const { getAgentDir } = await loadPi();
+  return readSkyrFile(getAgentDir()).data[key];
+}
+
+/**
  * Reads `<agentDir>/skyr.json`. Missing file → `{ data: {}, problems: [] }`; malformed JSON
  * → defaults plus one problem string. Never throws. Unknown top-level keys are reported
  * (a mistyped section name would otherwise be silently ignored) and dropped.
+ * @internal
  */
 export function readSkyrFile(agentDir: string): SkyrFile {
   const path = join(agentDir, "skyr.json");

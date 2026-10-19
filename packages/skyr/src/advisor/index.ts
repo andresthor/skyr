@@ -10,7 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { readSkyrFile } from "../config.js";
+import { readSkyrSection } from "../config.js";
 import { loadPi } from "../pi.js";
 import {
   elapsed,
@@ -222,11 +222,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    const { getAgentDir } = await loadPi();
-    // The file's own problems are reported once by `reportSkyrFile`; these are the section's.
-    const section = parseAdvisorSection(
-      readSkyrFile(getAgentDir()).data.advisor,
-    );
+    const section = parseAdvisorSection(await readSkyrSection("advisor"));
     advisor = section.model;
     credentialsReported = false;
     const problems = [...section.problems];

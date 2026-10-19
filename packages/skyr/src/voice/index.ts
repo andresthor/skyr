@@ -16,10 +16,10 @@ import type {
   ExtensionUIContext,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { readSkyrFile } from "../config.js";
+import { readSkyrSection } from "../config.js";
 import { loadPi } from "../pi.js";
 import { quoted } from "../tools/render.js";
-import { prewarmToken, type SttConfig } from "./client.js";
+import { prewarmToken } from "./client.js";
 import { parseVoiceSection } from "./config.js";
 import { credentialsNotice, resolveSttCredentials } from "./credentials.js";
 import { DictationController, type DictationDeps } from "./dictation.js";
@@ -61,16 +61,6 @@ export function voiceMode(env: NodeJS.ProcessEnv): VoiceMode {
   return env.NO_COLOR !== undefined && env.NO_COLOR !== "" && !forcedOn
     ? "mono"
     : "color";
-}
-
-/** Read per `session_start`; `getAgentDir()` is env-true per call. */
-async function readVoiceConfig(): Promise<{
-  config: SttConfig;
-  problems: string[];
-}> {
-  const { getAgentDir } = await loadPi();
-  // The file's own problems are reported once by `reportSkyrFile`; these are the section's.
-  return parseVoiceSection(readSkyrFile(getAgentDir()).data.voice);
 }
 
 /**
@@ -261,7 +251,7 @@ export function wireVoice(pi: ExtensionAPI, deps: VoiceDeps = {}): void {
     editor = undefined;
     ctxRef = undefined;
     tui = undefined;
-    const read = await readVoiceConfig();
+    const read = parseVoiceSection(await readSkyrSection("voice"));
     config = read.config;
     // once per session; a malformed section degrades to defaults, never breaks the start
     if (read.problems.length)

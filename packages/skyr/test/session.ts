@@ -7,6 +7,7 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  type SimpleStreamOptions,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
@@ -100,8 +101,11 @@ export async function parentSession(o: {
   writeAll(join(agentDir, "agents"), o.userAgents);
   writeAll(join(cwd, CONFIG_DIR_NAME, "agents"), o.repoAgents);
 
-  // A second model, for an agent file that names one.
-  const faux = fauxProvider({ models: [{ id: "faux-1" }, { id: "faux-2" }] });
+  // A second model, for an agent file that names one and for the advisor; its output cap is
+  // below the advisor's own, so a test can tell which one a request used.
+  const faux = fauxProvider({
+    models: [{ id: "faux-1" }, { id: "faux-2", maxTokens: 8_000 }],
+  });
   const requests: TranscriptContext[] = [];
   faux.setResponses(
     Array.from({ length: 200 }, () => (context, ...rest) => {
@@ -115,6 +119,8 @@ export async function parentSession(o: {
     refreshOnCreate: false,
   });
   modelRuntime.registerNativeProvider(faux.provider);
+  // Pi marks a native provider configured only once its async availability check lands.
+  await modelRuntime.refresh({ allowNetwork: false });
 
   const settingsManager = SettingsManager.create(cwd, agentDir);
   const resourceLoader = new DefaultResourceLoader({
@@ -245,6 +251,32 @@ export function router(
       ? fauxAssistantMessage("done")
       : fauxAssistantMessage(calls);
   };
+}
+
+/**
+ * Sends requests to `faux-2`, the advisor model in tests, to `advice` and records each one;
+ * everything else goes to `parent`. By model, since the advisor's transcript also opens on "go".
+ */
+export function advisorRouter(
+  parent: FauxResponseFactory,
+  advice: FauxResponseFactory,
+): {
+  respond: FauxResponseFactory;
+  calls: {
+    context: TranscriptContext;
+    options: SimpleStreamOptions | undefined;
+  }[];
+} {
+  const calls: {
+    context: TranscriptContext;
+    options: SimpleStreamOptions | undefined;
+  }[] = [];
+  const respond: FauxResponseFactory = (context, options, state, model) => {
+    if (model.id !== "faux-2") return parent(context, options, state, model);
+    calls.push({ context, options });
+    return advice(context, options, state, model);
+  };
+  return { respond, calls };
 }
 
 /** The parent's tool results by tool-call id, which `call` sets to the task. */

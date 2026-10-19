@@ -38,7 +38,7 @@ describe("readSkyrFile", () => {
     );
     expect(data).toEqual({ voice: {} });
     expect(problems).toEqual([
-      'skyr.json: "voicee" is not a section; ignored (sections: voice)',
+      'skyr.json: "voicee" is not a section; ignored (sections: voice, advisor)',
     ]);
   });
 
@@ -48,8 +48,8 @@ describe("readSkyrFile", () => {
     );
     expect(data).toEqual({});
     expect(problems).toEqual([
-      'skyr.json: "webSearch" is not a section; ignored (sections: voice)',
-      'skyr.json: "subagent" is not a section; ignored (sections: voice)',
+      'skyr.json: "webSearch" is not a section; ignored (sections: voice, advisor)',
+      'skyr.json: "subagent" is not a section; ignored (sections: voice, advisor)',
     ]);
   });
 
@@ -108,7 +108,7 @@ describe("reporting", () => {
       skyr: { voicee: {}, voice: { frobnicate: true } },
     });
     expect([...parent.notices].sort()).toEqual([
-      'skyr.json: "voicee" is not a section; ignored (sections: voice)',
+      'skyr.json: "voicee" is not a section; ignored (sections: voice, advisor)',
       expect.stringMatching(
         /^skyr\.json: voice\.frobnicate is not a setting; ignored/,
       ),

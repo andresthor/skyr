@@ -29,6 +29,8 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
   in parallel, and Esc stops them.
 - `ask_user` — asks you a question in place of the input editor and waits for your answer; see
   [Ask user](#ask-user).
+- `advisor` — asks a stronger model to review the session so far; off until `skyr.json` names a
+  model; see [Advisor](#advisor).
 
 ## Ask user
 
@@ -157,6 +159,32 @@ A stopped heart's row shows `· stalled`; nothing kills a stalled child, the use
 session start; nothing keeps a stale child crossing sessions.
 
 `packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.
+
+## Advisor
+
+The `advisor` tool lets the model ask a stronger model for a second opinion: before it
+commits to an approach, when it is stuck, and before it declares a task done. It takes no
+arguments; skyr sends the session as a transcript and returns the advice as the tool result.
+
+It is off until `<agentDir>/skyr.json` names a model, in Pi's `provider/id` form:
+
+```json
+{ "advisor": { "model": "corti/corti-s1-beta" } }
+```
+
+The model must be one Pi knows (`/model` lists them) and has credentials for; otherwise the
+tool stays off and a warning says why (an unknown model when the session starts, missing
+credentials at the first prompt). Remove the key to turn it off; the change applies from the
+next session.
+
+**Privacy.** Once a model is set, every advisor call sends the active branch to that model's
+provider: your messages, the agent's messages and latest reasoning, every tool call and
+result (file contents and command output included), and the system prompt. `skyr.json` is
+per agent dir, so this holds in every project that agent dir serves.
+
+**Cost.** Each call sends the whole branch as input, so a call on a long session costs about
+as much as one request of that size to the advisor's model. Its tokens and cost count toward
+the session totals in the footer and `/session`.
 
 ## Embedding it
 

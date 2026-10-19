@@ -153,8 +153,8 @@ export function seconds(ms: number): Segment[] {
   return [["muted", ` · ${(ms / 1000).toFixed(1)}s`]];
 }
 
-// Pi can drop a running row before its result renders (a chat rebuild, an HTML export), and
-// only `took` stops its ticking; this bound, well past any web tool's deadline, stops it otherwise.
+// Only `took` stops a row's ticking, and Pi can drop a running row first (a chat rebuild, an
+// HTML export); past this bound its clock freezes.
 const TICK_LIMIT_MS = 5 * 60_000;
 
 /** The running rows, redrawn each second by one ticker that runs only while a row is here. */

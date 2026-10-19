@@ -11,7 +11,7 @@ import { loadPi } from "./pi.js";
 import { clip, errnoOf, quoted } from "./tools/render.js";
 
 /** One key per module that reads the file; a section is added with the code that reads it. */
-const SECTIONS = ["voice"] as const;
+const SECTIONS = ["voice", "advisor"] as const;
 
 type ConfigFile = Partial<Record<(typeof SECTIONS)[number], unknown>>;
 

@@ -3,6 +3,7 @@
  * extension calls `registerSkyr`.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerAdvisor } from "./advisor/index.js";
 import { registerAskUser } from "./ask-user/index.js";
 import { reportSkyrFile } from "./config.js";
 import { registerSubagent } from "./subagent/index.js";
@@ -17,6 +18,7 @@ export function registerSkyr(pi: ExtensionAPI): void {
   registerVoice(pi);
   registerSubagent(pi);
   registerAskUser(pi);
+  registerAdvisor(pi);
 }
 
 export default function skyr(pi: ExtensionAPI): void {

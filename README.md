@@ -27,6 +27,18 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
 - `subagent` — hands a task to an agent defined in a markdown file. The agent runs as a fresh
   session with its own context and returns only its final answer. Several calls in one turn run
   in parallel, and Esc stops them.
+- `ask_user` — asks you a question in place of the input editor and waits for your answer; see
+  [Ask user](#ask-user).
+
+## Ask user
+
+The model can ask you a question in place of the input editor and wait. Pick one of its options
+with the arrows and Enter, or type your own answer in the `Other` row. Esc declines, and the
+model is told to stop and wait; on a row holding text, Esc first clears it.
+
+Only an interactive terminal offers the tool: print, JSON and RPC runs hide it from the model,
+and subagents never get it. A half-typed draft comes back when the dialog closes; a large paste
+comes back written out in full instead of as its `[paste #…]` marker.
 
 ## Voice
 

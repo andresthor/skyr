@@ -14,6 +14,7 @@ import {
   CONFIG_DIR_NAME,
   createAgentSession,
   DefaultResourceLoader,
+  type ExtensionContext,
   type ExtensionUIContext,
   ModelRuntime,
   SessionManager,
@@ -50,6 +51,10 @@ export async function parentSession(o: {
   repoAgents?: Record<string, string>;
   /** Make the parent's cwd a git repo with one seed commit (for worktree-y tests). */
   git?: boolean;
+  /** The run mode extensions see; Pi's default is print. */
+  mode?: ExtensionContext["mode"];
+  /** UI methods spread over the recording `setWidget` and `notify`. */
+  ui?: Partial<ExtensionUIContext>;
 }): Promise<Parent> {
   const cwd = tmp("cwd");
   if (o.git) {
@@ -134,8 +139,9 @@ export async function parentSession(o: {
     setWidget: (_key: string, content: string[] | undefined) =>
       widgets.push(content),
     notify: (message: string) => notices.push(message),
+    ...o.ui,
   } as unknown as ExtensionUIContext;
-  await session.bindExtensions({ uiContext });
+  await session.bindExtensions({ uiContext, mode: o.mode });
 
   onTestFinished(() => {
     session.dispose();

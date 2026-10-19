@@ -464,6 +464,21 @@ test("an extension dialog taking the keyboard stops a running dictation as Enter
   expect(h.ed.getText()).toBe("hello there");
 });
 
+test("hint keys are spelled as Pi spells a key: an alt binding reads option on macOS and alt elsewhere", async () => {
+  const h = await mounted(keybindings({ "app.interrupt": "alt+g" }));
+  await h.toggle();
+  h.starts[0]!.onReady?.();
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  onTestFinished(() => {
+    Object.defineProperty(process, "platform", platform);
+  });
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  expect(bottomRow(h.ed)).toContain("option+g");
+  Object.defineProperty(process, "platform", { value: "linux" });
+  expect(bottomRow(h.ed)).toContain("alt+g");
+  expect(bottomRow(h.ed)).not.toContain("option");
+});
+
 test("session_shutdown, even twice, cancels the dictation once, clears the footer and leaves no timer", async () => {
   const h = await mounted();
   await h.toggle();

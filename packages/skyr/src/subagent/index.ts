@@ -984,7 +984,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           startedAt: 0,
           turns: 0,
           toolCalls: 0,
-          tokens: stored.usage.input + stored.usage.output,
+          tokens: stored.usage.totalTokens,
           recovered: true as const,
         },
         isError: stored.status !== "done",

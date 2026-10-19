@@ -15,7 +15,7 @@ export interface RunSnapshot {
   endedAt?: number;
   turns: number;
   toolCalls: number;
-  /** Input plus output tokens, summed over the child's turns. */
+  /** Every token the child has used so far, cached input included (its usage's `totalTokens`). */
   tokens: number;
   /** Name of the child's latest tool call. */
   tool?: string;
@@ -90,7 +90,7 @@ export function createRunStore(): RunStore {
         runs.set(id, {
           ...run,
           turns: run.turns + 1,
-          tokens: event.usage.input + event.usage.output,
+          tokens: event.usage.totalTokens,
         });
       changed();
     },

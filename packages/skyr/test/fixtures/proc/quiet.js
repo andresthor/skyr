@@ -26,7 +26,7 @@ process.on("SIGTERM", () => {
       status: "aborted",
       text: undefined,
       error: undefined,
-      usage: { input: 0, output: 0 },
+      usage: { input: 0, output: 0, totalTokens: 0 },
       description: "quiet",
     }),
   );

@@ -156,7 +156,7 @@ export async function runChild(
       writeSnapshot();
     } else if (event.type === "turn") {
       turns += 1;
-      tokens = event.usage.input + event.usage.output;
+      tokens = event.usage.totalTokens;
       writeSnapshot();
     }
   };

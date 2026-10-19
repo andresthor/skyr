@@ -10,7 +10,7 @@ writeFileSync(
     status: "done",
     text: "THE ANSWER",
     description: "clean",
-    usage: { input: 3, output: 5 },
+    usage: { input: 3, output: 5, totalTokens: 8 },
   }),
 );
 renameSync(temp, `${dir}/result.json`);

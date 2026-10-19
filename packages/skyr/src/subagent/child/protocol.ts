@@ -58,8 +58,16 @@ export function readStoredResult(raw: unknown): StoredResult | undefined {
   if (typeof r.description !== "string" || r.description === "")
     return undefined;
   if (typeof r.usage !== "object" || r.usage === null) return undefined;
-  const usage = r.usage as { input?: unknown; output?: unknown };
-  if (typeof usage.input !== "number" || typeof usage.output !== "number")
+  const usage = r.usage as {
+    input?: unknown;
+    output?: unknown;
+    totalTokens?: unknown;
+  };
+  if (
+    typeof usage.input !== "number" ||
+    typeof usage.output !== "number" ||
+    typeof usage.totalTokens !== "number"
+  )
     return undefined;
   return r as unknown as StoredResult;
 }

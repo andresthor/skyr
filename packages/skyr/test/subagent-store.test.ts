@@ -12,6 +12,23 @@ const running: RunSnapshot = {
   tokens: 0,
 };
 
+test("a turn's token count is everything the child has used so far, cached input included", () => {
+  const store = createRunStore();
+  store.apply("c1", { type: "start", snapshot: running });
+  store.apply("c1", {
+    type: "turn",
+    usage: {
+      input: 5,
+      output: 7,
+      cacheRead: 100,
+      cacheWrite: 8,
+      totalTokens: 120,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  });
+  expect(store.byToolCall("t1")?.tokens).toBe(120);
+});
+
 test("a running child counts as working, a queued one has no activity yet", () => {
   const store = createRunStore();
   store.apply("c1", {

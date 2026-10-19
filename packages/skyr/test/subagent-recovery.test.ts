@@ -11,9 +11,9 @@ import { call, type Parent, parentSession, taskOf, textOf } from "./session.js";
 const usage = {
   input: 5,
   output: 7,
-  cacheRead: 0,
+  cacheRead: 30,
   cacheWrite: 0,
-  totalTokens: 12,
+  totalTokens: 42,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
@@ -73,6 +73,7 @@ test("a crashed parent's finished child is delivered once on the next session st
   expect(textOf(message)).toMatch(
     /\[background subagent "answers the old call" \(id deadbeef\): done, /,
   );
+  expect(textOf(message)).toContain(", 42 tok]");
   expect(textOf(message)).toContain("RECOVERED-ANSWER");
   expect(existsSync(job)).toBe(false);
 

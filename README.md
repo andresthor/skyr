@@ -36,7 +36,8 @@ The model can ask you a question in place of the input editor and wait. Pick an 
 arrows and Enter, or tick several with Space when the question allows it, or type your own answer
 in the `Other` row. The option the model recommends is marked and the cursor starts on it; nothing
 is ticked for you. Esc declines, and the model is told to stop and wait; on a row holding text,
-Esc first clears it.
+Esc first clears it. It can ask up to four questions at once: Tab and Shift+Tab move between
+them, and a Submit tab shows every answer before you send them.
 
 Only an interactive terminal offers the tool: print, JSON and RPC runs hide it from the model,
 and subagents never get it. A half-typed draft comes back when the dialog closes; a large paste

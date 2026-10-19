@@ -8,6 +8,8 @@ import { keybindings } from "./voice.js";
 
 const plain = {
   fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
 } as unknown as Theme;
 
 const UP = "\x1b[A";
@@ -15,6 +17,8 @@ const DOWN = "\x1b[B";
 const ENTER = "\r";
 const ESC = "\x1b";
 const SPACE = " ";
+const TAB = "\t";
+const BACKTAB = "\x1b[Z";
 
 const storage: AskQuestion = {
   question: "Which storage should the cache use?",
@@ -44,11 +48,13 @@ function dialog(
   return { component, done, press, text };
 }
 
-test("a single question finishes on Enter with the option under the cursor, and the keys follow Pi's bindings when the user rebinds them", () => {
-  const plainKeys = dialog();
-  plainKeys.press(DOWN, UP, UP, DOWN, ENTER);
-  expect(plainKeys.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
+test("a single question finishes on Enter with the option under the cursor", () => {
+  const d = dialog();
+  d.press(DOWN, UP, UP, DOWN, ENTER);
+  expect(d.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
+});
 
+test("the keys follow Pi's bindings when the user rebinds them", () => {
   const rebound = dialog([storage], {
     keys: keybindings({ "tui.select.down": "ctrl+n" }),
   });
@@ -63,31 +69,34 @@ test("a single question finishes on Enter with the option under the cursor, and 
   expect(moved.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
 });
 
-test("the Other row owns typing: text goes to the field, Enter with no text does nothing, and Esc clears typed text before a second Esc cancels", () => {
+test("Enter on the Other row with no text does nothing", () => {
   const d = dialog();
   d.press(DOWN, DOWN, ENTER);
   expect(d.done).not.toHaveBeenCalled();
-  d.press("a", "b", "c");
+});
+
+test("Esc on the Other row clears typed text before a second Esc cancels", () => {
+  const d = dialog();
+  d.press(DOWN, DOWN, "a", "b", "c");
   expect(d.text().join("\n")).toContain("Other  abc");
   d.press(ESC);
   expect(d.done).not.toHaveBeenCalled();
   expect(d.text().join("\n")).not.toContain("abc");
   d.press(ESC);
   expect(d.done.mock.calls).toEqual([[undefined]]);
+});
 
-  const typed = dialog();
-  typed.press(DOWN, DOWN, "use", " ", "both", ENTER);
-  expect(typed.done.mock.calls).toEqual([
-    [[{ labels: [], other: "use both" }]],
-  ]);
+test("text typed on the Other row is the answer, spaces included", () => {
+  const d = dialog();
+  d.press(DOWN, DOWN, "use", " ", "both", ENTER);
+  expect(d.done.mock.calls).toEqual([[[{ labels: [], other: "use both" }]]]);
+});
 
-  // with no options, the field is the only row, and the cursor starts on it
-  const free = dialog([
-    { question: "What should it be called?", header: "Name" },
-  ]);
-  expect(free.text().join("\n")).toContain("Answer");
-  free.press("skyr", ENTER);
-  expect(free.done.mock.calls).toEqual([[[{ labels: [], other: "skyr" }]]]);
+test("a question with no options has only the answer field, and the cursor starts on it", () => {
+  const d = dialog([{ question: "What should it be called?", header: "Name" }]);
+  expect(d.text().join("\n")).toContain("Answer");
+  d.press("skyr", ENTER);
+  expect(d.done.mock.calls).toEqual([[[{ labels: [], other: "skyr" }]]]);
 });
 
 const features: AskQuestion = {
@@ -101,39 +110,101 @@ const features: AskQuestion = {
   ],
 };
 
-test("a multi-select question returns every ticked label in option order, and Enter with nothing ticked or typed does nothing", () => {
+test("a multi-select question returns every ticked label in option order", () => {
   const d = dialog([features]);
   expect(d.text().join("\n")).toContain("space tick");
-  d.press(ENTER);
-  expect(d.done).not.toHaveBeenCalled();
   d.press(DOWN, SPACE, UP, UP, SPACE, SPACE, SPACE, ENTER);
   expect(d.done.mock.calls).toEqual([[[{ labels: ["Auth", "Search"] }]]]);
+});
 
-  // on the Other row Space is typing, so an answer keeps its spaces
-  const typed = dialog([features]);
-  typed.press(UP, SPACE, DOWN, DOWN, DOWN, ..."use the queue", ENTER);
-  expect(typed.done.mock.calls).toEqual([
+test("Enter on a multi-select question with nothing ticked or typed does nothing", () => {
+  const d = dialog([features]);
+  d.press(ENTER);
+  expect(d.done).not.toHaveBeenCalled();
+});
+
+test("on a multi-select question's Other row Space is typing, so the typed answer keeps its spaces", () => {
+  const d = dialog([features]);
+  d.press(UP, SPACE, DOWN, DOWN, DOWN, ..."use the queue", ENTER);
+  expect(d.done.mock.calls).toEqual([
     [[{ labels: ["Auth"], other: "use the queue" }]],
   ]);
 });
 
-test("the cursor starts on the recommended option, which the dialog marks, and a multi-select question starts with nothing ticked", () => {
-  const single = dialog([
+test("the cursor starts on the recommended option, which the dialog marks", () => {
+  const d = dialog([
     {
       ...storage,
       options: [{ label: "SQLite" }, { label: "Postgres", recommended: true }],
     },
   ]);
-  expect(single.text()).toContain(" > Postgres recommended");
-  single.press(ENTER);
-  expect(single.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
+  expect(d.text()).toContain(" > Postgres recommended");
+  d.press(ENTER);
+  expect(d.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
+});
 
+test("a multi-select question starts with nothing ticked, its recommended option included", () => {
   const multi = dialog([features]);
   const lines = multi.text();
   expect(lines).toContain(" > [ ] Billing recommended");
   expect(lines.join("\n")).not.toContain("[x]");
   multi.press(SPACE);
   expect(multi.text()).toContain(" > [x] Billing recommended");
+});
+
+const scope: AskQuestion = {
+  question: "How far should the change reach?",
+  header: "Scope",
+  options: [{ label: "A" }, { label: "B" }],
+};
+const naming: AskQuestion = {
+  question: "What should it be called?",
+  header: "Name",
+};
+
+test("several questions: Tab and Shift+Tab move through them and Submit, Enter advances to the next unanswered one, answers survive a round trip, and Submit with one unanswered jumps to it", () => {
+  const d = dialog([scope, storage, naming]);
+  const screen = () => d.text().join("\n");
+  expect(d.text()[1]).toBe("  Scope   Storage   Name   Submit ");
+  d.press(ENTER);
+  expect(screen()).toContain(storage.question);
+  expect(d.text()[1]).toContain("✓ Scope");
+  d.press(TAB, TAB);
+  expect(screen()).toContain(" Scope    A");
+  expect(screen()).toContain(" Storage  not answered");
+  expect(screen()).toContain("enter go to Storage · escape cancel");
+  d.press(ENTER);
+  expect(screen()).toContain(storage.question);
+  d.press(BACKTAB);
+  expect(d.text()).toContain(" > (•) A");
+  d.press(TAB, DOWN, ENTER);
+  expect(screen()).toContain(naming.question);
+  d.press(..."skyr", ENTER);
+  expect(screen()).toContain("enter submit · tab next · escape cancel");
+  expect(d.done).not.toHaveBeenCalled();
+  d.press(ENTER);
+  expect(d.done.mock.calls).toEqual([
+    [
+      [
+        { labels: ["A"] },
+        { labels: ["Postgres"] },
+        { labels: [], other: "skyr" },
+      ],
+    ],
+  ]);
+});
+
+test("across tabs a single choice keeps one answer: the last one taken with Enter", () => {
+  const otherLast = dialog([scope, storage]);
+  otherLast.press(ENTER, BACKTAB, DOWN, DOWN, ..."mine", ENTER, ENTER, ENTER);
+  expect(otherLast.done.mock.calls[0]?.[0]?.[0]).toEqual({
+    labels: [],
+    other: "mine",
+  });
+  const optionLast = dialog([scope, storage]);
+  optionLast.press(DOWN, DOWN, ..."mine", ENTER, BACKTAB, UP, UP, ENTER);
+  optionLast.press(ENTER, ENTER);
+  expect(optionLast.done.mock.calls[0]?.[0]?.[0]).toEqual({ labels: ["A"] });
 });
 
 test("a throw while drawing or handling a key closes the dialog with that error instead of reaching the TUI's stack", async () => {
@@ -191,5 +262,22 @@ test("every line fits the width, from 1 to 80 columns, with wide characters, emo
       for (const line of d.component.render(width))
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
+    const four = dialog([wide, wideMulti, scope, naming]);
+    for (const keys of [[], [ENTER], [TAB, TAB, TAB, TAB]]) {
+      four.press(...keys);
+      for (const line of four.component.render(width))
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
   }
+
+  // too narrow for every chip: only the active one, with where it stands
+  const narrow = dialog([
+    scope,
+    storage,
+    naming,
+    { ...naming, header: "Owner" },
+  ]);
+  expect(narrow.text(24)[1]).toBe("  Scope  (1/4)");
+  narrow.press(BACKTAB);
+  expect(narrow.text(24)[1]).toBe("  Submit ");
 });

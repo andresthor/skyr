@@ -1,6 +1,7 @@
 /**
  * The ask_user dialog, drawn in place of the input editor. It owns the keyboard until the user
  * answers or declines, and knows nothing of Pi's runtime: questions in, answers out through `done`.
+ * One question finishes on Enter; two to four get a tab each and a Submit tab to review them.
  */
 import type {
   KeybindingsManager,
@@ -26,45 +27,48 @@ export interface Answer {
 }
 
 interface Deps {
-  theme: Pick<Theme, "fg">;
+  theme: Pick<Theme, "fg" | "bg" | "bold">;
   keys: Pick<KeybindingsManager, "matches" | "getKeys">;
   /** `undefined` = declined with Esc; an `Error` = the dialog threw and closed. */
   done(result: Answer[] | undefined | Error): void;
 }
 
 const PLACEHOLDER = "type an answer";
+export const HEADER_WIDTH = 12;
 
 /** The question dialog. Sanitizes every model string itself, and calls `done` at most once. */
 export function createAskDialog(
   questions: readonly AskQuestion[],
   deps: Deps,
 ): Component & Focusable {
-  const [question] = questions;
-  if (!question) throw new Error("ask_user: the dialog needs a question");
-  return new AskDialog(question, deps);
+  if (questions.length === 0)
+    throw new Error("ask_user: the dialog needs a question");
+  return new AskDialog(questions, deps);
 }
 
-class AskDialog implements Component, Focusable {
-  focused = false;
-  private readonly text: string;
-  private readonly multi: boolean;
-  private readonly options: {
+/** One question's rows and what the user has done on them; it survives tab switches. */
+class Page {
+  readonly text: string;
+  readonly header: string;
+  readonly multi: boolean;
+  readonly options: {
     raw: string;
     label: string;
     description?: string;
     recommended: boolean;
   }[];
-  private readonly ticked = new Set<number>();
   // An Input, not an Editor: it keeps no paste store, so nothing typed here can come back as a marker
-  private readonly input: Input;
-  private cursor = 0;
-  private finished = false;
+  readonly input: Input;
+  readonly ticked = new Set<number>();
+  cursor: number;
+  /** Single choice: the option marked with Enter, or "other" for the typed answer. */
+  picked: number | "other" | undefined;
+  /** Enter has accepted an answer here at least once. */
+  confirmed = false;
 
-  constructor(
-    question: AskQuestion,
-    private readonly deps: Deps,
-  ) {
+  constructor(question: AskQuestion, theme: Deps["theme"]) {
     this.text = sanitize(question.question);
+    this.header = truncateToWidth(sanitize(question.header), HEADER_WIDTH);
     this.multi = question.multiSelect === true;
     this.options = (question.options ?? []).map((o) => ({
       raw: o.label,
@@ -81,12 +85,80 @@ class AskDialog implements Component, Focusable {
     this.input = new Input({
       prompt: "",
       placeholder: PLACEHOLDER,
-      placeholderStyle: (t) => deps.theme.fg("dim", t),
+      placeholderStyle: (t) => theme.fg("dim", t),
     });
   }
 
-  private get onInput(): boolean {
+  get onInput(): boolean {
     return this.cursor === this.options.length;
+  }
+
+  get typed(): string {
+    return this.input.getValue().trim();
+  }
+
+  /** Several choices or none: the ticked labels in option order and the typed text, if any. */
+  private ticks(): Answer | undefined {
+    const other = this.typed;
+    const labels = this.options
+      .filter((_, i) => this.ticked.has(i))
+      .map((o) => o.raw);
+    if (!labels.length && other === "") return undefined;
+    return { labels, ...(other === "" ? {} : { other }) };
+  }
+
+  private get single(): boolean {
+    return !this.multi && this.options.length > 0;
+  }
+
+  /** Takes what Enter is on as the answer; false when there is nothing to take. */
+  accept(): boolean {
+    if (!this.single) {
+      if (!this.ticks()) return false;
+    } else if (this.onInput) {
+      if (this.typed === "") return false;
+      this.picked = "other";
+    } else {
+      // a single choice keeps one answer, so marking an option drops the typed one
+      this.picked = this.cursor;
+      this.input.setValue("");
+    }
+    this.confirmed = true;
+    return true;
+  }
+
+  /** The accepted answer as it stands now; undefined until Enter took one. */
+  answer(): Answer | undefined {
+    if (!this.confirmed) return undefined;
+    if (!this.single) return this.ticks();
+    if (this.picked === "other")
+      return this.typed === "" ? undefined : { labels: [], other: this.typed };
+    const option =
+      this.picked === undefined ? undefined : this.options[this.picked];
+    return option && { labels: [option.raw] };
+  }
+}
+
+class AskDialog implements Component, Focusable {
+  focused = false;
+  private readonly pages: Page[];
+  /** The page shown; `pages.length` is the Submit tab, which exists only with several pages. */
+  private tab = 0;
+  private finished = false;
+
+  constructor(
+    questions: readonly AskQuestion[],
+    private readonly deps: Deps,
+  ) {
+    this.pages = questions.map((q) => new Page(q, deps.theme));
+  }
+
+  private get tabbed(): boolean {
+    return this.pages.length > 1;
+  }
+
+  private get page(): Page | undefined {
+    return this.pages[this.tab];
   }
 
   handleInput(data: string): void {
@@ -111,7 +183,7 @@ class AskDialog implements Component, Focusable {
   }
 
   invalidate(): void {
-    this.input.invalidate();
+    for (const page of this.pages) page.input.invalidate();
   }
 
   private finish(result: Answer[] | undefined | Error): void {
@@ -120,55 +192,120 @@ class AskDialog implements Component, Focusable {
     this.deps.done(result);
   }
 
+  private answers(): Answer[] | undefined {
+    const answers = this.pages.map((p) => p.answer());
+    return answers.every((a) => a !== undefined) ? answers : undefined;
+  }
+
+  private firstUnanswered(after = -1): number | undefined {
+    const n = this.pages.length;
+    for (let step = 1; step <= n; step++) {
+      const i = (after + step + n) % n;
+      if (!this.pages[i]?.answer()) return i;
+    }
+    return undefined;
+  }
+
   private key(data: string): void {
     const { keys } = this.deps;
-    if (keys.matches(data, "tui.select.up"))
-      this.cursor = Math.max(0, this.cursor - 1);
-    else if (keys.matches(data, "tui.select.down"))
-      this.cursor = Math.min(this.options.length, this.cursor + 1);
-    else if (keys.matches(data, "tui.select.confirm")) this.confirm();
-    else if (keys.matches(data, "tui.select.cancel")) {
-      if (this.onInput && this.input.getValue() !== "") this.input.setValue("");
+    const page = this.page;
+    const tabs = this.pages.length + 1;
+    if (keys.matches(data, "tui.select.cancel")) {
+      if (page?.onInput && page.input.getValue() !== "")
+        page.input.setValue("");
       else this.finish(undefined);
-    } else if (this.onInput) this.input.handleInput(data);
+    } else if (this.tabbed && keys.matches(data, "tui.input.tab"))
+      this.tab = (this.tab + 1) % tabs;
+    else if (this.tabbed && matchesKey(data, Key.shift("tab")))
+      this.tab = (this.tab + tabs - 1) % tabs;
+    else if (!page) {
+      if (keys.matches(data, "tui.select.confirm")) this.submit();
+    } else if (keys.matches(data, "tui.select.up"))
+      page.cursor = Math.max(0, page.cursor - 1);
+    else if (keys.matches(data, "tui.select.down"))
+      page.cursor = Math.min(page.options.length, page.cursor + 1);
+    else if (keys.matches(data, "tui.select.confirm")) this.confirm(page);
+    else if (page.onInput) page.input.handleInput(data);
     // Space has no action id; on the Other row it is typing, so it ticks on option rows only
-    else if (this.multi && matchesKey(data, Key.space)) this.tick();
+    else if (page.multi && matchesKey(data, Key.space)) {
+      if (!page.ticked.delete(page.cursor)) page.ticked.add(page.cursor);
+    }
   }
 
-  private tick(): void {
-    if (!this.ticked.delete(this.cursor)) this.ticked.add(this.cursor);
+  private confirm(page: Page): void {
+    if (!page.accept()) return;
+    if (!this.tabbed) {
+      const answers = this.answers();
+      if (answers) this.finish(answers);
+      return;
+    }
+    this.tab = this.firstUnanswered(this.tab) ?? this.pages.length;
   }
 
-  private confirm(): void {
-    const option = this.options[this.cursor];
-    const other = this.input.getValue().trim();
-    if (this.multi) {
-      const labels = this.options
-        .filter((_, i) => this.ticked.has(i))
-        .map((o) => o.raw);
-      if (labels.length || other !== "")
-        this.finish([{ labels, ...(other === "" ? {} : { other }) }]);
-    } else if (option) this.finish([{ labels: [option.raw] }]);
-    else if (other !== "") this.finish([{ labels: [], other }]);
+  private submit(): void {
+    const answers = this.answers();
+    if (answers) this.finish(answers);
+    else this.tab = this.firstUnanswered() ?? this.tab;
   }
 
   private draw(width: number): string[] {
-    const { theme, keys } = this.deps;
+    const { theme } = this.deps;
     const rule = theme.fg("accent", "─".repeat(width));
+    const lines = [rule];
+    if (this.tabbed) lines.push(this.chips(width), "");
+    const page = this.page;
+    lines.push(...(page ? this.question(page, width) : this.review()));
+    lines.push("", ` ${theme.fg("muted", this.hint())}`, rule);
+    return lines;
+  }
+
+  private chips(width: number): string {
+    const { theme } = this.deps;
+    const active = (label: string) =>
+      theme.bg("selectedBg", theme.bold(theme.fg("text", ` ${label} `)));
+    const complete = this.answers() !== undefined;
+    const chips = this.pages.map((p, i) => {
+      if (i === this.tab) return active(p.header);
+      return p.answer()
+        ? ` ${theme.fg("accent", "✓ ")}${theme.fg("text", p.header)} `
+        : ` ${theme.fg("dim", p.header)} `;
+    });
+    const submit =
+      this.tab === this.pages.length
+        ? active("Submit")
+        : ` ${theme.fg(complete ? "text" : "dim", "Submit")} `;
+    const row = ` ${[...chips, submit].join(" ")}`;
+    if (visibleWidth(row) <= width) return row;
+    const page = this.page;
+    return page
+      ? ` ${active(page.header)} ${theme.fg("muted", `(${this.tab + 1}/${this.pages.length})`)}`
+      : ` ${active("Submit")}`;
+  }
+
+  private question(page: Page, width: number): string[] {
+    const { theme } = this.deps;
     const wrap = (text: string, indent: number) =>
       wrapTextWithAnsi(text, Math.max(1, width - indent));
     const marker = (on: boolean) => (on ? theme.fg("accent", " > ") : "   ");
+    const box = (i: number) =>
+      page.multi
+        ? page.ticked.has(i)
+          ? "[x] "
+          : "[ ] "
+        : this.tabbed
+          ? page.picked === i
+            ? "(•) "
+            : "( ) "
+          : "";
+    const indent = " ".repeat(visibleWidth(marker(false) + box(0)) + 2);
 
-    const lines = [rule];
-    for (const line of wrap(this.text, 1))
+    const lines: string[] = [];
+    for (const line of wrap(page.text, 1))
       lines.push(` ${theme.fg("text", line)}`);
     lines.push("");
-    const box = (i: number) =>
-      this.multi ? (this.ticked.has(i) ? "[x] " : "[ ] ") : "";
-    const indent = " ".repeat(visibleWidth(marker(false) + box(0)) + 2);
-    this.options.forEach((o, i) => {
+    page.options.forEach((o, i) => {
       lines.push(
-        marker(i === this.cursor) +
+        marker(i === page.cursor) +
           theme.fg("text", box(i) + o.label) +
           (o.recommended ? ` ${theme.fg("success", "recommended")}` : ""),
       );
@@ -178,21 +315,55 @@ class AskDialog implements Component, Focusable {
     });
 
     const lead =
-      marker(this.onInput) +
-      theme.fg("text", this.options.length ? "Other" : "Answer") +
+      marker(page.onInput) +
+      theme.fg("text", page.options.length ? "Other" : "Answer") +
       "  ";
-    this.input.focused = this.focused && this.onInput;
-    const typed = this.input.getValue();
-    const field = this.onInput
-      ? (this.input.render(Math.max(1, width - visibleWidth(lead)))[0] ?? "")
+    for (const p of this.pages) p.input.focused = false;
+    page.input.focused = this.focused && page.onInput;
+    const typed = page.input.getValue();
+    const field = page.onInput
+      ? (page.input.render(Math.max(1, width - visibleWidth(lead)))[0] ?? "")
       : typed
         ? theme.fg("text", sanitize(typed))
         : theme.fg("dim", PLACEHOLDER);
     lines.push(lead + field);
-
-    const tick = this.multi ? "space tick · " : "";
-    const hint = `${keyName(keys, "tui.select.up")}/${keyName(keys, "tui.select.down")} move · ${tick}${keyName(keys, "tui.select.confirm")} answer · ${keyName(keys, "tui.select.cancel")} cancel`;
-    lines.push("", ` ${theme.fg("muted", hint)}`, rule);
     return lines;
+  }
+
+  private review(): string[] {
+    const { theme } = this.deps;
+    const widest = Math.max(...this.pages.map((p) => visibleWidth(p.header)));
+    return this.pages.map((p) => {
+      const pad = " ".repeat(widest - visibleWidth(p.header) + 2);
+      const answer = p.answer();
+      const text = answer
+        ? sanitize(
+            [...answer.labels, ...(answer.other ? [answer.other] : [])].join(
+              "; ",
+            ),
+          )
+        : undefined;
+      return ` ${theme.fg("muted", p.header + pad)}${
+        text === undefined
+          ? theme.fg("warning", "not answered")
+          : theme.fg("text", text)
+      }`;
+    });
+  }
+
+  private hint(): string {
+    const { keys } = this.deps;
+    const key = (id: Parameters<typeof keyName>[1]) => keyName(keys, id);
+    const cancel = `${key("tui.select.cancel")} cancel`;
+    const tab = this.tabbed ? `${key("tui.input.tab")} next · ` : "";
+    const page = this.page;
+    if (page) {
+      const tick = page.multi ? "space tick · " : "";
+      return `${key("tui.select.up")}/${key("tui.select.down")} move · ${tick}${key("tui.select.confirm")} answer · ${tab}${cancel}`;
+    }
+    const missing = this.firstUnanswered();
+    return missing === undefined
+      ? `${key("tui.select.confirm")} submit · ${tab}${cancel}`
+      : `${key("tui.select.confirm")} go to ${this.pages[missing]?.header} · ${cancel}`;
   }
 }

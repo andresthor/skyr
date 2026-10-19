@@ -17,7 +17,11 @@ import {
   took,
   toolRow,
 } from "../tools/render.js";
-import { type Answer, createAskDialog } from "./dialog.js";
+import { type Answer, createAskDialog, HEADER_WIDTH } from "./dialog.js";
+
+const MAX_QUESTIONS = 4;
+const MIN_OPTIONS = 2;
+const MAX_OPTIONS = 4;
 
 const Option = Type.Object({
   label: Type.String({ description: "Choice text, 1-5 words" }),
@@ -35,12 +39,12 @@ const Option = Type.Object({
 const Question = Type.Object({
   question: Type.String({ description: "The full question, ending in ?" }),
   header: Type.String({
-    description: "Short label shown for the question, up to 12 characters",
+    description: `Short label shown for the question, up to ${HEADER_WIDTH} columns; a wide character takes two`,
   }),
   options: Type.Optional(
     Type.Array(Option, {
-      minItems: 2,
-      maxItems: 4,
+      minItems: MIN_OPTIONS,
+      maxItems: MAX_OPTIONS,
       description: "Omit for a free-text question",
     }),
   ),
@@ -50,7 +54,7 @@ const Question = Type.Object({
 });
 
 const Params = Type.Object({
-  questions: Type.Array(Question, { minItems: 1, maxItems: 1 }),
+  questions: Type.Array(Question, { minItems: 1, maxItems: MAX_QUESTIONS }),
 });
 
 export type AskQuestion = Static<typeof Question>;
@@ -63,6 +67,8 @@ const DECLINED =
   "The user declined to answer. Do not guess their answers or act as if they chose; end your turn and wait for their next message.";
 const ERROR_CHARS = 200;
 
+const asked = (question: string) => sanitize(question).trim().toLowerCase();
+
 // Throws, naming the question, on what the schema cannot express and the dialog could not draw
 function validate(questions: readonly AskQuestion[]): void {
   questions.forEach((q, i) => {
@@ -72,6 +78,17 @@ function validate(questions: readonly AskQuestion[]): void {
         `ask_user: question ${n} has no question text; write the full question, ending in ?`,
       );
     const where = `question ${n} (${quoted(sanitize(q.question), 60)})`;
+    if (sanitize(q.header).trim() === "")
+      throw new Error(
+        `ask_user: ${where} has no visible header; give a short label of up to ${HEADER_WIDTH} columns`,
+      );
+    const same = questions.findIndex(
+      (other) => asked(other.question) === asked(q.question),
+    );
+    if (same < i)
+      throw new Error(
+        `ask_user: questions ${same + 1} and ${n} both ask ${quoted(sanitize(q.question), 60)}; each question must differ`,
+      );
     const seen = new Set<string>();
     for (const option of q.options ?? []) {
       const label = sanitize(option.label).trim();
@@ -92,7 +109,7 @@ function validate(questions: readonly AskQuestion[]): void {
     }
     if (q.multiSelect && !q.options)
       throw new Error(
-        `ask_user: ${where} is multiSelect but has no options; give 2-4 options or drop multiSelect`,
+        `ask_user: ${where} is multiSelect but has no options; give ${MIN_OPTIONS}-${MAX_OPTIONS} options or drop multiSelect`,
       );
     const recommended = (q.options ?? []).filter((o) => o.recommended).length;
     if (recommended > 1 && !q.multiSelect)
@@ -187,9 +204,11 @@ export function registerAskUser(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "ask_user",
     label: "Ask User",
-    description:
-      'Ask the user a question in place of the editor and wait for the answer. Give 2-4 options (one choice, or several with multiSelect), or none for a free-text answer. Use it only when blocked on a decision that is the user\'s to make and that you cannot settle from the request, the code or a sensible default. The dialog adds an "Other" free-text row itself; do not add one. Set recommended: true on the option you advise.',
+    description: `Ask the user 1-${MAX_QUESTIONS} questions in one dialog and wait for their answers. Each question has ${MIN_OPTIONS}-${MAX_OPTIONS} options (one choice or several) or none for a free-text answer. Use it only when blocked on a decision that is the user's to make and that you cannot settle from the request, the code or a sensible default. The dialog adds an "Other" free-text row itself; do not add one. Set recommended: true on the option you advise.`,
     promptSnippet: "Ask the user a structured question and wait for the answer",
+    promptGuidelines: [
+      `Put the open questions of one decision into a single ask_user call (up to ${MAX_QUESTIONS}) instead of asking one at a time.`,
+    ],
     parameters: Params,
     exposure: "model-only",
     prepareLoadout: () =>

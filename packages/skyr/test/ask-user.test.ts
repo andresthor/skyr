@@ -181,15 +181,14 @@ function registered(mode: "tui" | "print" = "tui"): AskTool {
   return tool;
 }
 
+const STORAGE = {
+  question: "Which storage should the cache use?",
+  header: "Storage",
+  options: [{ label: "SQLite" }, { label: "Postgres" }],
+};
+
 const ask = (question: Record<string, unknown> = {}) => ({
-  questions: [
-    {
-      question: "Which storage should the cache use?",
-      header: "Storage",
-      options: [{ label: "SQLite" }, { label: "Postgres" }],
-      ...question,
-    },
-  ],
+  questions: [{ ...STORAGE, ...question }],
 });
 
 function execute(
@@ -305,6 +304,18 @@ test("the model reads the user's answer: an option's label, their own words mark
           options: [{ label: "Auth" }, { label: "Billing" }],
         }),
       ],
+      [
+        fauxToolCall(
+          "ask_user",
+          {
+            questions: [
+              STORAGE,
+              { question: "What should it be called?", header: "Name" },
+            ],
+          },
+          { id: "two" },
+        ),
+      ],
     ),
   });
   const run = session.prompt("go");
@@ -312,6 +323,7 @@ test("the model reads the user's answer: an option's label, their own words mark
   press((await fake.nextOpen()).component, "my own name", ENTER);
   press((await fake.nextOpen()).component, ESC);
   press((await fake.nextOpen()).component, " ", DOWN, DOWN, "SSO", ENTER);
+  press((await fake.nextOpen()).component, ENTER, "skyr", ENTER, ENTER);
   await run;
 
   const byId = results(session);
@@ -325,6 +337,9 @@ test("the model reads the user's answer: an option's label, their own words mark
   expect(byId.get("decline")!.isError).toBe(false);
   expect(textOf(byId.get("multi")!)).toBe(
     "The user answered.\n1. Which features should ship? -> Auth; [own words] SSO",
+  );
+  expect(textOf(byId.get("two")!)).toBe(
+    "The user answered.\n1. Which storage should the cache use? -> SQLite\n2. What should it be called? -> [own words] skyr",
   );
 });
 
@@ -501,6 +516,22 @@ test.each([
     'ask_user: question 1 ("Which storage should the cache use?") has an option labelled "Other"; the dialog adds that row itself, so drop it',
   ],
   [
+    ask({ header: ` ${ZERO_WIDTH}` }),
+    'ask_user: question 1 ("Which storage should the cache use?") has no visible header; give a short label of up to 12 columns',
+  ],
+  [
+    {
+      questions: [
+        STORAGE,
+        {
+          ...STORAGE,
+          question: "which STORAGE should the cache use? ",
+        },
+      ],
+    },
+    'ask_user: questions 1 and 2 both ask "which STORAGE should the cache use? "; each question must differ',
+  ],
+  [
     ask({ multiSelect: true, options: undefined }),
     'ask_user: question 1 ("Which storage should the cache use?") is multiSelect but has no options; give 2-4 options or drop multiSelect',
   ],
@@ -570,4 +601,30 @@ test("escape sequences and bidi overrides in model text never reach a rendered l
     expect(line).not.toContain("\u001b]");
     expect(line).not.toContain(BIDI);
   }
+
+  // what the user pastes into Other is drawn again on the Submit tab
+  const two = execute(tool, fake.ui, {
+    questions: [
+      STORAGE,
+      { question: "What should it be called?", header: "Name" },
+    ],
+  });
+  const review = await fake.nextOpen();
+  press(
+    review.component,
+    DOWN,
+    DOWN,
+    `\x1b[200~${hostile}\x1b[201~`,
+    ENTER,
+    "skyr",
+    ENTER,
+  );
+  const submitTab = review.component.render(40);
+  expect(submitTab.join("\n")).toContain("evil");
+  for (const line of submitTab) {
+    expect(line).not.toContain("\u001b]");
+    expect(line).not.toContain(BIDI);
+  }
+  press(review.component, ENTER);
+  await two;
 });

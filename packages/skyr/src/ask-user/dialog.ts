@@ -82,9 +82,9 @@ class Page {
   readonly input: Input;
   readonly ticked = new Set<number>();
   cursor: number;
-  /** Single choice: the option marked with Enter, or "other" for the typed answer. */
+  /** Single choice: the option accepted last, or "other" for the typed answer. */
   picked: number | "other" | undefined;
-  /** Enter has accepted an answer here at least once. */
+  /** An answer has been accepted here at least once. */
   confirmed = false;
 
   constructor(question: AskQuestion, theme: Deps["theme"]) {
@@ -132,7 +132,10 @@ class Page {
     return !this.multi && this.options.length > 0;
   }
 
-  /** Takes what Enter is on as the answer; false when there is nothing to take. */
+  /**
+   * Takes the answer: the option under the cursor on a single choice, else what is ticked and
+   * typed; false when there is nothing to take.
+   */
   accept(): boolean {
     if (!this.single) {
       if (!this.ticks()) return false;
@@ -148,7 +151,7 @@ class Page {
     return true;
   }
 
-  /** The accepted answer as it stands now; undefined until Enter took one. */
+  /** The accepted answer as it stands now; undefined until one was accepted. */
   answer(): Answer | undefined {
     if (!this.confirmed) return undefined;
     if (!this.single) return this.ticks();
@@ -247,9 +250,12 @@ class AskDialog implements Component, Focusable {
       page.cursor = Math.min(page.options.length, page.cursor + 1);
     else if (keys.matches(data, "tui.select.confirm")) this.confirm(page);
     else if (page.onInput) page.input.handleInput(data);
-    // Space has no action id; on the Other row it is typing, so it ticks on option rows only
-    else if (page.multi && matchesKey(data, Key.space)) {
-      if (!page.ticked.delete(page.cursor)) page.ticked.add(page.cursor);
+    // Space has no action id; on the Other row it is typing, so it acts on option rows only.
+    // Between tabs a tick or a radio pick counts as an answer; Enter would also move on.
+    else if (matchesKey(data, Key.space)) {
+      if (page.multi && !page.ticked.delete(page.cursor))
+        page.ticked.add(page.cursor);
+      if (this.tabbed) page.accept();
     }
   }
 
@@ -378,8 +384,12 @@ class AskDialog implements Component, Focusable {
       : "";
     const page = this.page;
     if (page) {
-      const tick = page.multi ? "space tick · " : "";
-      return `${key("tui.select.up")}/${key("tui.select.down")} move · ${tick}${key("tui.select.confirm")} answer · ${tab}${cancel}`;
+      const space = page.multi
+        ? "space tick · "
+        : this.tabbed && page.options.length
+          ? "space pick · "
+          : "";
+      return `${key("tui.select.up")}/${key("tui.select.down")} move · ${space}${key("tui.select.confirm")} answer · ${tab}${cancel}`;
     }
     const missing = this.firstUnanswered();
     return missing === undefined

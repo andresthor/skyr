@@ -196,7 +196,33 @@ test("several questions: Tab and Shift+Tab move through them and Submit, Enter a
   ]);
 });
 
-test("across tabs a single choice keeps one answer: the last one taken with Enter", () => {
+test("Space marks a tabbed single choice without moving on, and does nothing on a lone question", () => {
+  const tabbed = dialog([scope, storage]);
+  expect(tabbed.text(80).join("\n")).toContain("space pick · ");
+  tabbed.press(DOWN, SPACE);
+  expect(tabbed.text()).toContain(" > (•) B");
+  expect(tabbed.text().join("\n")).toContain(scope.question);
+  tabbed.press(TAB);
+  expect(tabbed.text()[1]).toContain("✓ Scope");
+
+  // a lone question draws no radio mark, so Space accepts nothing and the Other draft stays
+  const lone = dialog([storage]);
+  lone.press(DOWN, DOWN, ..."draft", UP, SPACE);
+  expect(lone.done).not.toHaveBeenCalled();
+  expect(lone.text().join("\n")).toContain("Other  draft");
+});
+
+test("between tabs a Space tick is an answer, so Submit sends it without Enter", () => {
+  const d = dialog([features, storage]);
+  d.press(SPACE, TAB, ENTER);
+  expect(d.text().join("\n")).toContain(" Features  Billing");
+  d.press(ENTER);
+  expect(d.done.mock.calls).toEqual([
+    [[{ labels: ["Billing"] }, { labels: ["SQLite"] }]],
+  ]);
+});
+
+test("across tabs a single choice keeps one answer: the last one taken", () => {
   const otherLast = dialog([scope, storage]);
   otherLast.press(ENTER, BACKTAB, DOWN, DOWN, ..."mine", ENTER, ENTER, ENTER);
   expect(otherLast.done.mock.calls[0]?.[0]?.[0]).toEqual({

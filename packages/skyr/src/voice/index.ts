@@ -69,9 +69,8 @@ async function readVoiceConfig(): Promise<{
   problems: string[];
 }> {
   const { getAgentDir } = await loadPi();
-  const { data, problems } = readSkyrFile(getAgentDir());
-  const { config, problems: section } = parseVoiceSection(data.voice);
-  return { config, problems: [...problems, ...section] };
+  // The file's own problems are reported once by `reportSkyrFile`; these are the section's.
+  return parseVoiceSection(readSkyrFile(getAgentDir()).data.voice);
 }
 
 /**

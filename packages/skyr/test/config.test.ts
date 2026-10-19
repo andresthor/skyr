@@ -1,13 +1,14 @@
 /**
  * The `skyr.json` file reader: a broken user file never throws, names what it couldn't read,
- * and leaves Pi's startup alive with defaults. This file owns location and JSON structure
- * only; each module validates its own section (the voice one: voice-config.test.ts).
+ * leaves Pi's startup alive with defaults, and is reported once per session whatever reads it.
+ * Each module validates and reports its own section (the voice one: voice-config.test.ts).
  */
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { describe, expect, onTestFinished, test } from "vitest";
 import { readSkyrFile } from "../src/config.js";
-import { scratchDir } from "./session.js";
+import { parentSession, scratchDir } from "./session.js";
 
 function agentDir(file?: string): string {
   const dir = scratchDir("agent");
@@ -71,5 +72,46 @@ describe("readSkyrFile", () => {
       "skyr.json: can't read (EACCES); using defaults",
     ]);
     chmodSync(join(dir, "skyr.json"), 0o644);
+  });
+});
+
+describe("reporting", () => {
+  const answer = () => fauxAssistantMessage("done");
+
+  test("a broken skyr.json is reported at session start, with voice off for want of credentials", async () => {
+    const parent = await parentSession({ respond: answer, skyr: '{"voice":' });
+    expect(parent.notices).toHaveLength(1);
+    expect(parent.notices[0]).toMatch(
+      /^skyr\.json: not valid JSON \(.*\); using defaults$/,
+    );
+  });
+
+  test("with voice on, the file's problems and the voice section's are each reported once", async () => {
+    // Voice reads its section only with credentials.
+    const creds = {
+      CORTI_ENVIRONMENT: "eu",
+      CORTI_TENANT_NAME: "tenant",
+      CORTI_CLIENT_ID: "client",
+      CORTI_CLIENT_SECRET: "secret",
+    };
+    const previous = Object.keys(creds).map(
+      (k) => [k, process.env[k]] as const,
+    );
+    Object.assign(process.env, creds);
+    onTestFinished(() => {
+      for (const [key, value] of previous)
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+    });
+    const parent = await parentSession({
+      respond: answer,
+      skyr: { voicee: {}, voice: { frobnicate: true } },
+    });
+    expect([...parent.notices].sort()).toEqual([
+      'skyr.json: "voicee" is not a section; ignored (sections: voice)',
+      expect.stringMatching(
+        /^skyr\.json: voice\.frobnicate is not a setting; ignored/,
+      ),
+    ]);
   });
 });

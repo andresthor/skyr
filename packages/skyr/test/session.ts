@@ -55,6 +55,8 @@ export async function parentSession(o: {
   mode?: ExtensionContext["mode"];
   /** UI methods spread over the recording `setWidget` and `notify`. */
   ui?: Partial<ExtensionUIContext>;
+  /** Written to `<agentDir>/skyr.json` as JSON; a string is written as it is. */
+  skyr?: unknown;
 }): Promise<Parent> {
   const cwd = tmp("cwd");
   if (o.git) {
@@ -90,6 +92,11 @@ export async function parentSession(o: {
     }),
   );
 
+  if (o.skyr !== undefined)
+    writeFileSync(
+      join(agentDir, "skyr.json"),
+      typeof o.skyr === "string" ? o.skyr : JSON.stringify(o.skyr),
+    );
   writeAll(join(agentDir, "agents"), o.userAgents);
   writeAll(join(cwd, CONFIG_DIR_NAME, "agents"), o.repoAgents);
 

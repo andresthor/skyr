@@ -730,6 +730,40 @@ test("a persisted answered result draws its rows from details alone, as after a 
   expect(column(rows[0]!, "SQLite")).toBe(column(rows[1]!, "[own words]"));
 });
 
+test("a question left unanswered reaches the model as not answered, with a line against guessing it, and its row says so after a resume", async () => {
+  const fake = dialogs();
+  const call = execute(registered(), fake.ui, {
+    questions: [
+      STORAGE,
+      { question: "What should it be called?", header: "Name" },
+    ],
+  });
+  press((await fake.nextOpen()).component, "\t", "skyr", ENTER, ENTER);
+  const result = await call;
+
+  expect(result.content).toEqual([
+    {
+      type: "text",
+      text: "The user answered.\n1. Which storage should the cache use? -> (not answered)\n2. What should it be called? -> [own words] skyr\nThe user left every question marked (not answered) open. Do not assume answers for them or ask them again; go on with what was answered and say in your reply what stays open.",
+    },
+  ]);
+  expect(result.details).toEqual({
+    outcome: "answered",
+    answers: [
+      { header: "Storage", answer: "" },
+      { header: "Name", answer: "[own words] skyr" },
+    ],
+  });
+  const rows = resultRows(registered(), {
+    content: [],
+    details: result.details,
+  }).map((r) => stripTerminalSequences(r));
+  expect(rows).toEqual([
+    "Storage  not answered · 1.2s",
+    "Name     [own words] skyr",
+  ]);
+});
+
 test("a thrown call draws the red error row with its first line", () => {
   const rows = resultRows(
     registered(),

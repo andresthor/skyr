@@ -162,7 +162,7 @@ const naming: AskQuestion = {
   header: "Name",
 };
 
-test("several questions: Tab and Shift+Tab move through them and Submit, Enter advances to the next unanswered one, answers survive a round trip, and Submit with one unanswered jumps to it", () => {
+test("several questions: Tab and Shift+Tab move through them and Submit, Enter advances to the next unanswered one, and answers survive a round trip", () => {
   const d = dialog([scope, storage, naming]);
   const screen = () => d.text().join("\n");
   expect(d.text()[1]).toBe("  Scope   Storage   Name   Submit ");
@@ -172,10 +172,7 @@ test("several questions: Tab and Shift+Tab move through them and Submit, Enter a
   d.press(TAB, TAB);
   expect(screen()).toContain(" Scope    A");
   expect(screen()).toContain(" Storage  not answered");
-  expect(screen()).toContain("enter go to Storage · escape cancel");
-  d.press(ENTER);
-  expect(screen()).toContain(storage.question);
-  d.press(BACKTAB);
+  d.press(BACKTAB, BACKTAB, BACKTAB);
   expect(d.text()).toContain(" > (•) A");
   d.press(TAB, DOWN, ENTER);
   expect(screen()).toContain(naming.question);
@@ -194,6 +191,50 @@ test("several questions: Tab and Shift+Tab move through them and Submit, Enter a
       ],
     ],
   ]);
+});
+
+test("Enter never goes back to a question the user tabbed past, and Submit sends it as unanswered", () => {
+  const d = dialog([scope, storage, naming]);
+  const screen = () => d.text().join("\n");
+  d.press(TAB, ENTER);
+  expect(screen()).toContain(naming.question);
+  d.press(..."skyr", ENTER);
+  expect(screen()).toContain(" Scope    not answered");
+  expect(screen()).toContain("enter submit anyway · ");
+  d.press(ENTER);
+  expect(d.done.mock.calls).toEqual([
+    [[undefined, { labels: ["SQLite"] }, { labels: [], other: "skyr" }]],
+  ]);
+});
+
+test("unticking every box leaves a question unanswered, so Submit declines", () => {
+  const d = dialog([features, storage]);
+  d.press(SPACE, SPACE, BACKTAB);
+  expect(d.text()[1]).not.toContain("✓");
+  expect(hintAt(d, 80)).toContain("enter decline · ");
+  d.press(ENTER);
+  expect(d.done.mock.calls).toEqual([[undefined]]);
+});
+
+test("the Submit tab's hint wraps whole too, partly answered or not at all", () => {
+  const none = dialog([scope, storage]);
+  none.press(BACKTAB);
+  const partly = dialog([scope, storage]);
+  partly.press(ENTER, TAB);
+  for (const d of [none, partly]) {
+    const whole = hintAt(d, 200);
+    expect(whole).toMatch(/enter (decline|submit anyway) · /);
+    for (let width = 14; width <= 90; width++)
+      expect(hintAt(d, width)).toBe(whole);
+  }
+});
+
+test("Submit with nothing answered declines, and its hint says so", () => {
+  const d = dialog([scope, storage]);
+  d.press(BACKTAB);
+  expect(d.text().join("\n")).toContain("enter decline · ");
+  d.press(ENTER);
+  expect(d.done.mock.calls).toEqual([[undefined]]);
 });
 
 test("Space marks a tabbed single choice without moving on, and does nothing on a lone question", () => {

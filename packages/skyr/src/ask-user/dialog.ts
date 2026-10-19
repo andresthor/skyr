@@ -1,7 +1,8 @@
 /**
  * The ask_user dialog, drawn in place of the input editor. It owns the keyboard until the user
  * answers or declines, and knows nothing of Pi's runtime: questions in, answers out through `done`.
- * One question finishes on Enter; two to four get a tab each and a Submit tab to review them.
+ * One question finishes on Enter; two to four get a tab each and a Submit tab to review them,
+ * which submits whatever is answered, or declines when nothing is.
  */
 import type {
   KeybindingsManager,
@@ -29,8 +30,11 @@ export interface Answer {
 interface Deps {
   theme: Pick<Theme, "fg" | "bg" | "bold">;
   keys: Pick<KeybindingsManager, "matches" | "getKeys">;
-  /** `undefined` = declined with Esc; an `Error` = the dialog threw and closed. */
-  done(result: Answer[] | undefined | Error): void;
+  /**
+   * `undefined` = declined with Esc or submitted with nothing answered; an `undefined` entry = a
+   * question left unanswered; an `Error` = the dialog threw and closed.
+   */
+  done(result: (Answer | undefined)[] | undefined | Error): void;
 }
 
 const PLACEHOLDER = "type an answer";
@@ -210,24 +214,14 @@ class AskDialog implements Component, Focusable {
     for (const page of this.pages) page.input.invalidate();
   }
 
-  private finish(result: Answer[] | undefined | Error): void {
+  private finish(result: (Answer | undefined)[] | undefined | Error): void {
     if (this.finished) return;
     this.finished = true;
     this.deps.done(result);
   }
 
-  private answers(): Answer[] | undefined {
-    const answers = this.pages.map((p) => p.answer());
-    return answers.every((a) => a !== undefined) ? answers : undefined;
-  }
-
-  private firstUnanswered(after = -1): number | undefined {
-    const n = this.pages.length;
-    for (let step = 1; step <= n; step++) {
-      const i = (after + step + n) % n;
-      if (!this.pages[i]?.answer()) return i;
-    }
-    return undefined;
+  private answers(): (Answer | undefined)[] {
+    return this.pages.map((p) => p.answer());
   }
 
   private key(data: string): void {
@@ -262,17 +256,17 @@ class AskDialog implements Component, Focusable {
   private confirm(page: Page): void {
     if (!page.accept()) return;
     if (!this.tabbed) {
-      const answers = this.answers();
-      if (answers) this.finish(answers);
+      this.finish(this.answers());
       return;
     }
-    this.tab = this.firstUnanswered(this.tab) ?? this.pages.length;
+    // Forward only: a question the user tabbed past is theirs to leave unanswered
+    const next = this.pages.findIndex((p, i) => i > this.tab && !p.answer());
+    this.tab = next === -1 ? this.pages.length : next;
   }
 
   private submit(): void {
     const answers = this.answers();
-    if (answers) this.finish(answers);
-    else this.tab = this.firstUnanswered() ?? this.tab;
+    this.finish(answers.some((a) => a) ? answers : undefined);
   }
 
   private draw(width: number): string[] {
@@ -294,7 +288,6 @@ class AskDialog implements Component, Focusable {
     const { theme } = this.deps;
     const active = (label: string) =>
       theme.bg("selectedBg", theme.bold(theme.fg("text", ` ${label} `)));
-    const complete = this.answers() !== undefined;
     const chips = this.pages.map((p, i) => {
       if (i === this.tab) return active(p.header);
       return p.answer()
@@ -304,7 +297,7 @@ class AskDialog implements Component, Focusable {
     const submit =
       this.tab === this.pages.length
         ? active("Submit")
-        : ` ${theme.fg(complete ? "text" : "dim", "Submit")} `;
+        : ` ${theme.fg("text", "Submit")} `;
     const row = ` ${[...chips, submit].join(" ")}`;
     if (visibleWidth(row) <= width) return row;
     const page = this.page;
@@ -391,9 +384,12 @@ class AskDialog implements Component, Focusable {
           : "";
       return `${key("tui.select.up")}/${key("tui.select.down")} move · ${space}${key("tui.select.confirm")} answer · ${tab}${cancel}`;
     }
-    const missing = this.firstUnanswered();
-    return missing === undefined
-      ? `${key("tui.select.confirm")} submit · ${tab}${cancel}`
-      : `${key("tui.select.confirm")} go to ${this.pages[missing]?.header} · ${cancel}`;
+    const answers = this.answers();
+    const submit = answers.every((a) => a)
+      ? "submit"
+      : answers.some((a) => a)
+        ? "submit anyway"
+        : "decline";
+    return `${key("tui.select.confirm")} ${submit} · ${tab}${cancel}`;
   }
 }

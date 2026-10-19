@@ -75,6 +75,8 @@ const ABORTED =
   "ask_user: aborted before the user answered; ask again if you still need the answer";
 const DECLINED =
   "The user declined to answer. Do not guess their answers or act as if they chose; end your turn and wait for their next message.";
+const UNANSWERED =
+  "The user left every question marked (not answered) open. Do not assume answers for them or ask them again; go on with what was answered and say in your reply what stays open.";
 const ERROR_CHARS = 200;
 /** How much of each answer a result keeps for its transcript row. */
 const ANSWER_CHARS = 200;
@@ -139,15 +141,20 @@ function validate(questions: readonly AskQuestion[]): void {
 
 function answerText(
   questions: readonly AskQuestion[],
-  answers: readonly Answer[],
+  answers: readonly (Answer | undefined)[],
 ): string {
   const lines = answers.map(
-    (a, i) => `${i + 1}. ${questions[i]?.question} -> ${answerLine(a)}`,
+    (a, i) =>
+      `${i + 1}. ${questions[i]?.question} -> ${a ? answerLine(a) : "(not answered)"}`,
   );
+  if (answers.some((a) => !a)) lines.push(UNANSWERED);
   return ["The user answered.", ...lines].join("\n");
 }
 
-/** What a result keeps for its transcript row, which Pi redraws from it on a resume. */
+/**
+ * What a result keeps for its transcript row, which Pi redraws from it on a resume. An empty
+ * `answer` is a question left unanswered: a given answer is never empty.
+ */
 type AskDetails =
   | { outcome: "answered"; answers: { header: string; answer: string }[] }
   | { outcome: "declined" };
@@ -215,13 +222,13 @@ async function show(
   ui: ExtensionContext["ui"],
   questions: readonly AskQuestion[],
   signal: AbortSignal | undefined,
-): Promise<Answer[] | undefined | Error> {
+): Promise<(Answer | undefined)[] | undefined | Error> {
   // Pi restores the editor with setText(getText()), which drops the paste store a [paste #…]
   // marker points into; written out in full first, the draft survives that restore
   ui.setEditorText(ui.getEditorText());
   let onAbort: (() => void) | undefined;
   try {
-    return await ui.custom<Answer[] | undefined | Error>(
+    return await ui.custom<(Answer | undefined)[] | undefined | Error>(
       (tui, theme, keys, done) => {
         onAbort = () => done(undefined);
         signal?.addEventListener("abort", onAbort, { once: true });
@@ -287,7 +294,7 @@ export function registerAskUser(pi: ExtensionAPI): void {
             outcome: "answered",
             answers: result.map((a, i) => ({
               header: params.questions[i]?.header ?? "",
-              answer: clip(answerLine(a), ANSWER_CHARS),
+              answer: a ? clip(answerLine(a), ANSWER_CHARS) : "",
             })),
           },
         };
@@ -328,7 +335,9 @@ export function registerAskUser(pi: ExtensionAPI): void {
         box.addChild(
           new TruncatedText(
             theme.fg("muted", headers[i] ?? "") +
-              theme.fg("text", sanitize(a.answer)) +
+              (a.answer
+                ? theme.fg("text", sanitize(a.answer))
+                : theme.fg("warning", "not answered")) +
               (i === 0 ? suffix : ""),
           ),
         );

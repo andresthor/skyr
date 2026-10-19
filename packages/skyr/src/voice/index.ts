@@ -91,8 +91,8 @@ type EditorFactory = Parameters<ExtensionUIContext["setEditorComponent"]>[0];
 
 /**
  * Reads the STT credentials once, here: without them only `/voice` exists, to say so; with them
- * `/voice`, ctrl+space and the session_start and session_shutdown handlers. Registering starts
- * nothing: the display starts with a TUI session, the mic with a dictation.
+ * `/voice`, ctrl+space and the session_start, session_shutdown and ui_prompt_start handlers.
+ * Registering starts nothing: the display starts with a TUI session, the mic with a dictation.
  */
 export function registerVoice(pi: ExtensionAPI): void {
   wireVoice(pi);
@@ -278,4 +278,8 @@ export function wireVoice(pi: ExtensionAPI, deps: VoiceDeps = {}): void {
     controller.dispose();
     display.stop();
   });
+
+  // A dialog hides the editor; a running dictation would keep listening and land its words in the
+  // draft when the dialog closes
+  pi.on("ui_prompt_start", () => controller.finish());
 }

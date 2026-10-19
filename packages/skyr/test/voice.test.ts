@@ -445,6 +445,25 @@ describe("keys through the voice editor, with Pi's real bindings", () => {
   });
 });
 
+test("an extension dialog taking the keyboard stops a running dictation as Enter does, and words still in flight land once the editor is back", async () => {
+  const h = await mounted();
+  await h.toggle();
+  h.starts[0]!.onReady?.();
+  h.starts[0]!.onFinal("hello");
+  // the dialog hides the editor, then Pi announces it
+  h.ed.focused = false;
+  await h.pi.handlers.get("ui_prompt_start")!(
+    { type: "ui_prompt_start", reason: "ui_prompt", kind: "confirm" },
+    h.ctx,
+  );
+  h.starts[0]!.onFinal("there");
+  await vi.advanceTimersByTimeAsync(TAIL_MS);
+  expect(h.ends[0]).toEqual({ stopped: 1, cancelled: 0 });
+  expect(h.ed.getText()).toBe("hello");
+  h.ed.focused = true;
+  expect(h.ed.getText()).toBe("hello there");
+});
+
 test("session_shutdown, even twice, cancels the dictation once, clears the footer and leaves no timer", async () => {
   const h = await mounted();
   await h.toggle();

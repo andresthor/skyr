@@ -36,7 +36,9 @@ puts the editor back the way it was, Enter stops without sending (the next Enter
 is never auto-sent. Quiet only asks the server for the pending final early — it never ends a
 dictation. Without `CORTI_*` credentials, `/voice` says so in one line and does nothing else.
 `/voice on` starts a dictation and leaves a running one alone; `/voice off` discards it like
-Esc. Any other argument is refused with the valid forms.
+Esc. Any other argument is refused with the valid forms. A dialog from any extension that takes
+the keyboard stops a running dictation as Enter does: the mic closes, and words already spoken
+land in the editor once it is back.
 
 While voice is on, the editor's bottom rule shows it: a level meter that rises only for speech,
 `●` while the mic records (`○` before the first audio and after it closes), the state

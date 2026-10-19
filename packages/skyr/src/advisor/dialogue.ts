@@ -19,11 +19,35 @@ type ToolResult = Extract<AgentMessage, { role: "toolResult" }>;
 type AdviceTurn = Extract<Context["messages"][number], { role: "assistant" }>;
 /** Transcript text, or an image where it occurs. */
 type Piece = string | Image;
+/** One user-side message, or an assistant message with the results after it; never split. */
+interface Turn {
+  entries: Piece[][];
+  kind: "user" | "assistant" | "other";
+  tokens: number;
+}
+type Estimate = (message: AgentMessage) => number;
+
+/** What a session too long for the advisor's window would need, in estimated tokens. */
+export interface TooLarge {
+  needed: number;
+  available: number;
+}
 
 const MAX_ADVICE_TOKENS = 16_384;
 const MAX_BLOCK_CHARS = 50_000;
 const ERROR_CHARS = 200;
 const MAX_IMAGES_PER_PART = 4;
+// pi-ai's DEFAULT_THINKING_BUDGETS.high, which budget-thinking providers add on top of maxTokens.
+const THINKING_RESERVE = 16_384;
+const MARGIN = 4_096;
+const UNKNOWN_WINDOW = 128_000;
+// Pi's estimate counts four characters a token; dense code runs denser.
+const SLACK = 1.25;
+// Parts are dropped in steps of this many: the boundary moves, costing one full cache miss, at
+// most once every DROP_STEP calls, and at most DROP_STEP - 1 parts more than needed are dropped.
+const DROP_STEP = 4;
+const DROPPED =
+  "[Earlier parts of the session, and your replies to them, were dropped to fit your context window.]\n\n";
 
 const PART_INSTRUCTION = `A call with no result after it in this part had not finished when you were consulted; its result, if any, opens the next part, except an advisor call's, which is your reply.
 
@@ -68,50 +92,189 @@ export function adviceTokens(model: Model): number {
  * assistant message whose advisor call is running. Each answered advisor call closes a part,
  * and its advice follows as the advisor's own turn, so call N's messages start with call
  * N-1's and a provider's prompt cache can reuse them.
+ *
+ * A part over a third of the advisor's window keeps its first and last user message, the
+ * message that called the advisor and its newest turns; that cut depends only on the part and
+ * the model, so a closed part stays the same. If the whole still does not fit, parts after the
+ * first go, oldest first and with their advice, in steps of `DROP_STEP`: between steps every
+ * request starts with the previous one, and only a step costs a full cache miss (until a whole
+ * step can go, the fewest are dropped, and each further drop moves the boundary). Returns
+ * `TooLarge` when even that does not fit (an unknown window counts as `UNKNOWN_WINDOW`).
  */
 export function advisorContext(
   branch: AgentMessage[],
   agentPrompt: string,
   model: Model,
-  pi: Pick<Pi, "convertToLlm">,
-): Context {
+  pi: Pick<Pi, "convertToLlm" | "estimateTokens">,
+): Context | TooLarge {
+  const estimate: Estimate = (m) => Math.ceil(SLACK * pi.estimateTokens(m));
+  const reserve = Math.min(
+    adviceTokens(model) + THINKING_RESERVE,
+    model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+  );
+  const window = model.contextWindow > 0 ? model.contextWindow : UNKNOWN_WINDOW;
+  const usable = window - reserve - MARGIN;
+  const partBudget = Math.floor(usable / 3);
+
   const answered = new Map<string, ToolResult>();
   for (const m of branch)
     if (m.role === "toolResult" && m.toolName === "advisor" && !m.isError)
       answered.set(m.toolCallId, m);
-  const messages: Context["messages"] = [];
-  let part: AgentMessage[] = [];
+  const parts: AgentMessage[][] = [[]];
+  const advice: AdviceTurn[] = [];
   for (const message of branch) {
     if (message.role === "toolResult" && answered.has(message.toolCallId))
       continue;
-    part.push(message);
+    parts.at(-1)?.push(message);
     if (message.role !== "assistant") continue;
-    const advice = message.content.flatMap((c) => {
+    const results = message.content.flatMap((c) => {
       const result = c.type === "toolCall" ? answered.get(c.id) : undefined;
       return result ? [result] : [];
     });
-    if (advice.length === 0) continue;
-    messages.push(partMessage(part, pi), adviceTurn(advice, model));
-    part = [];
+    if (results.length === 0) continue;
+    advice.push(adviceTurn(results, model));
+    parts.push([]);
   }
-  messages.push(partMessage(part, pi));
-  return { systemPrompt: advisorPrompt(agentPrompt), messages };
+
+  const rendered = parts.map((part) => {
+    const cut = cutPart(part, partBudget, estimate, pi);
+    // As sent: the transcript tags and the instruction count once per part.
+    const tokens = estimate({
+      role: "user",
+      content: partContent("", cut.entries),
+      timestamp: 0,
+    });
+    return { ...cut, tokens };
+  });
+  const adviceSizes = advice.map((turn) =>
+    estimate({
+      role: "user",
+      content: turn.content.flatMap((c) => (c.type === "text" ? [c] : [])),
+      timestamp: 0,
+    }),
+  );
+  const systemPrompt = advisorPrompt(agentPrompt);
+  const full =
+    estimate({ role: "system", content: systemPrompt, timestamp: 0 }) +
+    rendered.reduce((sum, part) => sum + part.tokens, 0) +
+    adviceSizes.reduce((sum, tokens) => sum + tokens, 0);
+  // Parts 2 … N-1 can go: the first and the one that called the advisor always stay.
+  const droppable = rendered.length - 2;
+  const lead = estimate({ role: "user", content: DROPPED, timestamp: 0 });
+  const after = (n: number) =>
+    full +
+    (n > 0 ? lead : 0) -
+    rendered
+      .slice(1, n + 1)
+      .reduce(
+        (sum, part, i) => sum + part.tokens + (adviceSizes[i + 1] ?? 0),
+        0,
+      );
+  let fewest = 0;
+  while (fewest < droppable && after(fewest) > usable) fewest += 1;
+  const total = after(fewest);
+  if (total > usable) return { needed: total, available: usable };
+  const step = Math.ceil(fewest / DROP_STEP) * DROP_STEP;
+  const dropped = step <= droppable ? step : fewest;
+
+  const messages: Context["messages"] = [];
+  for (const [i, part] of rendered.entries()) {
+    if (i > 0 && i <= dropped) continue;
+    messages.push({
+      role: "user",
+      content: partContent(
+        dropped > 0 && i === dropped + 1 ? DROPPED : "",
+        part.entries,
+      ),
+      timestamp: part.timestamp,
+    });
+    const turn = advice[i];
+    if (turn) messages.push(turn);
+  }
+  return { systemPrompt, messages };
 }
 
-function partMessage(
+/**
+ * A part's entries, cut to `budget` when over it: the first and last user turns and the last
+ * turn (the call to the advisor) always stay, then the longest run of newest turns that fits;
+ * each run of cut turns becomes one marker. The anchors stay whole even alone over budget, and
+ * the total cap decides then.
+ */
+function cutPart(
   part: AgentMessage[],
+  budget: number,
+  estimate: Estimate,
   pi: Pick<Pi, "convertToLlm">,
-): Context["messages"][number] {
+): { entries: Piece[][]; timestamp: number } {
   const latest = part.map((m) => m.role).lastIndexOf("assistant");
-  const entries: Piece[][] = [];
+  const turns: Turn[] = [];
   let timestamp = 0;
   for (const [i, message] of part.entries()) {
-    const rendered = entriesOf(message, i === latest, pi);
-    if (rendered.length === 0) continue;
-    entries.push(...rendered);
+    const entries = entriesOf(message, i === latest, pi);
+    if (entries.length === 0) continue;
     timestamp = message.timestamp;
+    const open = turns.at(-1);
+    if (message.role === "toolResult" && open?.kind === "assistant")
+      open.entries.push(...entries);
+    else
+      turns.push({
+        entries,
+        kind:
+          message.role === "user"
+            ? "user"
+            : message.role === "assistant"
+              ? "assistant"
+              : "other",
+        tokens: 0,
+      });
   }
-  return { role: "user", content: partContent(entries), timestamp };
+  for (const turn of turns)
+    turn.tokens = estimate({
+      role: "user",
+      content: turn.entries
+        .flat()
+        .map((p) => (typeof p === "string" ? { type: "text", text: p } : p)),
+      timestamp: 0,
+    });
+
+  const sum = (kept: Turn[]) => kept.reduce((n, t) => n + t.tokens, 0);
+  if (sum(turns) <= budget)
+    return {
+      entries: turns.flatMap((t) => t.entries),
+      timestamp,
+    };
+
+  const users = turns.flatMap((t, i) => (t.kind === "user" ? [i] : []));
+  const anchors = new Set([users[0], users.at(-1), turns.length - 1]);
+  let room = budget - sum(turns.filter((_, i) => anchors.has(i)));
+  let start = turns.length;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (!turn) break;
+    if (!anchors.has(i)) {
+      if (turn.tokens > room) break;
+      room -= turn.tokens;
+    }
+    start = i;
+  }
+  const entries: Piece[][] = [];
+  let cut = 0;
+  const marker = () => {
+    if (cut > 0)
+      entries.push([
+        `[${cut} ${cut === 1 ? "turn" : "turns"} cut here to fit the advisor's context window]`,
+      ]);
+    cut = 0;
+  };
+  for (const [i, turn] of turns.entries()) {
+    if (i < start && !anchors.has(i)) {
+      cut += 1;
+      continue;
+    }
+    marker();
+    entries.push(...turn.entries);
+  }
+  return { entries, timestamp };
 }
 
 /** The persisted advice of one message's advisor calls, in call order, as one advisor turn. */
@@ -152,9 +315,12 @@ function entriesOf(
     case "system":
       return [];
     case "assistant": {
-      const text = message.content
-        .flatMap((c) => (c.type === "text" && c.text.trim() ? [c.text] : []))
-        .join("\n\n");
+      const text = clipMiddle(
+        message.content
+          .flatMap((c) => (c.type === "text" && c.text.trim() ? [c.text] : []))
+          .join("\n\n"),
+        "message",
+      );
       const lines = [
         ...(text ? [text] : []),
         ...message.content.flatMap((c) => {
@@ -180,7 +346,11 @@ function entriesOf(
         : [];
       return [
         ...(thinking.length > 0
-          ? [[`agent reasoning:\n${thinking.join("\n\n")}`]]
+          ? [
+              [
+                `agent reasoning:\n${clipMiddle(thinking.join("\n\n"), "reasoning")}`,
+              ],
+            ]
           : []),
         [`agent:\n${lines.join("\n")}`],
       ];
@@ -236,7 +406,10 @@ function pieces(content: string | UserContent): Piece[] {
  * A long text's head and tail around a line saying how much of the `what` was cut; the cut
  * never splits a surrogate pair.
  */
-function clipMiddle(text: string, what: "arguments" | "result"): string {
+function clipMiddle(
+  text: string,
+  what: "message" | "arguments" | "reasoning" | "result",
+): string {
   if (text.length <= MAX_BLOCK_CHARS) return text;
   const lowSurrogate = (at: number) => /[\uDC00-\uDFFF]/.test(text[at] ?? "");
   let head = MAX_BLOCK_CHARS / 2;
@@ -248,12 +421,12 @@ function clipMiddle(text: string, what: "arguments" | "result"): string {
 }
 
 /**
- * A part's user content: the entries inside `<transcript>`, then the instruction. Text runs
- * into one block until an image; only the part's last `MAX_IMAGES_PER_PART` images are sent.
+ * A part's user content: `lead`, the entries inside `<transcript>`, then the instruction. Text
+ * runs into one block until an image; only the part's last `MAX_IMAGES_PER_PART` images are sent.
  */
-function partContent(entries: Piece[][]): UserContent {
+function partContent(lead: string, entries: Piece[][]): UserContent {
   const flat: Piece[] = [
-    "<transcript>\n",
+    `${lead}<transcript>\n`,
     ...entries.flatMap((entry, i) => (i === 0 ? entry : ["\n\n", ...entry])),
     `\n</transcript>\n\n${PART_INSTRUCTION}`,
   ];

@@ -101,10 +101,16 @@ export async function parentSession(o: {
   writeAll(join(agentDir, "agents"), o.userAgents);
   writeAll(join(cwd, CONFIG_DIR_NAME, "agents"), o.repoAgents);
 
-  // A second model, for an agent file that names one and for the advisor; its output cap is
-  // below the advisor's own, so a test can tell which one a request used.
+  // Further models: for an agent file that names one, and for the advisor. faux-2's output cap
+  // is below the advisor's own, so a test can tell which one a request used; faux-3 and faux-4
+  // have windows small enough to cut a session for.
   const faux = fauxProvider({
-    models: [{ id: "faux-1" }, { id: "faux-2", maxTokens: 8_000 }],
+    models: [
+      { id: "faux-1" },
+      { id: "faux-2", maxTokens: 8_000 },
+      { id: "faux-3", contextWindow: 60_000 },
+      { id: "faux-4", contextWindow: 21_000 },
+    ],
   });
   const requests: TranscriptContext[] = [];
   faux.setResponses(
@@ -254,8 +260,9 @@ export function router(
 }
 
 /**
- * Sends requests to `faux-2`, the advisor model in tests, to `advice` and records each one;
- * everything else goes to `parent`. By model, since the advisor's transcript also opens on "go".
+ * Sends requests to any model but the session's own `faux-1` (the advisor's, in tests) to
+ * `advice` and records each one; the rest go to `parent`. By model, since the advisor's
+ * transcript also opens on "go".
  */
 export function advisorRouter(
   parent: FauxResponseFactory,
@@ -272,7 +279,7 @@ export function advisorRouter(
     options: SimpleStreamOptions | undefined;
   }[] = [];
   const respond: FauxResponseFactory = (context, options, state, model) => {
-    if (model.id !== "faux-2") return parent(context, options, state, model);
+    if (model.id === "faux-1") return parent(context, options, state, model);
     calls.push({ context, options });
     return advice(context, options, state, model);
   };

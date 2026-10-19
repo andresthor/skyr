@@ -176,6 +176,10 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         model,
         await loadPi(),
       );
+      if ("needed" in context)
+        throw new Error(
+          `advisor: the session does not fit ${spec}'s context window even after cutting (about ${context.needed} tokens, ${context.available} available); continue without the review`,
+        );
       const reply = await ctx.modelRegistry
         .streamSimple(model, context, {
           reasoning: "high",

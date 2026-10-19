@@ -188,6 +188,13 @@ call is uncached, so where the provider caches prompts, a call within a few minu
 previous one reads the earlier part from the cache and costs a fraction of the first. Its tokens
 and cost count toward the session totals in the footer and `/session`.
 
+A session too long for the advisor's context window is cut: each part keeps its first and last
+user message, the call to the advisor and its most recent turns; then whole parts go, oldest
+first, though the first part always stays; and every cut is marked so the advisor knows what it
+cannot see. Parts go a few at a time, so the calls between two cuts still read the earlier parts
+from the cache; until the session is long enough for that, each call that has to drop one more
+part misses the cache.
+
 ## Embedding it
 
 A host that builds its own Pi distribution can call `registerSkyr(pi)` instead of

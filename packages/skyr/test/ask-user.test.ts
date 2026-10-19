@@ -298,12 +298,20 @@ test("the model reads the user's answer: an option's label, their own words mark
         }),
       ],
       [askCall("decline")],
+      [
+        askCall("multi", {
+          question: "Which features should ship?",
+          multiSelect: true,
+          options: [{ label: "Auth" }, { label: "Billing" }],
+        }),
+      ],
     ),
   });
   const run = session.prompt("go");
   press((await fake.nextOpen()).component, DOWN, ENTER);
   press((await fake.nextOpen()).component, "my own name", ENTER);
   press((await fake.nextOpen()).component, ESC);
+  press((await fake.nextOpen()).component, " ", DOWN, DOWN, "SSO", ENTER);
   await run;
 
   const byId = results(session);
@@ -315,6 +323,9 @@ test("the model reads the user's answer: an option's label, their own words mark
   );
   expect(textOf(byId.get("decline")!)).toBe(DECLINED);
   expect(byId.get("decline")!.isError).toBe(false);
+  expect(textOf(byId.get("multi")!)).toBe(
+    "The user answered.\n1. Which features should ship? -> Auth; [own words] SSO",
+  );
 });
 
 test("an abort while the dialog is open closes it and fails the call; an already-aborted call opens nothing; no abort listener outlives the call", async () => {
@@ -488,6 +499,19 @@ test.each([
   [
     ask({ options: [{ label: "SQLite" }, { label: "Other" }] }),
     'ask_user: question 1 ("Which storage should the cache use?") has an option labelled "Other"; the dialog adds that row itself, so drop it',
+  ],
+  [
+    ask({ multiSelect: true, options: undefined }),
+    'ask_user: question 1 ("Which storage should the cache use?") is multiSelect but has no options; give 2-4 options or drop multiSelect',
+  ],
+  [
+    ask({
+      options: [
+        { label: "SQLite", recommended: true },
+        { label: "Postgres", recommended: true },
+      ],
+    }),
+    'ask_user: question 1 ("Which storage should the cache use?") marks 2 options recommended; mark at most one, or set multiSelect',
   ],
 ])(
   "a question the dialog could not draw is refused before any dialog opens, naming the question: %#",

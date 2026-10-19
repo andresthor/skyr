@@ -10,6 +10,8 @@ import {
   type Component,
   type Focusable,
   Input,
+  Key,
+  matchesKey,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
@@ -45,11 +47,14 @@ export function createAskDialog(
 class AskDialog implements Component, Focusable {
   focused = false;
   private readonly text: string;
+  private readonly multi: boolean;
   private readonly options: {
     raw: string;
     label: string;
     description?: string;
+    recommended: boolean;
   }[];
+  private readonly ticked = new Set<number>();
   // An Input, not an Editor: it keeps no paste store, so nothing typed here can come back as a marker
   private readonly input: Input;
   private cursor = 0;
@@ -60,13 +65,19 @@ class AskDialog implements Component, Focusable {
     private readonly deps: Deps,
   ) {
     this.text = sanitize(question.question);
+    this.multi = question.multiSelect === true;
     this.options = (question.options ?? []).map((o) => ({
       raw: o.label,
       label: sanitize(o.label),
       ...(o.description === undefined
         ? {}
         : { description: sanitize(o.description) }),
+      recommended: o.recommended === true,
     }));
+    this.cursor = Math.max(
+      0,
+      this.options.findIndex((o) => o.recommended),
+    );
     this.input = new Input({
       prompt: "",
       placeholder: PLACEHOLDER,
@@ -120,12 +131,24 @@ class AskDialog implements Component, Focusable {
       if (this.onInput && this.input.getValue() !== "") this.input.setValue("");
       else this.finish(undefined);
     } else if (this.onInput) this.input.handleInput(data);
+    // Space has no action id; on the Other row it is typing, so it ticks on option rows only
+    else if (this.multi && matchesKey(data, Key.space)) this.tick();
+  }
+
+  private tick(): void {
+    if (!this.ticked.delete(this.cursor)) this.ticked.add(this.cursor);
   }
 
   private confirm(): void {
     const option = this.options[this.cursor];
     const other = this.input.getValue().trim();
-    if (option) this.finish([{ labels: [option.raw] }]);
+    if (this.multi) {
+      const labels = this.options
+        .filter((_, i) => this.ticked.has(i))
+        .map((o) => o.raw);
+      if (labels.length || other !== "")
+        this.finish([{ labels, ...(other === "" ? {} : { other }) }]);
+    } else if (option) this.finish([{ labels: [option.raw] }]);
     else if (other !== "") this.finish([{ labels: [], other }]);
   }
 
@@ -140,11 +163,18 @@ class AskDialog implements Component, Focusable {
     for (const line of wrap(this.text, 1))
       lines.push(` ${theme.fg("text", line)}`);
     lines.push("");
+    const box = (i: number) =>
+      this.multi ? (this.ticked.has(i) ? "[x] " : "[ ] ") : "";
+    const indent = " ".repeat(visibleWidth(marker(false) + box(0)) + 2);
     this.options.forEach((o, i) => {
-      lines.push(marker(i === this.cursor) + theme.fg("text", o.label));
+      lines.push(
+        marker(i === this.cursor) +
+          theme.fg("text", box(i) + o.label) +
+          (o.recommended ? ` ${theme.fg("success", "recommended")}` : ""),
+      );
       if (o.description)
-        for (const line of wrap(o.description, 5))
-          lines.push(`     ${theme.fg("muted", line)}`);
+        for (const line of wrap(o.description, indent.length))
+          lines.push(indent + theme.fg("muted", line));
     });
 
     const lead =
@@ -160,7 +190,8 @@ class AskDialog implements Component, Focusable {
         : theme.fg("dim", PLACEHOLDER);
     lines.push(lead + field);
 
-    const hint = `${keyName(keys, "tui.select.up")}/${keyName(keys, "tui.select.down")} move · ${keyName(keys, "tui.select.confirm")} answer · ${keyName(keys, "tui.select.cancel")} cancel`;
+    const tick = this.multi ? "space tick · " : "";
+    const hint = `${keyName(keys, "tui.select.up")}/${keyName(keys, "tui.select.down")} move · ${tick}${keyName(keys, "tui.select.confirm")} answer · ${keyName(keys, "tui.select.cancel")} cancel`;
     lines.push("", ` ${theme.fg("muted", hint)}`, rule);
     return lines;
   }

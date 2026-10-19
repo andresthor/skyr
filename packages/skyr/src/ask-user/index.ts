@@ -24,6 +24,12 @@ const Option = Type.Object({
   description: Type.Optional(
     Type.String({ description: "What choosing it means or costs" }),
   ),
+  recommended: Type.Optional(
+    Type.Boolean({
+      description:
+        "You advise this option; the dialog marks it and starts on it",
+    }),
+  ),
 });
 
 const Question = Type.Object({
@@ -37,6 +43,9 @@ const Question = Type.Object({
       maxItems: 4,
       description: "Omit for a free-text question",
     }),
+  ),
+  multiSelect: Type.Optional(
+    Type.Boolean({ description: "Allow several options; default false" }),
   ),
 });
 
@@ -81,6 +90,15 @@ function validate(questions: readonly AskQuestion[]): void {
         );
       seen.add(key);
     }
+    if (q.multiSelect && !q.options)
+      throw new Error(
+        `ask_user: ${where} is multiSelect but has no options; give 2-4 options or drop multiSelect`,
+      );
+    const recommended = (q.options ?? []).filter((o) => o.recommended).length;
+    if (recommended > 1 && !q.multiSelect)
+      throw new Error(
+        `ask_user: ${where} marks ${recommended} options recommended; mark at most one, or set multiSelect`,
+      );
   });
 }
 
@@ -170,7 +188,7 @@ export function registerAskUser(pi: ExtensionAPI): void {
     name: "ask_user",
     label: "Ask User",
     description:
-      'Ask the user a question in place of the editor and wait for the answer. Give 2-4 options to choose from, or none for a free-text answer. Use it only when blocked on a decision that is the user\'s to make and that you cannot settle from the request, the code or a sensible default. The dialog adds an "Other" free-text row itself; do not add one.',
+      'Ask the user a question in place of the editor and wait for the answer. Give 2-4 options (one choice, or several with multiSelect), or none for a free-text answer. Use it only when blocked on a decision that is the user\'s to make and that you cannot settle from the request, the code or a sensible default. The dialog adds an "Other" free-text row itself; do not add one. Set recommended: true on the option you advise.',
     promptSnippet: "Ask the user a structured question and wait for the answer",
     parameters: Params,
     exposure: "model-only",

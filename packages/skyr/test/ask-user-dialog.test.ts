@@ -14,6 +14,7 @@ const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const ENTER = "\r";
 const ESC = "\x1b";
+const SPACE = " ";
 
 const storage: AskQuestion = {
   question: "Which storage should the cache use?",
@@ -89,6 +90,52 @@ test("the Other row owns typing: text goes to the field, Enter with no text does
   expect(free.done.mock.calls).toEqual([[[{ labels: [], other: "skyr" }]]]);
 });
 
+const features: AskQuestion = {
+  question: "Which features should ship?",
+  header: "Features",
+  multiSelect: true,
+  options: [
+    { label: "Auth" },
+    { label: "Billing", recommended: true },
+    { label: "Search" },
+  ],
+};
+
+test("a multi-select question returns every ticked label in option order, and Enter with nothing ticked or typed does nothing", () => {
+  const d = dialog([features]);
+  expect(d.text().join("\n")).toContain("space tick");
+  d.press(ENTER);
+  expect(d.done).not.toHaveBeenCalled();
+  d.press(DOWN, SPACE, UP, UP, SPACE, SPACE, SPACE, ENTER);
+  expect(d.done.mock.calls).toEqual([[[{ labels: ["Auth", "Search"] }]]]);
+
+  // on the Other row Space is typing, so an answer keeps its spaces
+  const typed = dialog([features]);
+  typed.press(UP, SPACE, DOWN, DOWN, DOWN, ..."use the queue", ENTER);
+  expect(typed.done.mock.calls).toEqual([
+    [[{ labels: ["Auth"], other: "use the queue" }]],
+  ]);
+});
+
+test("the cursor starts on the recommended option, which the dialog marks, and a multi-select question starts with nothing ticked", () => {
+  const single = dialog([
+    {
+      ...storage,
+      options: [{ label: "SQLite" }, { label: "Postgres", recommended: true }],
+    },
+  ]);
+  expect(single.text()).toContain(" > Postgres recommended");
+  single.press(ENTER);
+  expect(single.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
+
+  const multi = dialog([features]);
+  const lines = multi.text();
+  expect(lines).toContain(" > [ ] Billing recommended");
+  expect(lines.join("\n")).not.toContain("[x]");
+  multi.press(SPACE);
+  expect(multi.text()).toContain(" > [x] Billing recommended");
+});
+
 test("a throw while drawing or handling a key closes the dialog with that error instead of reaching the TUI's stack", async () => {
   const throwing = {
     fg: () => {
@@ -127,10 +174,20 @@ test("every line fits the width, from 1 to 80 columns, with wide characters, emo
       { label: "漢字🙂漢字🙂" },
     ],
   };
+  const wideMulti: AskQuestion = {
+    ...wide,
+    multiSelect: true,
+    options: wide.options?.map((o) => ({ ...o, recommended: true })),
+  };
   for (const width of [1, 8, 24, 80]) {
-    for (const cursorOnOther of [false, true]) {
-      const d = dialog([wide]);
+    for (const [question, cursorOnOther] of [
+      [wide, false],
+      [wide, true],
+      [wideMulti, false],
+    ] as const) {
+      const d = dialog([question]);
       if (cursorOnOther) d.press(DOWN, DOWN, "漢字🙂".repeat(30));
+      else d.press(SPACE);
       for (const line of d.component.render(width))
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }

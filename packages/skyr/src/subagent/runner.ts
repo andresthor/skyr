@@ -69,8 +69,9 @@ async function childLoaderArgs(): Promise<string[]> {
 async function probeProcRunner(): Promise<boolean> {
   const entry = fileURLToPath(new URL("./child/main.ts", import.meta.url));
   const loader = await childLoaderArgs();
-  const dir = await mkdtemp(join(tmpdir(), "skyr-probe-"));
+  let dir: string | undefined;
   try {
+    dir = await mkdtemp(join(tmpdir(), "skyr-probe-"));
     const child = spawn(process.execPath, [...loader, entry, "--smoke", dir], {
       stdio: "ignore",
     });
@@ -91,7 +92,8 @@ async function probeProcRunner(): Promise<boolean> {
   } catch {
     return false;
   } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    if (dir !== undefined)
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -129,22 +131,34 @@ async function canSpawnModelFor(
 }
 
 /**
- * The session's runner: the subprocess kind when the child entry can load (smoke probe per
- * session, POSIX only) and the call's model runs in a child's file-only runtime; else the
- * in-process kind it has always been. Records, abort wiring and results flow through the
- * same Runner seam whichever way the call lands.
+ * Whether a child can run as its own process here (POSIX only): one smoke probe, run on the
+ * first call and shared by every call after it, concurrent ones included. Take one per session.
+ */
+export function spawnCheck(): () => Promise<boolean> {
+  let verdict: Promise<boolean> | undefined;
+  return () =>
+    (verdict ??= probeProcRunner().then(
+      (ok) => ok && process.platform !== "win32",
+    ));
+}
+
+/**
+ * A call's runner: the subprocess kind when `canSpawn` says the child entry can load and the
+ * call's model runs in a child's file-only runtime; else the in-process kind. Records, abort
+ * wiring and results flow through the same Runner seam whichever way the call lands.
  */
 export function runnerFor(
   providers: Providers,
   registerTools: ExtensionFactory,
+  canSpawn: () => Promise<boolean>,
 ): Runner {
   const inProcess = inProcessRunner(providers, registerTools);
-  const state: { canSpawn?: boolean } = {};
   return {
     async run(spec, signal, onEvent) {
-      state.canSpawn ??=
-        (await probeProcRunner()) && process.platform !== "win32";
-      if (state.canSpawn && (await canSpawnModelFor(providers, spec.model))) {
+      if (
+        (await canSpawn()) &&
+        (await canSpawnModelFor(providers, spec.model))
+      ) {
         const entry = fileURLToPath(
           new URL("./child/main.ts", import.meta.url),
         );

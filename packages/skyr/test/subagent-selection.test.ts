@@ -50,6 +50,21 @@ vi.mock("../src/subagent/child/proc-runner.js", async (importOriginal) => {
   };
 });
 
+const probes = vi.hoisted(() => ({ count: 0 }));
+
+// Counts smoke probes and lets every spawn through.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => {
+      if (Array.isArray(args[1]) && args[1].includes("--smoke"))
+        probes.count += 1;
+      return Reflect.apply(actual.spawn, actual, args);
+    },
+  };
+});
+
 const childAnswers = (text: string) => () => fauxAssistantMessage(text);
 
 /** Writes a file-backed provider into the test agent dir, as a child running alone would see it. */
@@ -146,4 +161,22 @@ test("an unreadable models.json fails soft into the in-process runner", async ()
   expect(parent.requests.find((r) => taskOf(r) === "broken")).toBeDefined();
   expect(textOfResult(parent, "broken")).toContain("found");
   expect(proc.runs).toBe(0);
+});
+
+test("the smoke probe runs once per session, however many subagents start, and again in the next session", async () => {
+  probes.count = 0;
+  const parent = await parentSession({
+    respond: router(
+      [call({ task: "one" }), call({ task: "two" })],
+      childAnswers("found"),
+    ),
+  });
+
+  await parent.session.prompt("go");
+  expect(textOfResult(parent, "two")).toContain("found");
+  expect(probes.count).toBe(1);
+
+  await parent.session.reload();
+  await parent.session.prompt("go");
+  expect(probes.count).toBe(2);
 });

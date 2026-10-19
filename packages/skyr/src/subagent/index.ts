@@ -35,7 +35,7 @@ import {
 } from "./agents.js";
 import { readStoredResult } from "./child/protocol.js";
 import { registerChildTools } from "./child/tools.js";
-import { type ChildResult, runnerFor } from "./runner.js";
+import { type ChildResult, runnerFor, spawnCheck } from "./runner.js";
 import { createRunStore, type RunSnapshot, type RunStatus } from "./store.js";
 import {
   addWorktree,
@@ -279,6 +279,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
   let loadErrors: string[] = [];
   let description = describe(agents);
   let sessionAbort = new AbortController();
+  let canSpawn = spawnCheck();
   let unsubscribe: (() => void) | undefined;
   let widgetTick: ReturnType<typeof setInterval> | undefined;
 
@@ -701,6 +702,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           const result = await runnerFor(
             ctx.modelRegistry,
             registerChildTools,
+            canSpawn,
           ).run(
             {
               id,
@@ -1003,6 +1005,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     store.clear();
     sessionAbort = new AbortController();
+    canSpawn = spawnCheck();
     generation += 1;
     pending = [];
     records.clear();

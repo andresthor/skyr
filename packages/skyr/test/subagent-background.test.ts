@@ -38,9 +38,15 @@ const parentTurns = (parent: Parent) =>
 
 /** The message a delivered answer arrived in: the last message of the parent's third turn. */
 async function delivered(parent: Parent) {
-  await vi.waitFor(() =>
-    expect(parentTurns(parent).length).toBeGreaterThanOrEqual(3),
-  );
+  await new Promise<void>((resolve) => {
+    const check = () => {
+      if (parentTurns(parent).length < 3) return;
+      stop();
+      resolve();
+    };
+    const stop = parent.session.subscribe(check);
+    check();
+  });
   await parent.session.waitForIdle();
   return parentTurns(parent)[2]!.messages.at(-1)!;
 }
@@ -72,17 +78,28 @@ test("a background call returns before the child answers, and the answer arrives
 
 test("an answer that finishes while the parent is streaming is delivered when the parent settles, including after Esc", async () => {
   const parentHold = hold();
+  let shown = false;
+  let landed!: () => void;
+  const answered = new Promise<void>((resolve) => {
+    landed = resolve;
+  });
   const parent = await parentSession({
     respond: bgRouter(
       [call({ task: "bg", background: true })],
       () => fauxAssistantMessage("BG-DONE"),
       parentHold.step,
     ),
+    // The widget clears once the child's answer has landed
+    ui: {
+      setWidget: (_key: string, content: unknown) => {
+        if (content) shown = true;
+        else if (shown) landed();
+      },
+    },
   });
 
   const run = parent.session.prompt("go");
-  await parentHold.entered;
-  await vi.waitFor(() => expect(parent.widgets.at(-1)).toBeUndefined());
+  await Promise.all([parentHold.entered, answered]);
   expect(parentTurns(parent)).toHaveLength(2);
 
   await parent.session.abort();

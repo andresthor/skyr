@@ -26,8 +26,6 @@ import {
   toolRow,
 } from "../tools/render.js";
 import { spill } from "../tools/spill.js";
-import { registerWebFetch } from "../tools/web-fetch.js";
-import { registerWebSearch } from "../tools/web-search.js";
 import {
   type AgentDef,
   DEFAULT_TOOLS,
@@ -36,6 +34,7 @@ import {
   READ_FIELDS,
 } from "./agents.js";
 import { readStoredResult } from "./child/protocol.js";
+import { registerChildTools } from "./child/tools.js";
 import { type ChildResult, runnerFor } from "./runner.js";
 import { createRunStore, type RunSnapshot, type RunStatus } from "./store.js";
 import {
@@ -182,11 +181,6 @@ const labelOf = (run: { agent?: string; description: string }) =>
   run.agent ?? `"${clip(run.description)}"`;
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
-
-function registerChildTools(pi: ExtensionAPI): void {
-  registerWebSearch(pi);
-  registerWebFetch(pi);
-}
 
 /** Sorted, so the description stays byte-identical and the prompt cache holds. */
 function describe(agents: Map<string, AgentDef>): string {

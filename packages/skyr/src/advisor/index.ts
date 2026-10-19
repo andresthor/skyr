@@ -173,6 +173,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       const context = advisorContext(
         ctx.sessionManager.buildSessionProjection().messages,
         ctx.getSystemPrompt(),
+        model,
         await loadPi(),
       );
       const reply = await ctx.modelRegistry

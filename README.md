@@ -183,8 +183,10 @@ result (file contents and command output included), and the system prompt. `skyr
 per agent dir, so this holds in every project that agent dir serves.
 
 **Cost.** Each call sends the whole branch as input, so a call on a long session costs about
-as much as one request of that size to the advisor's model. Its tokens and cost count toward
-the session totals in the footer and `/session`.
+as much as one request of that size to the advisor's model. Only what is new since the last
+call is uncached, so where the provider caches prompts, a call within a few minutes of the
+previous one reads the earlier part from the cache and costs a fraction of the first. Its tokens
+and cost count toward the session totals in the footer and `/session`.
 
 ## Embedding it
 

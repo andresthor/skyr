@@ -354,7 +354,7 @@ test("a call that had not finished beside advisor shows with no result, and the 
   expect(text).toContain("→ echo({}) #e1\n→ advisor({}) #adv");
   expect(text).not.toContain("#e1 ok");
   expect(text).toContain(
-    "A call with no result after it had not finished when you were consulted.",
+    "A call with no result after it in this part had not finished when you were consulted; its result, if any, opens the next part",
   );
 });
 
@@ -500,7 +500,7 @@ test("images are sent where they occur, the last 4, and earlier ones as placehol
   );
   const first = content[0];
   expect(first?.type === "text" && first.text).toMatch(
-    /#s1 ok:\nsix shots(\[image not sent: only the last 4 images are sent\]){2}$/,
+    /#s1 ok:\nsix shots(\[image not sent: only the last 4 images of each part are sent\]){2}$/,
   );
 });
 

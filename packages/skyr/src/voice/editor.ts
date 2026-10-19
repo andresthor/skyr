@@ -21,6 +21,7 @@ import type {
   CustomEditor,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { keyName } from "../tools/render.js";
 import type { DictationSink } from "./dictation.js";
 import { DRY_MS, spliceGhost } from "./ghost.js";
 import { renderRule, type VoiceKeys, type VoiceSnapshot } from "./indicator.js";
@@ -167,16 +168,10 @@ export function createVoiceEditorClass(
 
     /** The first key of each binding, named the way Pi's own hints name keys; empty when unbound. */
     private hintKeys(): VoiceKeys {
-      const name = (id: Parameters<KeybindingsManager["getKeys"]>[0]) => {
-        const key = this.keys.getKeys(id)[0] ?? "";
-        return process.platform === "darwin"
-          ? key.replace(/\balt\b/g, "option")
-          : key;
-      };
       return {
-        submit: name(BINDINGS.submit),
-        cancel: name(BINDINGS.cancel),
-        undo: name(BINDINGS.undo),
+        submit: keyName(this.keys, BINDINGS.submit),
+        cancel: keyName(this.keys, BINDINGS.cancel),
+        undo: keyName(this.keys, BINDINGS.undo),
       };
     }
 

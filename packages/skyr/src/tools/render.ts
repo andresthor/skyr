@@ -1,8 +1,12 @@
 /**
- * Text that reaches a terminal or a model. Tool rows, and the one set of invisible characters
- * stripped from anything a model, a web page or a server produced.
+ * Text that reaches a terminal or a model. Tool rows, key names for hints, and the one set of
+ * invisible characters stripped from anything a model, a web page or a server produced.
  */
-import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import type {
+  KeybindingsManager,
+  Theme,
+  ThemeColor,
+} from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, TruncatedText } from "@earendil-works/pi-tui";
 
 export type Segment = [color: ThemeColor, text: string, bold?: boolean];
@@ -59,6 +63,21 @@ export function oneLine(text: string, max: number): string {
 /** Echoed user input in a message: clipped, then JSON-quoted, so C0 controls, quotes and backslashes show as escapes. */
 export function quoted(text: string, max: number): string {
   return JSON.stringify(clip(text, max));
+}
+
+/**
+ * The first key bound to `id`, spelled as Pi spells a key (`option` for `alt` on macOS); empty
+ * when unbound. Not Pi's `keyText`: that reads the global bindings instead of `keys`, names
+ * every bound key, and lives in pi-coding-agent, which a render path cannot load synchronously.
+ */
+export function keyName(
+  keys: Pick<KeybindingsManager, "getKeys">,
+  id: Parameters<KeybindingsManager["getKeys"]>[0],
+): string {
+  const key = keys.getKeys(id)[0] ?? "";
+  return process.platform === "darwin"
+    ? key.replace(/\balt\b/g, "option")
+    : key;
 }
 
 export function toolRow(theme: Theme, segments: Segment[]): TruncatedText {

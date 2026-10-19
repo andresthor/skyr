@@ -144,6 +144,11 @@ export interface Timing {
   redraw?: () => void;
 }
 
+/** A token count: exact below a thousand, else rounded to thousands. */
+export function tokens(n: number): string {
+  return n < 1000 ? `${n} tok` : `${Math.round(n / 1000)}k tok`;
+}
+
 export function seconds(ms: number): Segment[] {
   return [["muted", ` · ${(ms / 1000).toFixed(1)}s`]];
 }

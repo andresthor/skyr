@@ -22,6 +22,7 @@ import {
   type Segment,
   sanitize,
   seconds,
+  tokens,
   toolRow,
 } from "../tools/render.js";
 import { spill } from "../tools/spill.js";
@@ -181,9 +182,6 @@ const labelOf = (run: { agent?: string; description: string }) =>
   run.agent ?? `"${clip(run.description)}"`;
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
-
-const tokens = (n: number) =>
-  n < 1000 ? `${n} tok` : `${Math.round(n / 1000)}k tok`;
 
 function registerChildTools(pi: ExtensionAPI): void {
   registerWebSearch(pi);

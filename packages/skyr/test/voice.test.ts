@@ -102,7 +102,7 @@ test("with credentials, a headless session_start reads the config but mounts no 
   // the malformed key is told about once, with the key named
   expect(ui.notify).toHaveBeenCalledTimes(1);
   expect(ui.notify.mock.calls[0]?.[0]).toBe(
-    "skyr.json: voice.frobnicate is not a setting; ignored (settings: language, interims, punctuation, keyterms, replacements, formatting)",
+    'skyr.json: voice."frobnicate" is not a setting; ignored (settings: language, interims, punctuation, keyterms, replacements, formatting)',
   );
   expect(ui.notify.mock.calls[0]?.[1]).toBe("warning");
   // headless ⇒ no editor takeover, no status row

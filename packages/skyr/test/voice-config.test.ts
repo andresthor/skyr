@@ -83,7 +83,7 @@ describe("parseVoiceSection", () => {
     });
     expect(config.language).toBe("da");
     expect(problems).toEqual([
-      "skyr.json: voice.colors is not a setting; ignored (settings: language, interims, punctuation, keyterms, replacements, formatting)",
+      'skyr.json: voice."colors" is not a setting; ignored (settings: language, interims, punctuation, keyterms, replacements, formatting)',
     ]);
   });
 
@@ -91,7 +91,7 @@ describe("parseVoiceSection", () => {
     const { problems } = parseVoiceSection({ toString: 1, constructor: 2 });
     expect(problems).toHaveLength(2);
     expect(problems[0]).toMatch(
-      /^skyr\.json: voice\.toString is not a setting/,
+      /^skyr\.json: voice\."toString" is not a setting/,
     );
   });
 
@@ -223,7 +223,7 @@ describe("formatting", () => {
     expect(problems).toEqual([
       'skyr.json: voice.formatting.numbers must be one of "numerals_above_nine", "numerals", "as_dictated"; using Corti\'s default "numerals_above_nine"',
       'skyr.json: voice.formatting.times must be one of "locale", "h24", "h12"; using Corti\'s default "locale"',
-      "skyr.json: voice.formatting.units is not a setting; ignored (settings: dates, times, numbers, measurements, numericRanges, ordinals)",
+      'skyr.json: voice.formatting."units" is not a setting; ignored (settings: dates, times, numbers, measurements, numericRanges, ordinals)',
     ]);
   });
 

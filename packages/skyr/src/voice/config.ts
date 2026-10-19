@@ -210,7 +210,7 @@ function parseFormatting(raw: unknown, problem: Problem): Formatting {
   for (const [key, value] of Object.entries(raw)) {
     if (!isFormattingField(key)) {
       problem(
-        `formatting.${key}`,
+        `formatting.${quoted(key, ECHO_CHARS)}`,
         `is not a setting; ignored (settings: ${Object.keys(FORMATTING).join(", ")})`,
       );
       continue;
@@ -255,7 +255,7 @@ function userSettings(raw: unknown, problems: string[]): SttConfig {
   for (const key of Object.keys(section))
     if (!Object.hasOwn(VOICE_DEFAULTS, key))
       problem(
-        key,
+        quoted(key, ECHO_CHARS),
         `is not a setting; ignored (settings: ${Object.keys(VOICE_DEFAULTS).join(", ")})`,
       );
 

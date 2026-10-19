@@ -161,7 +161,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
       if ("missing" in resolved) {
         const cause =
           resolved.missing === "unset"
-            ? "skyr.json advisor.model is unset"
+            ? "skyr.json: advisor.model is unset"
             : resolved.missing === "unknown"
               ? `${resolved.spec} is not a known model`
               : `${resolved.spec} has no credentials`;

@@ -110,7 +110,7 @@ describe("reporting", () => {
     expect([...parent.notices].sort()).toEqual([
       'skyr.json: "voicee" is not a section; ignored (sections: voice, advisor)',
       expect.stringMatching(
-        /^skyr\.json: voice\.frobnicate is not a setting; ignored/,
+        /^skyr\.json: voice\."frobnicate" is not a setting; ignored/,
       ),
     ]);
   });

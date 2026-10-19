@@ -3,6 +3,8 @@
  * Each module owns its section's schema and validation (see `src/voice/config.ts`) and reports
  * its own section's problems; this file owns file location, JSON structure, the never-throw
  * rule (a broken user file must not kill pi's startup) and reporting the file's own problems.
+ * Every problem names a known path as it is (`voice.language`) and quotes a key the file has and
+ * skyr does not know (`voice."colour"`).
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

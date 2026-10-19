@@ -180,7 +180,9 @@ test("several questions: Tab and Shift+Tab move through them and Submit, Enter a
   d.press(TAB, DOWN, ENTER);
   expect(screen()).toContain(naming.question);
   d.press(..."skyr", ENTER);
-  expect(screen()).toContain("enter submit · tab next · escape cancel");
+  expect(screen()).toContain(
+    "enter submit · tab/shift+tab switch · escape cancel",
+  );
   expect(d.done).not.toHaveBeenCalled();
   d.press(ENTER);
   expect(d.done.mock.calls).toEqual([
@@ -211,6 +213,29 @@ test("the Submit tab marks an answer in the user's own words as the transcript r
   const d = dialog([scope, naming]);
   d.press(ENTER, ..."skyr", ENTER);
   expect(d.text()).toContain(" Name   [own words] skyr");
+});
+
+/** The hint as one string, its wrapped lines rejoined. */
+function hintAt(d: ReturnType<typeof dialog>, width: number): string {
+  const lines = d.text(width);
+  return lines
+    .slice(lines.lastIndexOf("") + 1, -1)
+    .map((l) => l.trim())
+    .join(" ");
+}
+
+test("on a narrow pane the hint wraps instead of losing its end: every word stays on screen, down to 14 columns", () => {
+  for (const questions of [
+    [features, storage],
+    [storage, features],
+  ]) {
+    const d = dialog(questions);
+    const whole = hintAt(d, 200);
+    expect(whole).toContain("tab/shift+tab switch");
+    expect(whole).toContain("escape cancel");
+    for (let width = 14; width <= 90; width++)
+      expect(hintAt(d, width)).toBe(whole);
+  }
 });
 
 test("a cut header keeps the style it is drawn in: no reset inside a chip or the Submit tab's header column", () => {

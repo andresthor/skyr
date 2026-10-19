@@ -276,7 +276,11 @@ class AskDialog implements Component, Focusable {
     if (this.tabbed) lines.push(this.chips(width), "");
     const page = this.page;
     lines.push(...(page ? this.question(page, width) : this.review()));
-    lines.push("", ` ${theme.fg("muted", this.hint())}`, rule);
+    lines.push("");
+    // Wrapped, not cut: a cut drops the end of the hint, where cancel is
+    for (const line of wrapTextWithAnsi(this.hint(), Math.max(1, width - 1)))
+      lines.push(` ${theme.fg("muted", line)}`);
+    lines.push(rule);
     return lines;
   }
 
@@ -368,7 +372,10 @@ class AskDialog implements Component, Focusable {
     const { keys } = this.deps;
     const key = (id: Parameters<typeof keyName>[1]) => keyName(keys, id);
     const cancel = `${key("tui.select.cancel")} cancel`;
-    const tab = this.tabbed ? `${key("tui.input.tab")} next · ` : "";
+    // Shift+Tab has no action id of its own, so the hint names it literally
+    const tab = this.tabbed
+      ? `${key("tui.input.tab")}/shift+tab switch · `
+      : "";
     const page = this.page;
     if (page) {
       const tick = page.multi ? "space tick · " : "";

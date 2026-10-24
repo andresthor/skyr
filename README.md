@@ -45,8 +45,9 @@ The answers stay in the transcript as one row per question, after a resume too. 
 bell rings when a question opens.
 
 The terminal offers the tool, and so does a host that embeds Pi and answers form requests over
-Pi's event bus, where the questions become one form in the client. Runs without such a host, like
-print, JSON and plain RPC, hide it from the model, and subagents never get it. A half-typed draft comes back when the dialog
+Pi's event bus, where the questions become one form in the client; the bus contract a host
+implements is documented in the [tengi](https://github.com/andresthor/tengi) README. Runs without
+such a host, like print, JSON and plain RPC, hide it from the model, and subagents never get it. A half-typed draft comes back when the dialog
 closes; a large paste comes back written out in full instead of as its `[paste #…]` marker.
 
 ## Voice

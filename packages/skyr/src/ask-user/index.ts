@@ -22,7 +22,7 @@ import {
   toolRow,
 } from "../tools/render.js";
 import {
-  type Answer,
+  type Answers,
   alignHeaders,
   answerLine,
   createAskDialog,
@@ -107,22 +107,22 @@ const failed = (why: string) =>
   );
 
 /**
- * Asks through the host's form. Answers come back as the dialog's; a decline is `undefined`; an
- * abort, a closed form or a refused answer is thrown with the text the model should read.
+ * Asks through the host's form, with the dialog's contract: a decline is `undefined`; an abort, a
+ * closed form, a refused answer or a failure is thrown with the text the model should read.
  */
 async function viaHost(
   events: ExtensionAPI["events"],
   toolCallId: string,
   questions: readonly AskQuestion[],
   signal: AbortSignal | undefined,
-): Promise<(Answer | undefined)[] | undefined> {
+): Promise<Answers | undefined> {
   const outcome = await askHost(
     events,
     { toolCallId, ...buildForm(questions) },
     signal,
   );
   if (outcome.kind === "aborted") throw new Error(ABORTED);
-  if (outcome.kind === "unanswered") throw failed(outcome.why);
+  if (outcome.kind === "untaken") throw failed(outcome.why);
   const { reply } = outcome;
   // A cancel the host answered from the signal's own abort is the abort, whichever listener ran first
   if (reply.cancelling || (reply.action === "cancel" && signal?.aborted))
@@ -190,7 +190,7 @@ function validate(questions: readonly AskQuestion[]): void {
 
 function answerText(
   questions: readonly AskQuestion[],
-  answers: readonly (Answer | undefined)[],
+  answers: Answers,
 ): string {
   const lines = answers.map(
     (a, i) =>
@@ -263,21 +263,22 @@ function dialogQueue(): (
 }
 
 /**
- * Shows the dialog in place of the editor until the user answers, declines or the signal aborts
- * (`undefined` for both). A failure inside `custom()`, to open or to draw, comes back as the
- * `Error` rather than thrown.
+ * Asks in the dialog, drawn in place of the editor until the user answers or declines
+ * (`undefined`); an abort, or a failure inside `custom()` to open or to draw, is thrown with the
+ * text the model should read.
  */
-async function show(
+async function inDialog(
   ui: ExtensionContext["ui"],
   questions: readonly AskQuestion[],
   signal: AbortSignal | undefined,
-): Promise<(Answer | undefined)[] | undefined | Error> {
+): Promise<Answers | undefined> {
   // Pi restores the editor with setText(getText()), which drops the paste store a [paste #…]
   // marker points into; written out in full first, the draft survives that restore
   ui.setEditorText(ui.getEditorText());
   let onAbort: (() => void) | undefined;
+  let answers: Answers | undefined | Error;
   try {
-    return await ui.custom<(Answer | undefined)[] | undefined | Error>(
+    answers = await ui.custom<Answers | undefined | Error>(
       (tui, theme, keys, done) => {
         onAbort = () => done(undefined);
         signal?.addEventListener("abort", onAbort, { once: true });
@@ -287,10 +288,14 @@ async function show(
       },
     );
   } catch (error: unknown) {
-    return error instanceof Error ? error : new Error(String(error));
+    throw failed(error instanceof Error ? error.message : String(error));
   } finally {
     if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
+  if (answers instanceof Error) throw failed(answers.message);
+  // An answer given before a late abort is kept; only an empty close reads the signal
+  if (answers === undefined && signal?.aborted) throw new Error(ABORTED);
+  return answers;
 }
 
 export function registerAskUser(pi: ExtensionAPI): void {
@@ -324,26 +329,22 @@ export function registerAskUser(pi: ExtensionAPI): void {
       const release = await take(signal);
       try {
         if (signal?.aborted) throw new Error(ABORTED);
-        const result =
+        const answers =
           how === "dialog"
-            ? await show(ctx.ui, params.questions, signal)
+            ? await inDialog(ctx.ui, params.questions, signal)
             : await viaHost(pi.events, toolCallId, params.questions, signal);
-        if (result instanceof Error) throw failed(result.message);
-        if (result === undefined) {
-          if (signal?.aborted) throw new Error(ABORTED);
+        if (answers === undefined)
           return {
             content: [{ type: "text", text: DECLINED }],
             details: { outcome: "declined" },
           };
-        }
-        // An answer given before a late abort is kept
         return {
           content: [
-            { type: "text", text: answerText(params.questions, result) },
+            { type: "text", text: answerText(params.questions, answers) },
           ],
           details: {
             outcome: "answered",
-            answers: result.map((a, i) => ({
+            answers: answers.map((a, i) => ({
               header: params.questions[i]?.header ?? "",
               answer: a ? clip(answerLine(a), ANSWER_CHARS) : "",
             })),

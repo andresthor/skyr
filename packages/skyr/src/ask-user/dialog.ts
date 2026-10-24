@@ -27,6 +27,9 @@ export interface Answer {
   other?: string;
 }
 
+/** The dialog's result: one slot per question, `undefined` where the user left it open. */
+export type Answers = (Answer | undefined)[];
+
 interface Deps {
   theme: Pick<Theme, "fg" | "bg" | "bold">;
   keys: Pick<KeybindingsManager, "matches" | "getKeys">;
@@ -34,7 +37,7 @@ interface Deps {
    * `undefined` = declined with Esc or submitted with nothing answered; an `undefined` entry = a
    * question left unanswered; an `Error` = the dialog threw and closed.
    */
-  done(result: (Answer | undefined)[] | undefined | Error): void;
+  done(result: Answers | undefined | Error): void;
 }
 
 const PLACEHOLDER = "type an answer";
@@ -214,13 +217,13 @@ class AskDialog implements Component, Focusable {
     for (const page of this.pages) page.input.invalidate();
   }
 
-  private finish(result: (Answer | undefined)[] | undefined | Error): void {
+  private finish(result: Answers | undefined | Error): void {
     if (this.finished) return;
     this.finished = true;
     this.deps.done(result);
   }
 
-  private answers(): (Answer | undefined)[] {
+  private answers(): Answers {
     return this.pages.map((p) => p.answer());
   }
 

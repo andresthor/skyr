@@ -200,7 +200,7 @@ function registered(
  * A host on the bus, answering capability queries as tengi does: synchronously, inside the asking
  * emit. `reply` builds the answer from the query's id, so a test can lie about it.
  */
-function host(
+function capabilityHost(
   bus: EventBus,
   reply: (id: unknown) => unknown = (id) => ({
     id,
@@ -876,7 +876,7 @@ test("opening a question rings the terminal bell once", async () => {
 
 test("in rpc, a host that answers forms and formRequests gets ask_user offered to the model, before and after a reload", async () => {
   const bus = createEventBus();
-  host(bus);
+  capabilityHost(bus);
   const { session, requests } = await parentSession({
     mode: "rpc",
     eventBus: bus,
@@ -912,7 +912,7 @@ test.each([
   "outside the TUI, ask_user stays hidden and a call tells the model to decide when the bus gives %s",
   async (_name, reply) => {
     const bus = createEventBus();
-    if (reply) host(bus, reply);
+    if (reply) capabilityHost(bus, reply);
     const tool = registered("rpc", bus);
     expect(hidden(tool)).toBe(true);
     await expect(execute(tool, dialogs().ui)).rejects.toThrow(NO_TERMINAL);
@@ -937,7 +937,7 @@ test("a reply that lands after a microtask is too late: ask_user stays hidden", 
 
 test("in the TUI, ask_user is offered without asking the bus, whatever a host would say", () => {
   const bus = createEventBus();
-  const seen = host(bus, (id) => ({
+  const seen = capabilityHost(bus, (id) => ({
     id,
     v: 1,
     forms: false,
@@ -949,7 +949,7 @@ test("in the TUI, ask_user is offered without asking the bus, whatever a host wo
 
 test("a capability query leaves no listener on the bus", () => {
   const bus = createEventBus();
-  host(bus);
+  capabilityHost(bus);
   let live = 0;
   const counted: ExtensionAPI["events"] = {
     on: (channel, handler) => {
@@ -998,7 +998,7 @@ function formHost(
   bus: EventBus,
   answer: (form: FormPayload) => unknown = () => undefined,
 ): { forms: FormPayload[]; nextForm: () => Promise<FormPayload> } {
-  host(bus);
+  capabilityHost(bus);
   const forms: FormPayload[] = [];
   const opens: ReturnType<typeof deferred<FormPayload>>[] = [];
   const slot = (i: number) => {
@@ -1225,7 +1225,7 @@ test("a host that refuses the request fails the call with the host's reason, whi
 
 test("a host that advertises form requests but takes none fails the call, so the model asks in its reply instead", async () => {
   const bus = createEventBus();
-  host(bus);
+  capabilityHost(bus);
   await expect(execute(registered("rpc", bus), dialogs().ui)).rejects.toThrow(
     "ask_user: the dialog failed (no host took the form); ask the question in your reply instead",
   );
@@ -1233,7 +1233,7 @@ test("a host that advertises form requests but takes none fails the call, so the
 
 test("a bus that refuses the form request fails the call with the refusal, so the model asks in its reply instead", async () => {
   const bus = createEventBus();
-  host(bus);
+  capabilityHost(bus);
   const refusing: ExtensionAPI["events"] = {
     on: (channel, handler) => bus.on(channel, handler),
     emit: (channel, data) => {

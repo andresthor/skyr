@@ -1,8 +1,8 @@
 /**
- * What a host that embeds Pi offers extensions over Pi's event bus, in the `tengi:` contract. A
- * `tengi:capabilities?` query is answered inside the asking `emit`, so it is synchronous; a
- * `tengi:form?` request carries its own abort signal and reply callbacks, so no later reply has to
- * cross the bus, where a reload would drop this extension's listeners.
+ * ask_user's side of the `tengi:` event-bus contract: the capability query that says whether a
+ * form would reach anyone, and the form request itself. The query is answered inside the asking
+ * `emit`, so it is synchronous; the request carries its own abort signal and reply callbacks, so
+ * no later reply has to cross the bus, where a reload would drop this extension's listeners.
  */
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -51,10 +51,10 @@ interface FormReply {
   error?: string;
 }
 
-export type Asked =
-  | { kind: "answered"; reply: FormReply }
+export type FormOutcome =
+  | { kind: "replied"; reply: FormReply }
   /** No host took the request inside the emit, or the bus refused it; `why` says which. */
-  | { kind: "unanswered"; why: string }
+  | { kind: "untaken"; why: string }
   /** The signal aborted before any reply; a reply after that is dropped. */
   | { kind: "aborted" };
 
@@ -76,16 +76,16 @@ export function askHost(
   events: Events,
   request: FormRequest,
   signal: AbortSignal | undefined,
-): Promise<Asked> {
+): Promise<FormOutcome> {
   if (signal?.aborted) return Promise.resolve({ kind: "aborted" });
   return new Promise((resolve) => {
     let settled = false;
     const onAbort = () => finish({ kind: "aborted" });
-    const finish = (asked: Asked) => {
+    const finish = (outcome: FormOutcome) => {
       if (settled) return;
       settled = true;
       signal?.removeEventListener("abort", onAbort);
-      resolve(asked);
+      resolve(outcome);
     };
     // Listening before the emit: an abort during it, or one the host answers from its own
     // listener, must still read as aborted
@@ -100,12 +100,12 @@ export function askHost(
           acked = true;
         },
         respond: (reply: unknown) =>
-          finish({ kind: "answered", reply: readReply(reply) }),
+          finish({ kind: "replied", reply: readReply(reply) }),
       });
     } catch (error: unknown) {
       const why = error instanceof Error ? error.message : String(error);
-      return finish({ kind: "unanswered", why: `the bus refused it: ${why}` });
+      return finish({ kind: "untaken", why: `the bus refused it: ${why}` });
     }
-    if (!acked) finish({ kind: "unanswered", why: "no host took the form" });
+    if (!acked) finish({ kind: "untaken", why: "no host took the form" });
   });
 }

@@ -2,19 +2,20 @@
  * ask_user's questions as one ACP form in the agentui v1 shape, and the form's answer back as the
  * dialog's own result. Property `question_<i>` holds question i's pick (an index string, or a list
  * of them for a multi-select, or the text of a free-text question); `question_<i>_custom` holds
- * the user's own words beside a question with options. Pure: no Pi, no bus.
+ * the user's own words beside a question with options. Pure: no extension API, no bus, no side
+ * effects.
  */
 import { sanitize } from "../tools/render.js";
-import { type Answer, shortHeader } from "./dialog.js";
+import { type Answers, shortHeader } from "./dialog.js";
+import type { FormRequest } from "./host.js";
 import type { AskQuestion } from "./index.js";
 
 const text = (s: string) => sanitize(s).trim();
 
 /** The request's `message` and `requestedSchema`; strings the user sees are sanitised here. */
-export function buildForm(questions: readonly AskQuestion[]): {
-  message: string;
-  requestedSchema: object;
-} {
+export function buildForm(
+  questions: readonly AskQuestion[],
+): Omit<FormRequest, "toolCallId"> {
   const properties: Record<string, unknown> = {};
   questions.forEach((q, i) => {
     const key = `question_${i}`;
@@ -93,7 +94,7 @@ function words(n: number, value: unknown): string | undefined {
 export function parseForm(
   questions: readonly AskQuestion[],
   content: Record<string, unknown> | undefined,
-): (Answer | undefined)[] | undefined {
+): Answers | undefined {
   const c = content ?? {};
   const answers = questions.map((q, i) => {
     const n = i + 1;

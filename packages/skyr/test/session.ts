@@ -16,7 +16,9 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   defineTool,
+  type EventBus,
   type ExtensionContext,
+  type ExtensionFactory,
   type ExtensionUIContext,
   ModelRuntime,
   SessionManager,
@@ -60,6 +62,10 @@ export async function parentSession(o: {
   ui?: Partial<ExtensionUIContext>;
   /** Written to `<agentDir>/skyr.json` as JSON; a string is written as it is. */
   skyr?: unknown;
+  /** Extensions loaded beside skyr, in this order after it. */
+  extensions?: ExtensionFactory[];
+  /** The bus every extension shares; a test answers on it as an ACP host would, outside any extension. */
+  eventBus?: EventBus;
 }): Promise<Parent> {
   const cwd = tmp("cwd");
   if (o.git) {
@@ -140,7 +146,8 @@ export async function parentSession(o: {
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    extensionFactories: [registerSkyr],
+    extensionFactories: [registerSkyr, ...(o.extensions ?? [])],
+    eventBus: o.eventBus,
   });
   await resourceLoader.reload();
   const { session } = await createAgentSession({

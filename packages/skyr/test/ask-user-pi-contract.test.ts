@@ -1,7 +1,11 @@
 // Pi behaviour the ask_user design rests on. A failure here after a Pi upgrade means the design
 // changes, not the test.
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import {
+  createEventBus,
+  defineTool,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import { Editor } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { expect, test } from "vitest";
@@ -110,4 +114,58 @@ test("prepareLoadout runs again before the next request, so a flag set after reg
   hide = false;
   await session.prompt("again");
   expect(toolsSeen(requests[2]!)).toContain("flip");
+});
+
+test("a reply emitted from inside a bus handler lands before the querying emit returns", () => {
+  const bus = createEventBus();
+  bus.on("ask?", (q) => bus.emit("ask", { echo: q }));
+  let heard: unknown;
+  bus.on("ask", (r) => {
+    heard = r;
+  });
+  bus.emit("ask?", 7);
+  expect(heard).toEqual({ echo: 7 });
+});
+
+test("a prepareLoadout that throws leaves its declaration offered to the model", async () => {
+  const loud = defineTool({
+    name: "loud",
+    label: "loud",
+    description: "Its loadout hook throws.",
+    parameters: Type.Object({}),
+    prepareLoadout: () => {
+      throw new Error("loadout failed");
+    },
+    async execute() {
+      return ok("ran");
+    },
+  });
+  const { requests, session } = await parentSession({
+    respond: () => fauxAssistantMessage("done"),
+    customTools: [loud],
+  });
+  await session.prompt("go");
+  expect(toolsSeen(requests[0]!)).toContain("loud");
+});
+
+test("a reload drops an extension's bus subscription, while a subscription made on the bus itself still answers", async () => {
+  const bus = createEventBus();
+  const heard: string[] = [];
+  const probe = (pi: ExtensionAPI) => {
+    pi.events.on("ping", () => heard.push("extension"));
+  };
+  bus.on("ping", () => heard.push("host"));
+  const { session } = await parentSession({
+    respond: () => fauxAssistantMessage("done"),
+    extensions: [probe],
+    eventBus: bus,
+  });
+  bus.emit("ping", undefined);
+  expect(heard.sort()).toEqual(["extension", "host"]);
+
+  heard.length = 0;
+  await session.reload();
+  bus.emit("ping", undefined);
+  // the factory re-ran on reload, so the new load's listener answers once, the old one never
+  expect(heard.sort()).toEqual(["extension", "host"]);
 });

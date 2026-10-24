@@ -1,7 +1,8 @@
 /**
- * ask_user: the model asks the user a question in place of the input editor and waits for the
- * answer. Only an interactive terminal can answer, so every other mode hides the tool from the
- * model and refuses a call that arrives anyway.
+ * ask_user: the model asks the user a question and waits for the answer. The terminal draws the
+ * dialog in place of the input editor; a host that answers form requests over Pi's event bus
+ * gets one form instead; every other run hides the tool from the model and refuses a call that
+ * arrives anyway.
  */
 import type {
   ExtensionAPI,
@@ -28,6 +29,8 @@ import {
   HEADER_WIDTH,
   shortHeader,
 } from "./dialog.js";
+import { buildForm, parseForm } from "./form.js";
+import { askHost, hostServesForms } from "./host.js";
 
 const MAX_QUESTIONS = 4;
 const MIN_OPTIONS = 2;
@@ -77,11 +80,57 @@ const DECLINED =
   "The user declined to answer. Do not guess their answers or act as if they chose; end your turn and wait for their next message.";
 const UNANSWERED =
   "The user left every question marked (not answered) open. Do not assume answers for them or ask them again; go on with what was answered and say in your reply what stays open.";
+const CLOSED =
+  "ask_user: the client closed the dialog without an answer. Do not guess the answer; end your turn and wait for the user's next message.";
 const ERROR_CHARS = 200;
 /** How much of each answer a result keeps for its transcript row. */
 const ANSWER_CHARS = 200;
 
 const asked = (question: string) => sanitize(question).trim().toLowerCase();
+
+type Offer = "dialog" | "form" | "none";
+
+function offerFor(
+  mode: ExtensionContext["mode"] | undefined,
+  events: ExtensionAPI["events"],
+): Offer {
+  // rpc has a UI too, but its custom() resolves undefined at once; only a host's form can answer there
+  if (mode === "tui") return "dialog";
+  // Pi builds the first loadout before session_start, when no request goes out yet
+  if (mode === undefined) return "none";
+  return hostServesForms(events) ? "form" : "none";
+}
+
+const failed = (why: string) =>
+  new Error(
+    `ask_user: the dialog failed (${oneLine(why, ERROR_CHARS)}); ask the question in your reply instead`,
+  );
+
+/**
+ * Asks through the host's form. Answers come back as the dialog's; a decline is `undefined`; an
+ * abort, a closed form or a refused answer is thrown with the text the model should read.
+ */
+async function viaHost(
+  events: ExtensionAPI["events"],
+  toolCallId: string,
+  questions: readonly AskQuestion[],
+  signal: AbortSignal | undefined,
+): Promise<(Answer | undefined)[] | undefined> {
+  const outcome = await askHost(
+    events,
+    { toolCallId, ...buildForm(questions) },
+    signal,
+  );
+  if (outcome.kind === "aborted") throw new Error(ABORTED);
+  if (outcome.kind === "unanswered") throw failed(outcome.why);
+  const { reply } = outcome;
+  // A cancel the host answered from the signal's own abort is the abort, whichever listener ran first
+  if (reply.cancelling || (reply.action === "cancel" && signal?.aborted))
+    throw new Error(ABORTED);
+  if (reply.action === "accept") return parseForm(questions, reply.content);
+  if (reply.action === "decline") return undefined;
+  throw reply.error === undefined ? new Error(CLOSED) : failed(reply.error);
+}
 
 // Throws, naming the question, on what the schema cannot express and the dialog could not draw
 function validate(questions: readonly AskQuestion[]): void {
@@ -245,12 +294,13 @@ async function show(
 }
 
 export function registerAskUser(pi: ExtensionAPI): void {
-  let interactive = false;
+  // prepareLoadout gets no ctx, so it reads the mode session_start cached
+  let mode: ExtensionContext["mode"] | undefined;
   const take = dialogQueue();
+  const offer = () => offerFor(mode, pi.events);
 
   pi.on("session_start", (_event: unknown, ctx: ExtensionContext) => {
-    // mode, not hasUI: RPC has a UI, but its custom() resolves undefined at once
-    interactive = ctx.mode === "tui";
+    mode = ctx.mode;
   });
 
   pi.registerTool({
@@ -264,20 +314,21 @@ export function registerAskUser(pi: ExtensionAPI): void {
     parameters: Params,
     exposure: "model-only",
     prepareLoadout: () =>
-      interactive ? undefined : { hiddenDeclarations: ["ask_user"] },
+      offer() === "none" ? { hiddenDeclarations: ["ask_user"] } : undefined,
 
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(toolCallId, params, signal, _onUpdate, ctx) {
       // A hidden declaration stays callable, so a call can still arrive here
-      if (!interactive) throw new Error(NO_TERMINAL);
+      const how = offer();
+      if (how === "none") throw new Error(NO_TERMINAL);
       validate(params.questions);
       const release = await take(signal);
       try {
         if (signal?.aborted) throw new Error(ABORTED);
-        const result = await show(ctx.ui, params.questions, signal);
-        if (result instanceof Error)
-          throw new Error(
-            `ask_user: the dialog failed (${oneLine(result.message, ERROR_CHARS)}); ask the question in your reply instead`,
-          );
+        const result =
+          how === "dialog"
+            ? await show(ctx.ui, params.questions, signal)
+            : await viaHost(pi.events, toolCallId, params.questions, signal);
+        if (result instanceof Error) throw failed(result.message);
         if (result === undefined) {
           if (signal?.aborted) throw new Error(ABORTED);
           return {

@@ -44,9 +44,10 @@ send them. A question left unanswered goes to the model as not answered; sending
 The answers stay in the transcript as one row per question, after a resume too. The terminal
 bell rings when a question opens.
 
-Only an interactive terminal offers the tool: print, JSON and RPC runs hide it from the model,
-and subagents never get it. A half-typed draft comes back when the dialog closes; a large paste
-comes back written out in full instead of as its `[paste #…]` marker.
+The terminal offers the tool, and so does a host that embeds Pi and answers form requests over
+Pi's event bus, where the questions become one form in the client. Runs without such a host, like
+print, JSON and plain RPC, hide it from the model, and subagents never get it. A half-typed draft comes back when the dialog
+closes; a large paste comes back written out in full instead of as its `[paste #…]` marker.
 
 ## Voice
 

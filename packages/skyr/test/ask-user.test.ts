@@ -4,7 +4,7 @@
  * test, so `dialogs()` stands in for its `custom()`: it mounts the component the factory returns
  * and, on close, writes back the text Pi's restore would.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type FauxResponseFactory,
@@ -13,7 +13,9 @@ import {
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
+  createEventBus,
   defineTool,
+  type EventBus,
   type ExtensionAPI,
   type ExtensionToolContext,
   type ExtensionUIContext,
@@ -60,6 +62,10 @@ const ABORTED =
   "ask_user: aborted before the user answered; ask again if you still need the answer";
 const DECLINED =
   "The user declined to answer. Do not guess their answers or act as if they chose; end your turn and wait for their next message.";
+const UNANSWERED =
+  "The user left every question marked (not answered) open. Do not assume answers for them or ask them again; go on with what was answered and say in your reply what stays open.";
+const CLOSED =
+  "ask_user: the client closed the dialog without an answer. Do not guess the answer; end your turn and wait for the user's next message.";
 // Right-to-left override: reverses how the text after it is drawn
 const BIDI = String.fromCodePoint(0x202e);
 const ZERO_WIDTH = String.fromCodePoint(0x200b);
@@ -170,8 +176,11 @@ type AskTool = ToolDefinition & {
   execute: NonNullable<ToolDefinition["execute"]>;
 };
 
-/** ask_user registered on a fake Pi, after a session_start in `mode`. */
-function registered(mode: "tui" | "print" = "tui"): AskTool {
+/** ask_user registered on a fake Pi, after a session_start in `mode`; `events` is the bus it asks on. */
+function registered(
+  mode: "tui" | "print" | "rpc" = "tui",
+  events: ExtensionAPI["events"] = createEventBus(),
+): AskTool {
   let tool: AskTool | undefined;
   const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
   registerAskUser({
@@ -180,11 +189,41 @@ function registered(mode: "tui" | "print" = "tui"): AskTool {
     },
     on: (event: string, fn: (event: unknown, ctx: unknown) => void) =>
       handlers.set(event, fn),
+    events,
   } as unknown as ExtensionAPI);
   handlers.get("session_start")?.({ type: "session_start" }, { mode });
   if (!tool) throw new Error("registerAskUser registered no tool");
   return tool;
 }
+
+/**
+ * A host on the bus, answering capability queries as tengi does: synchronously, inside the asking
+ * emit. `reply` builds the answer from the query's id, so a test can lie about it.
+ */
+function host(
+  bus: EventBus,
+  reply: (id: unknown) => unknown = (id) => ({
+    id,
+    v: 1,
+    forms: true,
+    notices: true,
+    agentui: null,
+    formRequests: true,
+  }),
+): { queries: number } {
+  const state = { queries: 0 };
+  bus.on("tengi:capabilities?", (q) => {
+    state.queries++;
+    if (typeof q === "object" && q !== null && "id" in q)
+      bus.emit("tengi:capabilities", reply(q.id));
+  });
+  return state;
+}
+
+const hidden = (tool: AskTool) =>
+  tool
+    .prepareLoadout?.({} as never)
+    ?.hiddenDeclarations?.includes("ask_user") === true;
 
 const STORAGE = {
   question: "Which storage should the cache use?",
@@ -833,4 +872,483 @@ test("opening a question rings the terminal bell once", async () => {
   press(opened.component, ENTER);
   await call;
   expect(opened.write).toHaveBeenCalledTimes(1);
+});
+
+test("in rpc, a host that answers forms and formRequests gets ask_user offered to the model, before and after a reload", async () => {
+  const bus = createEventBus();
+  host(bus);
+  const { session, requests } = await parentSession({
+    mode: "rpc",
+    eventBus: bus,
+    respond: () => fauxAssistantMessage("done"),
+  });
+  await session.prompt("go");
+  expect(toolsSeen(requests[0]!)).toContain("ask_user");
+  await session.reload();
+  await session.prompt("again");
+  expect(toolsSeen(requests[1]!)).toContain("ask_user");
+});
+
+test.each([
+  ["no host", undefined],
+  [
+    "forms false",
+    (id: unknown) => ({ id, v: 1, forms: false, formRequests: true }),
+  ],
+  ["formRequests absent", (id: unknown) => ({ id, v: 1, forms: true })],
+  [
+    "another query's id",
+    () => ({ id: "other", v: 1, forms: true, formRequests: true }),
+  ],
+  [
+    "a v2 reply",
+    (id: unknown) => ({ id, v: 2, forms: true, formRequests: true }),
+  ],
+  [
+    "forms as a string",
+    (id: unknown) => ({ id, v: 1, forms: "true", formRequests: true }),
+  ],
+])(
+  "outside the TUI, ask_user stays hidden and a call tells the model to decide when the bus gives %s",
+  async (_name, reply) => {
+    const bus = createEventBus();
+    if (reply) host(bus, reply);
+    const tool = registered("rpc", bus);
+    expect(hidden(tool)).toBe(true);
+    await expect(execute(tool, dialogs().ui)).rejects.toThrow(NO_TERMINAL);
+  },
+);
+
+test("a reply that lands after a microtask is too late: ask_user stays hidden", () => {
+  const bus = createEventBus();
+  bus.on("tengi:capabilities?", (q) =>
+    queueMicrotask(() => {
+      if (typeof q === "object" && q !== null && "id" in q)
+        bus.emit("tengi:capabilities", {
+          id: q.id,
+          v: 1,
+          forms: true,
+          formRequests: true,
+        });
+    }),
+  );
+  expect(hidden(registered("rpc", bus))).toBe(true);
+});
+
+test("in the TUI, ask_user is offered without asking the bus, whatever a host would say", () => {
+  const bus = createEventBus();
+  const seen = host(bus, (id) => ({
+    id,
+    v: 1,
+    forms: false,
+    formRequests: false,
+  }));
+  expect(hidden(registered("tui", bus))).toBe(false);
+  expect(seen.queries).toBe(0);
+});
+
+test("a capability query leaves no listener on the bus", () => {
+  const bus = createEventBus();
+  host(bus);
+  let live = 0;
+  const counted: ExtensionAPI["events"] = {
+    on: (channel, handler) => {
+      live++;
+      const off = bus.on(channel, handler);
+      return () => {
+        live--;
+        off();
+      };
+    },
+    emit: (channel, data) => bus.emit(channel, data),
+  };
+  expect(hidden(registered("rpc", counted))).toBe(false);
+  expect(live).toBe(0);
+});
+
+test("a stale extension API, which throws on subscribe, keeps ask_user hidden and a call tells the model to decide", async () => {
+  const stale: ExtensionAPI["events"] = {
+    on: () => {
+      throw new Error("Extension API is no longer active");
+    },
+    emit: () => {
+      throw new Error("Extension API is no longer active");
+    },
+  };
+  const tool = registered("rpc", stale);
+  expect(hidden(tool)).toBe(true);
+  await expect(execute(tool, dialogs().ui)).rejects.toThrow(NO_TERMINAL);
+});
+
+interface FormPayload {
+  id: string;
+  toolCallId: string;
+  message: string;
+  requestedSchema: object;
+  signal: AbortSignal;
+  ack(): void;
+  respond(reply: unknown): void;
+}
+
+/**
+ * A host that serves form requests: it acks each inside the emit, records it and hands it to
+ * `answer`, whose return value, if any, is the reply; a host that answers later keeps the payload.
+ */
+function formHost(
+  bus: EventBus,
+  answer: (form: FormPayload) => unknown = () => undefined,
+): { forms: FormPayload[]; nextForm: () => Promise<FormPayload> } {
+  host(bus);
+  const forms: FormPayload[] = [];
+  const opens: ReturnType<typeof deferred<FormPayload>>[] = [];
+  const slot = (i: number) => {
+    opens[i] ??= deferred<FormPayload>();
+    return opens[i];
+  };
+  let waited = 0;
+  bus.on("tengi:form?", (p) => {
+    const form = p as FormPayload;
+    form.ack();
+    slot(forms.push(form) - 1).resolve(form);
+    const reply = answer(form);
+    if (reply !== undefined) form.respond(reply);
+  });
+  /** The next form request, in order of arrival. */
+  return { forms, nextForm: () => slot(waited++).promise };
+}
+
+const accept = (content: unknown) => ({ action: "accept", content });
+const said = (result: Awaited<ReturnType<AskTool["execute"]>>) =>
+  result.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+const FIXTURE = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/ask-user-form.json", import.meta.url),
+    "utf8",
+  ),
+) as { questions: unknown[]; message: string; requestedSchema: object };
+const REFUSED =
+  /^ask_user: the client's answer was refused \(.*\); ask the question in your reply instead$/;
+
+test("four questions of every kind become the one form the fixture states, which tengi copies", async () => {
+  const bus = createEventBus();
+  const { forms } = formHost(bus, () => ({ action: "decline" }));
+  const result = await execute(registered("rpc", bus), dialogs().ui, {
+    questions: FIXTURE.questions,
+  });
+  expect(said(result)).toBe(DECLINED);
+  expect(forms[0]?.message).toBe(FIXTURE.message);
+  expect(forms[0]?.requestedSchema).toEqual(FIXTURE.requestedSchema);
+});
+
+test("escape sequences and invisible characters in the model's strings never reach the form", async () => {
+  const bus = createEventBus();
+  const { forms } = formHost(bus, () => ({ action: "decline" }));
+  await execute(
+    registered("rpc", bus),
+    dialogs().ui,
+    ask({
+      question: "Which\x1b[31m storage\u200b?",
+      header: "Sto\x1b]8;;http://x\x07rage",
+      options: [
+        { label: "SQ\x1b[0mLite", description: "one\u202e file" },
+        { label: "Postgres" },
+      ],
+    }),
+  );
+  const schema = forms[0]?.requestedSchema as {
+    properties: Record<
+      string,
+      { title: string; description?: string; oneOf?: object[] }
+    >;
+  };
+  expect(schema.properties.question_0).toMatchObject({
+    title: "Storage",
+    description: "Which storage?",
+  });
+  expect(schema.properties.question_0?.oneOf?.[0]).toEqual({
+    const: "0",
+    title: "SQLite",
+    description: "one file",
+  });
+});
+
+test("the request carries the call's id, a fresh request id, the call's signal and the two callbacks", async () => {
+  const bus = createEventBus();
+  const { forms } = formHost(bus, () => ({ action: "decline" }));
+  const tool = registered("rpc", bus);
+  const controller = new AbortController();
+  await execute(tool, dialogs().ui, ask(), controller.signal);
+  await execute(tool, dialogs().ui, ask());
+  expect(forms[0]).toMatchObject({ toolCallId: "call" });
+  expect(forms[0]?.signal).toBe(controller.signal);
+  expect(typeof forms[0]?.id).toBe("string");
+  expect(forms[0]?.id).not.toBe(forms[1]?.id);
+  expect(forms[1]?.signal).toBeInstanceOf(AbortSignal);
+});
+
+test.each([
+  ["a pick is its option's label", ask(), { question_0: "1" }, "-> Postgres"],
+  [
+    "picks come back in option order, own words after them",
+    ask({ multiSelect: true }),
+    { question_0: ["1", "0"], question_0_custom: "  and\n  more " },
+    "-> SQLite; Postgres; [own words] and more",
+  ],
+  [
+    "own words alone are the answer, on one line",
+    ask(),
+    { question_0_custom: " mine\there " },
+    "-> [own words] mine here",
+  ],
+  [
+    "on a single choice with both a pick and own words, the own words win",
+    ask(),
+    { question_0: "0", question_0_custom: "neither" },
+    "-> [own words] neither",
+  ],
+  [
+    "a free-text answer is the user's words",
+    { questions: [{ question: "Name?", header: "Name" }] },
+    { question_0: "  a  b " },
+    "-> [own words] a b",
+  ],
+  [
+    "properties the form never asked for are ignored",
+    ask(),
+    { question_0: "0", question_7: "x", bogus: 1 },
+    "-> SQLite",
+  ],
+])("%s", async (_name, params, content, expected) => {
+  const bus = createEventBus();
+  formHost(bus, () => accept(content));
+  const result = await execute(registered("rpc", bus), dialogs().ui, params);
+  expect(result.content[0]).toMatchObject({ type: "text" });
+  expect(said(result)).toContain(expected);
+  expect(said(result)).not.toContain(UNANSWERED);
+});
+
+test("a question the form left out reaches the model as not answered, with the open-questions line", async () => {
+  const bus = createEventBus();
+  formHost(bus, () => accept({ question_1: "0" }));
+  const result = await execute(registered("rpc", bus), dialogs().ui, {
+    questions: [
+      STORAGE,
+      { ...STORAGE, question: "And the backup?", header: "Backup" },
+    ],
+  });
+  const text = said(result);
+  expect(text).toContain("-> (not answered)");
+  expect(text).toContain("And the backup? -> SQLite");
+  expect(text).toContain(UNANSWERED);
+  expect(result.details).toEqual({
+    outcome: "answered",
+    answers: [
+      { header: "Storage", answer: "" },
+      { header: "Backup", answer: "SQLite" },
+    ],
+  });
+});
+
+test.each([
+  ["every question omitted", {}],
+  ["only blank own words", { question_0_custom: "   " }],
+  ["content that is not an object", "yes"],
+  ["no content at all", undefined],
+  ["an empty pick for an untouched field", { question_0: "" }],
+])("an accepted form with %s is a decline", async (_name, content) => {
+  const bus = createEventBus();
+  formHost(bus, () => ({ action: "accept", content }));
+  const result = await execute(registered("rpc", bus), dialogs().ui);
+  expect(said(result)).toBe(DECLINED);
+  expect(result.details).toEqual({ outcome: "declined" });
+});
+
+test.each([
+  ["a pick that is not a string", ask(), { question_0: ["SENTINEL"] }],
+  ["an index that is not canonical", ask(), { question_0: "01" }],
+  ["an index past the last option", ask(), { question_0: "7" }],
+  [
+    "a multi-select pick that is not a list",
+    ask({ multiSelect: true }),
+    { question_0: "SENTINEL" },
+  ],
+  [
+    "the same pick twice",
+    ask({ multiSelect: true }),
+    { question_0: ["0", "0"] },
+  ],
+  ["own words that are not text", ask(), { question_0_custom: ["SENTINEL"] }],
+  [
+    "a free-text answer that is not text",
+    { questions: [{ question: "Name?", header: "Name" }] },
+    { question_0: ["SENTINEL"] },
+  ],
+])(
+  "an answer the form could not have produced (%s) is refused without echoing it",
+  async (_name, params, content) => {
+    const bus = createEventBus();
+    formHost(bus, () => accept(content));
+    const call = execute(registered("rpc", bus), dialogs().ui, params);
+    await expect(call).rejects.toThrow(REFUSED);
+    await expect(call).rejects.not.toThrow(/SENTINEL/);
+  },
+);
+
+test.each([
+  ["a decline", { action: "decline" }, DECLINED, false],
+  [
+    "a cancel while the host is cancelling the turn",
+    { action: "cancel", cancelling: true },
+    ABORTED,
+    true,
+  ],
+  ["a dismissed form", { action: "cancel" }, CLOSED, true],
+  ["an action the contract does not know", { action: "later" }, CLOSED, true],
+])(
+  "%s reaches the model as its own text",
+  async (_name, reply, text, isError) => {
+    const bus = createEventBus();
+    formHost(bus, () => reply);
+    const call = execute(registered("rpc", bus), dialogs().ui);
+    if (isError) await expect(call).rejects.toThrow(text);
+    else expect(said(await call)).toBe(text);
+  },
+);
+
+test("a host that refuses the request fails the call with the host's reason, which it tells the model in one line", async () => {
+  const bus = createEventBus();
+  formHost(bus, () => ({ action: "cancel", error: "no\nlive session" }));
+  await expect(execute(registered("rpc", bus), dialogs().ui)).rejects.toThrow(
+    "ask_user: the dialog failed (no live session); ask the question in your reply instead",
+  );
+});
+
+test("a host that advertises form requests but takes none fails the call, so the model asks in its reply instead", async () => {
+  const bus = createEventBus();
+  host(bus);
+  await expect(execute(registered("rpc", bus), dialogs().ui)).rejects.toThrow(
+    "ask_user: the dialog failed (no host took the form); ask the question in your reply instead",
+  );
+});
+
+test("a bus that refuses the form request fails the call with the refusal, so the model asks in its reply instead", async () => {
+  const bus = createEventBus();
+  host(bus);
+  const refusing: ExtensionAPI["events"] = {
+    on: (channel, handler) => bus.on(channel, handler),
+    emit: (channel, data) => {
+      if (channel === "tengi:form?")
+        throw new Error("Extension API is no longer active");
+      bus.emit(channel, data);
+    },
+  };
+  await expect(
+    execute(registered("rpc", refusing), dialogs().ui),
+  ).rejects.toThrow(
+    "ask_user: the dialog failed (the bus refused it: Extension API is no longer active); ask the question in your reply instead",
+  );
+});
+
+test("a cancel the host answers from the signal's own abort listener is the abort, not a closed form", async () => {
+  const bus = createEventBus();
+  formHost(bus, (form) => {
+    form.signal.addEventListener(
+      "abort",
+      () => form.respond({ action: "cancel" }),
+      { once: true },
+    );
+  });
+  const controller = new AbortController();
+  const call = execute(
+    registered("rpc", bus),
+    dialogs().ui,
+    ask(),
+    controller.signal,
+  );
+  controller.abort();
+  await expect(call).rejects.toThrow(ABORTED);
+});
+
+test("an abort while the form is open fails the call at once, aborts the form's signal, and a reply after it changes nothing", async () => {
+  const bus = createEventBus();
+  const { nextForm } = formHost(bus);
+  const controller = new AbortController();
+  const call = execute(
+    registered("rpc", bus),
+    dialogs().ui,
+    ask(),
+    controller.signal,
+  );
+  const form = await nextForm();
+  controller.abort();
+  await expect(call).rejects.toThrow(ABORTED);
+  expect(form.signal.aborted).toBe(true);
+  form.respond(accept({ question_0: "0" }));
+  await expect(call).rejects.toThrow(ABORTED);
+});
+
+test("an answer given before a late abort is kept, and a second reply is ignored", async () => {
+  const bus = createEventBus();
+  const { nextForm } = formHost(bus);
+  const controller = new AbortController();
+  const call = execute(
+    registered("rpc", bus),
+    dialogs().ui,
+    ask(),
+    controller.signal,
+  );
+  const form = await nextForm();
+  form.respond(accept({ question_0: "1" }));
+  form.respond({ action: "decline" });
+  controller.abort();
+  expect(said(await call)).toContain("-> Postgres");
+});
+
+test("two calls open one form at a time, in the order they arrived", async () => {
+  const bus = createEventBus();
+  const { forms, nextForm } = formHost(bus);
+  const tool = registered("rpc", bus);
+  const first = execute(tool, dialogs().ui, ask());
+  const second = execute(tool, dialogs().ui, ask({ header: "Second" }));
+  const one = await nextForm();
+  // the second emit can only follow the first call's release, so one form is all there is
+  expect(forms).toHaveLength(1);
+  one.respond(accept({ question_0: "0" }));
+  expect(said(await first)).toContain("-> SQLite");
+  const two = await nextForm();
+  expect(two.requestedSchema).toMatchObject({
+    properties: { question_0: { title: "Second" } },
+  });
+  two.respond({ action: "decline" });
+  expect(said(await second)).toBe(DECLINED);
+});
+
+test("in rpc, the model's ask_user call reaches the host as one form, and the answer comes back as the terminal's would; a reload changes nothing", async () => {
+  const bus = createEventBus();
+  const { forms } = formHost(bus, () => accept({ question_0: "1" }));
+  const { session, requests } = await parentSession({
+    mode: "rpc",
+    eventBus: bus,
+    // one ask per prompt: "a" on the first, "b" on the second, then done
+    respond: (context) => {
+      if (context.messages.at(-1)?.role === "toolResult")
+        return fauxAssistantMessage("done");
+      const prompts = context.messages.filter((m) => m.role === "user").length;
+      return fauxAssistantMessage([askCall(prompts === 1 ? "a" : "b")]);
+    },
+  });
+  await session.prompt("go");
+  expect(toolsSeen(requests[0]!)).toContain("ask_user");
+  expect(forms).toHaveLength(1);
+  expect(forms[0]?.toolCallId).toBe("a");
+  const first = results(session).get("a")!;
+  expect(first.isError).toBeFalsy();
+  expect(textOf(first)).toContain(
+    "Which storage should the cache use? -> Postgres",
+  );
+
+  await session.reload();
+  await session.prompt("again");
+  expect(forms).toHaveLength(2);
+  expect(textOf(results(session).get("b")!)).toContain("-> Postgres");
 });

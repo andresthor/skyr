@@ -1,0 +1,93 @@
+{
+  "questions": [
+    {
+      "question": "Which storage should the cache use?",
+      "header": "Storage",
+      "options": [
+        { "label": "SQLite", "description": "One file, no server", "recommended": true },
+        { "label": "Postgres" }
+      ]
+    },
+    {
+      "question": "Which features should ship?",
+      "header": "Features",
+      "multiSelect": true,
+      "options": [{ "label": "Auth" }, { "label": "Billing" }, { "label": "SSO" }]
+    },
+    { "question": "What should it be called?", "header": "Name" },
+    {
+      "question": "Which region first?",
+      "header": "Region",
+      "options": [
+        { "label": "EU", "description": "Frankfurt" },
+        { "label": "US", "description": "Virginia" }
+      ]
+    }
+  ],
+  "message": "Please answer the following questions.",
+  "requestedSchema": {
+    "type": "object",
+    "properties": {
+      "question_0": {
+        "type": "string",
+        "title": "Storage",
+        "description": "Which storage should the cache use?",
+        "oneOf": [
+          {
+            "const": "0",
+            "title": "SQLite",
+            "description": "One file, no server",
+            "_meta": { "agentui/option": { "recommended": true } }
+          },
+          { "const": "1", "title": "Postgres" }
+        ]
+      },
+      "question_0_custom": {
+        "type": "string",
+        "title": "Other",
+        "description": "Type your own answer instead",
+        "_meta": { "agentui/field": { "otherFor": "question_0", "exclusiveWith": "question_0" } }
+      },
+      "question_1": {
+        "type": "array",
+        "title": "Features",
+        "description": "Which features should ship?",
+        "items": {
+          "anyOf": [
+            { "const": "0", "title": "Auth" },
+            { "const": "1", "title": "Billing" },
+            { "const": "2", "title": "SSO" }
+          ]
+        },
+        "maxItems": 3
+      },
+      "question_1_custom": {
+        "type": "string",
+        "title": "Other",
+        "description": "Add your own answer to your picks",
+        "_meta": { "agentui/field": { "otherFor": "question_1" } }
+      },
+      "question_2": {
+        "type": "string",
+        "title": "Name",
+        "description": "What should it be called?"
+      },
+      "question_3": {
+        "type": "string",
+        "title": "Region",
+        "description": "Which region first?",
+        "oneOf": [
+          { "const": "0", "title": "EU", "description": "Frankfurt" },
+          { "const": "1", "title": "US", "description": "Virginia" }
+        ]
+      },
+      "question_3_custom": {
+        "type": "string",
+        "title": "Other",
+        "description": "Type your own answer instead",
+        "_meta": { "agentui/field": { "otherFor": "question_3", "exclusiveWith": "question_3" } }
+      }
+    },
+    "required": []
+  }
+}

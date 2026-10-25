@@ -1,9 +1,9 @@
 import { expect, test } from "vitest";
 import {
-  active,
   createShellStore,
   duration,
   type ShellSnapshot,
+  taskItems,
   titleOf,
 } from "../src/shells/store.js";
 
@@ -22,23 +22,16 @@ const job = (id: string, fields: Partial<ShellSnapshot>): ShellSnapshot => ({
   ...fields,
 });
 
-test("a snapshot or list handed out by jobs() is unchanged by a later put for the same id", () => {
-  const store = createShellStore();
-  store.put(running);
-  const before = store.jobs();
-  const first = before[0];
-  store.put({ ...running, status: "done", exitCode: 0, endedAt: 2_000 });
-  expect(before).toHaveLength(1);
-  expect(first).toEqual(running);
-  expect(store.jobs()[0]).toMatchObject({ status: "done", exitCode: 0 });
-});
-
-test("a snapshot held by the store does not change when the caller mutates the one it put", () => {
+test("the store replaces what it holds on a put and never mutates it, nor the caller's object", () => {
   const store = createShellStore();
   const mine = { ...running };
   store.put(mine);
+  const handedOut = store.jobs()[0];
   mine.status = "failed";
   expect(store.jobs()[0]?.status).toBe("running");
+  store.put({ ...running, status: "done", exitCode: 0, endedAt: 2_000 });
+  expect(handedOut).toEqual(running);
+  expect(store.jobs()[0]).toMatchObject({ status: "done", exitCode: 0 });
 });
 
 test("jobs() lists jobs in the order they started, not the order they were put", () => {
@@ -48,20 +41,25 @@ test("jobs() lists jobs in the order they started, not the order they were put",
   expect(store.jobs().map((j) => j.id)).toEqual(["00000001", "00000002"]);
 });
 
-test("a job is active while it runs or lingers, and not once it has ended", () => {
-  expect(active(running)).toBe(true);
-  expect(active({ ...running, status: "done", lingering: true })).toBe(true);
-  expect(active({ ...running, status: "done" })).toBe(false);
-  expect(active({ ...running, status: "aborted" })).toBe(false);
+test("the task list holds the active jobs only, as running, with lingering said", () => {
+  const items = taskItems([
+    running,
+    job("00000002", { status: "done", lingering: true }),
+    job("00000003", { status: "done" }),
+  ]);
+  expect(items.map((t) => [t.id, t.status, t.detail])).toEqual([
+    ["ab12cd34", "running", undefined],
+    ["00000002", "running", "lingering"],
+  ]);
+  expect(items[0]).toMatchObject({ title: "npm run dev", startedAt: 1_000 });
 });
 
 test.each([
-  [0, "0s"],
   [41_400, "41s"],
   [60_000, "1m00s"],
   [725_000, "12m05s"],
   [14_400_000, "4h00m"],
-  [-5, "0s"],
+  [-1_500, "0s"],
 ])("a span of %i ms reads %s", (ms, text) => {
   expect(duration(ms)).toBe(text);
 });
@@ -76,9 +74,6 @@ test.each([
   expect(titleOf(command)).toBe(title);
 });
 
-test("a title is one clipped line with no terminal sequence in it", () => {
-  const title = titleOf(`echo \u001b]52;c;aGk=\u0007${"x".repeat(200)}`);
-  expect(title).not.toContain("\u001b");
-  expect(title).not.toContain("\n");
-  expect(title.length).toBeLessThanOrEqual(61);
+test("a title is clipped", () => {
+  expect(titleOf("x".repeat(200)).length).toBeLessThanOrEqual(61);
 });

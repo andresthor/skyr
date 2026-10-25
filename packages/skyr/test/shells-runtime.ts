@@ -9,9 +9,11 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
+  type CreateAgentSessionRuntimeFactory,
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
+  defineTool,
   type ExtensionContext,
   type ExtensionFactory,
   type ExtensionUIContext,
@@ -19,12 +21,14 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { onTestFinished } from "vitest";
 import { registerSkyr } from "../src/index.js";
 import { loadPi } from "../src/pi.js";
 import { type ShellsDeps, wireShells } from "../src/shells/index.js";
 import { identify } from "../src/shells/job.js";
 import { registerWebFetch } from "../src/tools/web-fetch.js";
+import { textOf } from "./session.js";
 
 /**
  * skyr's shells alone, with their test seams. `web_fetch` is registered because skyr's reload
@@ -63,7 +67,6 @@ export interface ShellRuntime {
   notices: string[];
   /** Every widget set, in order; `undefined` clears it. */
   widgets: (string[] | undefined)[];
-  /** Every request the model received. */
   requests: TranscriptContext[];
   /** `structuredContent` of each tool result, by tool-call id. */
   structured: Map<string, unknown>;
@@ -71,28 +74,24 @@ export interface ShellRuntime {
   updates: Map<string, unknown[]>;
   /** The agent dir the session's settings are read from. */
   agentDir: string;
-  /** Resolves with the text of the next message skyr delivers about a background job. */
+  /** The text of the next message skyr delivers about a background job. */
   nextDelivery(): Promise<string>;
   /** Ends the session as `/quit` does, awaiting every `session_shutdown` handler. */
   quit(): Promise<void>;
-  /** `/new`, bound to a UI as Pi's modes do. */
   newSession(): Promise<void>;
-  /** `/resume` of an earlier session file. */
   resume(file: string): Promise<void>;
 }
 
 /**
  * A session built the way Pi's modes build one, through `createAgentSessionRuntime`, so `/new`
- * and `/resume` make a fresh set of services and extension instances. It is bound to a UI,
- * because Pi emits `session_start` after a reload only for a bound session; the default
- * mode is `tui`, never the print mode extensions see unbound. Disposed when the test ends.
+ * and `/resume` make fresh extension instances. It is bound to a UI, because Pi emits
+ * `session_start` after a reload only for a bound session; the default mode is `tui`.
  */
 export async function shellRuntime(
   o: {
     respond?: FauxResponseFactory;
     /** In load order; skyr is `registerSkyr`, so a test places others before or after it. */
     extensions?: ExtensionFactory[];
-    /** Written into the agent dir's settings.json. */
     settings?: Record<string, unknown>;
     customTools?: ToolDefinition[];
     mode?: ExtensionContext["mode"];
@@ -104,8 +103,7 @@ export async function shellRuntime(
     mkdirSync(dir);
     return dir;
   }) as [string, string, string];
-  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const restoreAgentDir = useAgentDir(agentDir);
   writeFileSync(
     join(agentDir, "settings.json"),
     JSON.stringify({
@@ -117,13 +115,12 @@ export async function shellRuntime(
 
   const faux = fauxProvider({ models: [{ id: "faux-1" }] });
   const requests: TranscriptContext[] = [];
+  const respond = o.respond ?? (() => fauxAssistantMessage("done"));
   faux.setResponses(
+    // Faux consumes one response per request; more than any test makes
     Array.from({ length: 50 }, () => (context, ...rest) => {
       requests.push(context);
-      return (o.respond ?? (() => fauxAssistantMessage("done")))(
-        context,
-        ...rest,
-      );
+      return respond(context, ...rest);
     }),
   );
   const modelRuntime = await ModelRuntime.create({
@@ -148,18 +145,11 @@ export async function shellRuntime(
     });
   };
 
-  const create = async ({
+  const create: CreateAgentSessionRuntimeFactory = async ({
     cwd,
     agentDir,
     sessionManager,
     sessionStartEvent,
-  }: {
-    cwd: string;
-    agentDir: string;
-    sessionManager: SessionManager;
-    sessionStartEvent?: Parameters<
-      typeof createAgentSessionFromServices
-    >[0]["sessionStartEvent"];
   }) => {
     const services = await createAgentSessionServices({
       cwd,
@@ -206,10 +196,10 @@ export async function shellRuntime(
     quit ??= runtime.dispose();
     return quit;
   };
+  // Restored only after the shutdown handlers ran: they find their jobs under the agent dir
   onTestFinished(async () => {
     await dispose();
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    restoreAgentDir();
     rmSync(root, { recursive: true, force: true });
   });
   return {
@@ -227,32 +217,59 @@ export async function shellRuntime(
             event.message.customType === "skyr.shell"
           ) {
             off();
-            const { content } = event.message;
-            resolve(
-              typeof content === "string"
-                ? content
-                : content
-                    .map((c) => (c.type === "text" ? c.text : ""))
-                    .join(""),
-            );
+            resolve(textOf(event.message as never));
           }
         });
+        onTestFinished(off);
       }),
     notices,
     widgets,
     requests,
     structured,
     updates,
-    async newSession() {
-      await runtime.newSession();
-    },
-    async resume(file: string) {
-      await runtime.switchSession(file);
-    },
+    newSession: async () => void (await runtime.newSession()),
+    resume: async (file: string) => void (await runtime.switchSession(file)),
   };
 }
 
-/** The `bash` Pi has in effect, with where it came from. */
-export function bashInEffect(session: AgentSession) {
-  return session.getAllTools().find((t) => t.name === "bash");
+/** Points `getAgentDir()` at `dir`; the returned function puts the previous one back. */
+export function useAgentDir(dir: string): () => void {
+  // test/setup.ts always sets one
+  const previous = process.env.PI_CODING_AGENT_DIR as string;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  return () => {
+    process.env.PI_CODING_AGENT_DIR = previous;
+  };
+}
+
+export const toolNamed = (session: AgentSession, name: string) =>
+  session.getAllTools().find((t) => t.name === name);
+
+/** skyr registers `bash` and `bash_stop` together, so the same extension file provides both. */
+export function skyrServesBash(session: AgentSession): boolean {
+  const bash = toolNamed(session, "bash");
+  return (
+    bash?.sourceInfo.source !== "builtin" &&
+    bash?.sourceInfo.path === toolNamed(session, "bash_stop")?.sourceInfo.path
+  );
+}
+
+/** A tool that runs `bash` with `args` as a nested call, as a codemode script does; its text is `show(outcome)`. */
+export function nestTool(
+  args: Record<string, unknown>,
+  show: (outcome: unknown) => unknown = (outcome) => outcome,
+): ToolDefinition {
+  return defineTool({
+    name: "nest",
+    label: "nest",
+    description: "Runs bash as a nested call.",
+    parameters: Type.Object({}),
+    async execute(_id, _params, _signal, _onUpdate, ctx) {
+      const outcome = await ctx.executeTool("bash", args);
+      return {
+        content: [{ type: "text", text: JSON.stringify(show(outcome)) }],
+        details: undefined,
+      };
+    },
+  }) as unknown as ToolDefinition;
 }

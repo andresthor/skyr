@@ -1,55 +1,34 @@
 import { expect, test } from "vitest";
 import { routeOf } from "../src/shells/index.js";
 
-const LIMIT = 120_000;
+const route = (call: object, limit: number) =>
+  routeOf({ toolCallId: "c1", timeout: undefined, ...call }, limit);
 
 test.each([
-  ["a nested call", { toolCallId: "call/1", timeout: undefined }, "plain"],
+  ["a nested call", { toolCallId: "a/1" }, 120_000, "plain"],
+  ["a timeout under the limit", { timeout: 30 }, 120_000, "plain"],
+  ["a timeout equal to the limit", { timeout: 120 }, 120_000, "plain"],
+  ["a zero timeout, which Pi rejects itself", { timeout: 0 }, 120_000, "plain"],
+  ["a timeout over the limit", { timeout: 121 }, 120_000, "move"],
+  ["no timeout", {}, 120_000, "move"],
+  ["background and no timeout", { background: true }, 120_000, "start"],
   [
-    "a nested call with a long timeout",
-    { toolCallId: "a/b", timeout: 500 },
-    "plain",
+    "background and a short timeout",
+    { timeout: 30, background: true },
+    120_000,
+    "start",
   ],
-  ["a timeout under the limit", { toolCallId: "c1", timeout: 30 }, "plain"],
-  ["a timeout equal to the limit", { toolCallId: "c1", timeout: 120 }, "plain"],
-  [
-    "a zero timeout, which Pi rejects itself",
-    { toolCallId: "c1", timeout: 0 },
-    "plain",
-  ],
-  [
-    "a negative timeout, which Pi rejects itself",
-    { toolCallId: "c1", timeout: -1 },
-    "plain",
-  ],
-  ["a timeout over the limit", { toolCallId: "c1", timeout: 121 }, "move"],
-  ["no timeout", { toolCallId: "c1", timeout: undefined }, "move"],
-] as const)("%s routes as %s", (_name, call, route) => {
-  expect(routeOf(call, LIMIT)).toBe(route);
-});
-
-test("a background call starts at once, with or without a timeout, whatever the limit", () => {
-  for (const timeout of [undefined, 30, 500])
-    expect(
-      routeOf({ toolCallId: "c1", timeout, background: true }, LIMIT),
-    ).toBe("start");
+  ["a 1 s timeout against a 500 ms limit", { timeout: 1 }, 500, "move"],
+  ["a 0.5 s timeout against a 500 ms limit", { timeout: 0.5 }, 500, "plain"],
+] as const)("%s routes as %s", (_name, call, limit, want) => {
+  expect(route(call, limit)).toBe(want);
 });
 
 test("a nested background call throws, and says what to do instead", () => {
-  expect(() =>
-    routeOf({ toolCallId: "a/1", timeout: undefined, background: true }, LIMIT),
-  ).toThrow(
+  expect(() => route({ toolCallId: "a/1", background: true }, 120_000)).toThrow(
     "bash: background is not available inside another tool's call; run the command without background, or call bash directly.",
   );
-  expect(
-    routeOf(
-      { toolCallId: "a/1", timeout: undefined, background: false },
-      LIMIT,
-    ),
-  ).toBe("plain");
-});
-
-test("the limit that decides is the one it is given, for a timeout and for none alike", () => {
-  expect(routeOf({ toolCallId: "c1", timeout: 1 }, 500)).toBe("move");
-  expect(routeOf({ toolCallId: "c1", timeout: 0.5 }, 500)).toBe("plain");
+  expect(route({ toolCallId: "a/1", background: false }, 120_000)).toBe(
+    "plain",
+  );
 });

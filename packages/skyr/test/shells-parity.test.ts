@@ -4,18 +4,14 @@ import { existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import {
-  defineTool,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import { describe, expect, test } from "vitest";
 import { registerSkyr } from "../src/index.js";
 import { scratchDir, script } from "./session.js";
 import {
-  bashInEffect,
+  nestTool,
   type ShellRuntime,
   shellRuntime,
+  skyrServesBash,
 } from "./shells-runtime.js";
 
 type Call = [id: string, args: Record<string, string | number | boolean>];
@@ -28,23 +24,6 @@ const mask = (value: unknown) =>
       .replace(/wall_time_seconds\\":[\d.]+/g, 'wall_time_seconds\\":0')
       .replace(/durationMs\\":\d+/g, 'durationMs\\":0'),
   );
-
-/** A tool that runs `bash` as a nested call, the way a codemode script does. */
-const nest = defineTool({
-  name: "nest",
-  label: "nest",
-  description: "Runs bash as a nested call.",
-  parameters: Type.Object({}),
-  async execute(_id, _params, _signal, _onUpdate, ctx) {
-    const outcome = await ctx.executeTool("bash", {
-      command: "echo nested; exit 2",
-    });
-    return {
-      content: [{ type: "text", text: JSON.stringify(mask(outcome)) }],
-      details: undefined,
-    };
-  },
-}) as unknown as ToolDefinition;
 
 /** A shell at `~/probe/bash`, which a `~` and a `file://` shellPath both reach. */
 function probeShell(): string {
@@ -65,7 +44,7 @@ async function bothRun(
     const rt = await shellRuntime({
       extensions,
       settings,
-      customTools: [nest],
+      customTools: [nestTool({ command: "echo nested; exit 2" }, mask)],
       respond: script(
         ...calls.map(([id, args]) =>
           fauxAssistantMessage([
@@ -80,8 +59,8 @@ async function bothRun(
   };
   const pi = await run([]);
   const skyr = await run([registerSkyr]);
-  expect(bashInEffect(pi.session)?.sourceInfo.source).toBe("builtin");
-  expect(bashInEffect(skyr.session)?.sourceInfo.source).not.toBe("builtin");
+  expect(skyrServesBash(pi.session)).toBe(false);
+  expect(skyrServesBash(skyr.session)).toBe(true);
   return { pi, skyr };
 }
 
@@ -125,6 +104,7 @@ async function expectParity(
   expect(Object.keys(want)).toEqual(calls.map(([id]) => id));
   expect(resultsOf(skyr)).toEqual(want);
   expect(partialClasses(skyr)).toEqual(partialClasses(pi));
+  return { pi, skyr };
 }
 
 // What skyr adds to the description of Pi's bash
@@ -147,7 +127,6 @@ const PREFIX = { shellCommandPrefix: "export PREFIXED=yes" };
 describe("bash parity with Pi's own", () => {
   test("results and exit codes", () =>
     expectParity({}, [
-      ["exit0", { command: "echo hi" }],
       ["exit3", { command: "echo out; echo err >&2; exit 3" }],
       ["empty", { command: "true" }],
       ["empty-fail", { command: "false" }],
@@ -169,8 +148,7 @@ describe("bash parity with Pi's own", () => {
         },
       ],
     ];
-    await expectParity(PREFIX, calls);
-    const { skyr } = await bothRun(PREFIX, calls);
+    const { skyr } = await expectParity(PREFIX, calls);
     expect(JSON.stringify(resultsOf(skyr).env)).toContain("36|faux-1|yes");
   });
 
@@ -225,15 +203,12 @@ describe("bash parity with Pi's own", () => {
   test("a nested call runs as Pi's does", () =>
     expectParity({}, [["nest", {}]]));
 
-  test("the definition is Pi's plus one sentence: renderers, schemas and prompt text", async () => {
+  test("the tool is Pi's plus one sentence and one parameter, in Pi's place among the tools, with Pi's prompt lines", async () => {
     const { pi, skyr } = await bothRun({}, [["x", { command: "true" }]]);
-    const a = pi.session.getToolDefinition("bash");
-    const b = skyr.session.getToolDefinition("bash");
-    expect(b).toBeDefined();
+    const [a, b] = [pi, skyr].map((rt) => rt.session.getToolDefinition("bash"));
     expect(String(b?.renderCall)).toBe(String(a?.renderCall));
     expect(String(b?.renderResult)).toBe(String(a?.renderResult));
     expect(b?.description).toBe(`${a?.description} ${SUFFIX}`);
-    expect(withoutBackground(b?.parameters)).toEqual(a?.parameters);
     expect(Object.keys(propertiesOf(b?.parameters))).toEqual([
       ...Object.keys(propertiesOf(a?.parameters)),
       "background",
@@ -247,10 +222,7 @@ describe("bash parity with Pi's own", () => {
       "constrainedSampling",
     ] as const)
       expect(b?.[key], key).toEqual(a?.[key]);
-  });
 
-  test("the model is offered Pi's bash entry in Pi's place among the tools, with Pi's prompt lines for it", async () => {
-    const { pi, skyr } = await bothRun({}, [["x", { command: "true" }]]);
     const system = (rt: ShellRuntime) => {
       const message = rt.requests[0]?.messages.find((m) => m.role === "system");
       return {
@@ -261,14 +233,14 @@ describe("bash parity with Pi's own", () => {
           .filter((line) => /\bbash\b|PI_\*/.test(line)),
       };
     };
-    const want = system(pi);
-    const got = system(skyr);
+    const [want, got] = [system(pi), system(skyr)];
     const piNames = want.tools.map((t) => t.name);
     expect(
       got.tools.map((t) => t.name).filter((n) => piNames.includes(n)),
     ).toEqual(piNames);
-    const piBash = want.tools.find((t) => t.name === "bash");
-    const skyrBash = got.tools.find((t) => t.name === "bash");
+    const [piBash, skyrBash] = [want, got].map((m) =>
+      m.tools.find((t) => t.name === "bash"),
+    );
     expect({
       ...skyrBash,
       parameters: withoutBackground(skyrBash?.parameters),

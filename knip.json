@@ -5,7 +5,11 @@
       "entry": ["bin/*.mjs"]
     },
     "packages/skyr": {
-      "entry": ["src/subagent/child/main.ts!", "test/fixtures/proc/*.js"],
+      "entry": [
+        "src/subagent/child/main.ts!",
+        "test/fixtures/proc/*.js",
+        "test/fixtures/tengi/*.ts"
+      ],
       "project": ["src/**/*.ts!", "test/**/*.{ts,js}"]
     }
   }

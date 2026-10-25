@@ -1,6 +1,5 @@
-// Scripted model for tengi-smoke: provider `wbfaux`, model `scripted`, loaded by tengi with
-// `--extension`. The last user message `@<script> <json>` picks a reply; anything else gets a
-// quick one. A tool result always gets closing text, so a tool turn never loops.
+// Scripted model for tengi-smoke (provider `wbfaux`). The last user message `@<script> <json>`
+// picks a reply, anything else a quick one; a tool result always ends the turn.
 import {
   type Api,
   createFauxCore,
@@ -16,7 +15,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const PROVIDER = "wbfaux";
 const MODEL = {
   id: "scripted",
-  name: "Scripted (faux)",
+  name: "Scripted",
   reasoning: false,
   input: ["text" as const],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -29,25 +28,24 @@ const isJsonObject = (v: unknown): v is JsonObject =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
 function lastUserText(context: TranscriptContext): string {
-  const user = [...context.messages].reverse().find((m) => m.role === "user");
-  if (!user) return "";
-  if (typeof user.content === "string") return user.content;
-  return user.content.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+  const content = [...context.messages]
+    .reverse()
+    .find((m) => m.role === "user")?.content;
+  if (typeof content === "string") return content;
+  return (content ?? [])
+    .map((b) => (b.type === "text" ? b.text : ""))
+    .join("\n");
 }
 
-/** `@<script>` or `@<script> <json>`; malformed JSON reads as `{}`. */
+/** `@<script>` or `@<script> <json>`; malformed JSON throws, so a typo cannot run a wrong script. */
 function parseDirective(
   text: string,
 ): { script: string; args: JsonObject } | undefined {
   const m = /^@(\S+)(?:\s+([\s\S]+))?$/.exec(text.trim());
   if (!m?.[1]) return undefined;
-  let args: unknown = {};
-  try {
-    args = m[2] === undefined ? {} : JSON.parse(m[2]);
-  } catch {
-    args = {};
-  }
-  return { script: m[1], args: isJsonObject(args) ? args : {} };
+  const args: unknown = m[2] === undefined ? {} : JSON.parse(m[2]);
+  if (!isJsonObject(args)) throw new Error(`@${m[1]} needs a JSON object`);
+  return { script: m[1], args };
 }
 
 /** The tools declared to the model: what system messages added and did not later remove. */
@@ -61,47 +59,25 @@ function declaredToolNames(context: TranscriptContext): string[] {
   return [...names];
 }
 
-let calls = 0;
-
 function script(context: TranscriptContext) {
-  calls++;
   if (context.messages.at(-1)?.role === "toolResult")
     return fauxAssistantMessage("The command finished.");
   const directive = parseDirective(lastUserText(context));
-  const id = `call-${calls}`;
   switch (directive?.script) {
     case "tools":
       return fauxAssistantMessage(
         `declared tools: ${declaredToolNames(context).join(",")}`,
       );
-    case "bash": {
-      const command = directive.args.command;
-      return fauxAssistantMessage(
-        [
-          fauxToolCall(
-            "bash",
-            { command: typeof command === "string" ? command : "true" },
-            { id },
-          ),
-        ],
-        { stopReason: "toolUse" },
-      );
-    }
     case "tool": {
       const { name, args } = directive.args;
-      return fauxAssistantMessage(
-        [
-          fauxToolCall(
-            typeof name === "string" ? name : "unknown",
-            isJsonObject(args) ? args : {},
-            { id },
-          ),
-        ],
-        { stopReason: "toolUse" },
-      );
+      if (typeof name !== "string" || !isJsonObject(args))
+        throw new Error("@tool needs a string name and object args");
+      return fauxAssistantMessage([fauxToolCall(name, args)], {
+        stopReason: "toolUse",
+      });
     }
     default:
-      return fauxAssistantMessage(`quick reply (call ${calls})`);
+      return fauxAssistantMessage("quick reply");
   }
 }
 

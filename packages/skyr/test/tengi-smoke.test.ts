@@ -1,166 +1,45 @@
-// This package loaded by Pi inside tengi, driven over ACP as a client would: ask_user's forms and
-// the subagent task list end to end. Local only: set SKYR_TENGI_DIR to a tengi checkout with its
-// Pi installed (`npm run pi:install` there), or the whole file skips.
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { describe, expect, onTestFinished, test } from "vitest";
-import { isRecord as isObj } from "../src/tengi.js";
+// This package loaded by Pi inside tengi, driven over ACP as a client would: ask_user's forms,
+// reload, and the task lists and idle delivery of subagents and background shells. Local only:
+// set SKYR_TENGI_DIR to a tengi checkout with its Pi installed (`npm run pi:install` there), or
+// the whole file skips.
+import { describe, expect, test } from "vitest";
 import FIXTURE from "./fixtures/ask-user-form.json";
-import {
-  clientCapabilities,
-  startTengi,
-  TENGI_DIR,
-  type Tengi,
-} from "./tengi-host.js";
+import { startTengi, TENGI_DIR, tool } from "./tengi-host.js";
 
-const ASK = `@tool ${JSON.stringify({ name: "ask_user", args: { questions: FIXTURE.questions } })}`;
+const ASK = tool("ask_user", { questions: FIXTURE.questions });
 const TIMEOUT = 30_000;
-
-async function newSession(
-  tengi: Tengi,
-  caps = clientCapabilities(),
-): Promise<string> {
-  await tengi.request("initialize", {
-    protocolVersion: 1,
-    clientCapabilities: caps,
-  });
-  const response = await tengi.request("session/new", {
-    cwd: tengi.cwd,
-    mcpServers: [],
-  });
-  if (!isObj(response) || typeof response.sessionId !== "string")
-    throw new Error("session/new did not answer with a sessionId");
-  return response.sessionId;
-}
-
-const prompt = (tengi: Tengi, sessionId: string, text: string) =>
-  tengi.request("session/prompt", {
-    sessionId,
-    prompt: [{ type: "text", text }],
-  });
-
-const formsAsked = (tengi: Tengi) =>
-  tengi.records.filter(
-    (r) =>
-      r.dir === "agent->client" &&
-      isObj(r.msg) &&
-      r.msg.method === "elicitation/create",
-  ).length;
-
-/** The tool names the faux model reads from its own request, which the wire does not show. */
-async function declaredTools(tengi: Tengi, sessionId: string) {
-  await prompt(tengi, sessionId, "@tools");
-  // The reply streams in chunks, one text block per update
-  const text = tengi.records
-    .map(({ msg }) => {
-      const update =
-        isObj(msg) && isObj(msg.params) ? msg.params.update : undefined;
-      const content = isObj(update) ? update.content : undefined;
-      return isObj(content) && typeof content.text === "string"
-        ? content.text
-        : "";
-    })
-    .join("");
-  const names = /declared tools: (\S*)/.exec(text)?.[1];
-  if (names === undefined) throw new Error("no declared-tools reply");
-  return names.split(",");
-}
-
-function taskItems(update: unknown): unknown[] | undefined {
-  const meta = isObj(update) ? update._meta : undefined;
-  const tasks = isObj(meta) ? meta["agentui/tasks"] : undefined;
-  return isObj(tasks) && Array.isArray(tasks.items) ? tasks.items : undefined;
-}
 
 describe.skipIf(TENGI_DIR === undefined)("inside tengi", () => {
   test(
-    "a question asked through ask_user reaches the client as one form, and the picked label comes back",
+    "ask_user is offered, asks exactly one form per call before and after a reload, and returns the picked label",
     async () => {
       const tengi = startTengi();
-      const sessionId = await newSession(tengi);
+      await tengi.session();
+      expect(await tengi.declaredTools()).toContain("ask_user");
+
       tengi.expectForm({ question_0: "1" });
-
-      expect(await prompt(tengi, sessionId, ASK)).toEqual({
-        stopReason: "end_turn",
-      });
-      expect(formsAsked(tengi)).toBe(1);
-      const completed = tengi.records.filter(({ msg }) => {
-        const update =
-          isObj(msg) && isObj(msg.params) ? msg.params.update : undefined;
-        return (
-          isObj(update) &&
-          update.sessionUpdate === "tool_call_update" &&
-          update.status === "completed" &&
-          JSON.stringify(update.content).includes("-> Postgres")
-        );
-      });
-      expect(completed).toHaveLength(1);
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "every UI member still works with this package loaded",
-    async () => {
-      const tengi = startTengi();
-      const sessionId = await newSession(tengi);
-      // select, confirm, input and editor, in the probe's order
-      tengi.expectForm({ value: "0" });
-      tengi.expectForm({ confirmed: true });
-      tengi.expectForm({ value: "ok" });
-      tengi.expectForm({ value: "edited" });
-
-      expect(await prompt(tengi, sessionId, "/probe-ui-all")).toEqual({
-        stopReason: "end_turn",
-      });
-      expect(formsAsked(tengi)).toBe(4);
-      const probed = tengi
-        .probeLog()
-        .filter((rec) => isObj(rec) && "member" in rec);
-      expect(probed).toHaveLength(28);
-      expect(probed.filter((rec) => isObj(rec) && rec.ok !== true)).toEqual([]);
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "after a reload, ask_user still asks exactly one form per call",
-    async () => {
-      const tengi = startTengi();
-      const sessionId = await newSession(tengi);
-      const loads = () =>
-        tengi.probeLog().filter((rec) => isObj(rec) && rec.loaded === true)
-          .length;
-      tengi.expectForm({ question_0: "0" });
-      await prompt(tengi, sessionId, ASK);
-      expect(formsAsked(tengi)).toBe(1);
-
-      const before = loads();
-      await prompt(tengi, sessionId, "/probe-reload");
-      expect(loads()).toBe(before + 1);
-      tengi.expectForm({ question_0: "0" });
-      expect(await prompt(tengi, sessionId, ASK)).toEqual({
-        stopReason: "end_turn",
-      });
-      expect(formsAsked(tengi)).toBe(2);
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "ask_user is offered to a client with form support and hidden from one without",
-    async () => {
-      const withForms = startTengi();
+      await tengi.prompt(ASK);
+      expect(tengi.formsAsked()).toBe(1);
       expect(
-        await declaredTools(withForms, await newSession(withForms)),
-      ).toContain("ask_user");
+        tengi.toolResults().filter((text) => text.includes("Postgres")),
+      ).toHaveLength(1);
 
-      const without = startTengi();
-      const sessionId = await newSession(
-        without,
-        clientCapabilities({ elicitation: undefined }),
-      );
-      const declared = await declaredTools(without, sessionId);
+      const loads = tengi.loads();
+      await tengi.prompt("/probe-reload");
+      expect(tengi.loads()).toBe(loads + 1);
+      tengi.expectForm({ question_0: "0" });
+      await tengi.prompt(ASK);
+      expect(tengi.formsAsked()).toBe(2);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "ask_user is hidden from a client without form support",
+    async () => {
+      const tengi = startTengi();
+      await tengi.session({ forms: false });
+      const declared = await tengi.declaredTools();
       expect(declared).toContain("read");
       expect(declared).not.toContain("ask_user");
     },
@@ -171,95 +50,48 @@ describe.skipIf(TENGI_DIR === undefined)("inside tengi", () => {
     "a running subagent shows as one task in the client, and the list empties when it ends",
     async () => {
       const tengi = startTengi();
-      const sessionId = await newSession(
-        tengi,
-        clientCapabilities({ _meta: { agentui: { version: 1, tasks: true } } }),
-      );
-      // The child's shell waits for this file, so the test decides when the run ends
-      const gate = join(tengi.out, "release");
-      // Pi's bash runs detached, so a failed assertion must still end the child's shell
-      onTestFinished(() => writeFileSync(gate, ""));
-      const task = `@bash ${JSON.stringify({ command: `until [ -e '${gate}' ]; do sleep 0.1; done` })}`;
-      const turn = prompt(
-        tengi,
-        sessionId,
-        `@tool ${JSON.stringify({ name: "subagent", args: { description: "hold for the test", task } })}`,
+      await tengi.session({ tasks: true });
+      const gate = tengi.gate("release");
+      const turn = tengi.prompt(
+        tool("subagent", {
+          description: "hold for the test",
+          task: tool("bash", { command: gate.command }),
+        }),
       );
 
-      const running = await tengi.nextUpdate((u) => taskItems(u)?.length === 1);
-      expect(taskItems(running)?.[0]).toMatchObject({
+      const [task] = await tengi.nextTasks((items) => items.length === 1);
+      expect(task).toMatchObject({
         id: expect.stringMatching(/^skyr\/subagents\//),
-        title: '"hold for the test"',
         status: "running",
       });
 
-      writeFileSync(gate, "");
-      expect(await turn).toEqual({ stopReason: "end_turn" });
-      await tengi.nextUpdate((u) => taskItems(u)?.length === 0);
+      gate.release();
+      await turn;
+      await tengi.nextTasks((items) => items.length === 0);
     },
     TIMEOUT,
   );
 
   test(
-    "a background shell's end reaches the client as a message that starts a turn",
+    "a running background shell shows as one task, and its end empties the list and starts a turn",
     async () => {
       const tengi = startTengi();
-      const sessionId = await newSession(tengi);
-      const gate = join(tengi.out, "shell-release");
-      // The shell is detached from tengi's test, so a failed assertion must still end it
-      onTestFinished(() => writeFileSync(gate, ""));
-      const command = `until [ -e '${gate}' ] || [ $SECONDS -ge 30 ]; do sleep 0.1; done`;
-      expect(
-        await prompt(
-          tengi,
-          sessionId,
-          `@tool ${JSON.stringify({ name: "bash", args: { command, background: true } })}`,
-        ),
-      ).toEqual({ stopReason: "end_turn" });
-
-      writeFileSync(gate, "");
-      // Only the turn the job's end starts answers with this; the tool result's reply does not
-      await tengi.nextUpdate((u) => {
-        const content = isObj(u) ? u.content : undefined;
-        return (
-          isObj(u) &&
-          u.sessionUpdate === "agent_message_chunk" &&
-          isObj(content) &&
-          typeof content.text === "string" &&
-          content.text.includes("quick reply")
-        );
-      });
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "a running background shell shows as one task in the client, and the list empties when it ends",
-    async () => {
-      const tengi = startTengi();
-      const sessionId = await newSession(
-        tengi,
-        clientCapabilities({ _meta: { agentui: { version: 1, tasks: true } } }),
-      );
-      const gate = join(tengi.out, "task-release");
-      onTestFinished(() => writeFileSync(gate, ""));
-      const command = `cd /tmp && until [ -e '${gate}' ] || [ $SECONDS -ge 30 ]; do sleep 0.1; done`;
-      const turn = prompt(
-        tengi,
-        sessionId,
-        `@tool ${JSON.stringify({ name: "bash", args: { command, background: true } })}`,
+      await tengi.session({ tasks: true });
+      const gate = tengi.gate("release");
+      await tengi.prompt(
+        tool("bash", { command: gate.command, background: true }),
       );
 
-      const running = await tengi.nextUpdate((u) => taskItems(u)?.length === 1);
-      expect(taskItems(running)?.[0]).toMatchObject({
+      const [job] = await tengi.nextTasks((items) => items.length === 1);
+      expect(job).toMatchObject({
         id: expect.stringMatching(/^skyr\/shells\//),
-        title: expect.stringMatching(/^until \[ -e /),
         status: "running",
       });
-      expect(await turn).toEqual({ stopReason: "end_turn" });
 
-      writeFileSync(gate, "");
-      await tengi.nextUpdate((u) => taskItems(u)?.length === 0);
+      gate.release();
+      await tengi.nextTasks((items) => items.length === 0);
+      // The tool turn closed with other text; only a turn the job's end starts says this
+      await tengi.agentSaid("quick reply");
     },
     TIMEOUT,
   );

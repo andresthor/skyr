@@ -13,12 +13,12 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { onTestFinished } from "vitest";
 import { isRecord } from "../src/tengi.js";
+import { type WireRecord, wireProblems } from "./tengi-wire.js";
 
 export const TENGI_DIR = process.env.SKYR_TENGI_DIR;
 
@@ -36,44 +36,56 @@ const ENV_KEYS = [
 const DEFAULT_MS = 15_000;
 const STOP_STEP_MS = 3_000;
 
-export function clientCapabilities(
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return {
-    elicitation: { form: {} },
-    session: { notices: {}, compaction: {} },
-    _meta: { agentui: { version: 1 } },
-    ...overrides,
-  };
-}
+/** `@tool` directive for the faux model: it calls `name` with `args` as its whole reply. */
+export const tool = (name: string, args: Record<string, unknown>) =>
+  `@tool ${JSON.stringify({ name, args })}`;
 
-interface WireRecord {
-  dir: "agent->client" | "client->agent";
-  msg: unknown;
-}
+const clientCapabilities = ({ forms = true, tasks = false } = {}) => ({
+  ...(forms ? { elicitation: { form: {} } } : {}),
+  session: { notices: {}, compaction: {} },
+  _meta: { agentui: { version: 1, ...(tasks ? { tasks: true } : {}) } },
+});
+
+const taskItems = (update: unknown) => {
+  const meta = isRecord(update) ? update._meta : undefined;
+  const tasks = isRecord(meta) ? meta["agentui/tasks"] : undefined;
+  return isRecord(tasks) && Array.isArray(tasks.items)
+    ? tasks.items
+    : undefined;
+};
 
 export interface Tengi {
-  readonly cwd: string;
-  /** A scratch directory the test owns, outside tengi's cwd. */
-  readonly out: string;
-  readonly records: readonly WireRecord[];
-  /** Lines `dialog-probe.ts` logged, parsed: one per load, one per UI member probed. */
-  probeLog(): unknown[];
+  /** How many times `reload-probe.ts` has been loaded, so a reload shows as one more. */
+  loads(): number;
   /**
    * Accepts the next form tengi asks with `content`, in queue order. A form with nothing queued
    * is refused, and anything still queued when the test ends fails it.
    */
   expectForm(content: unknown): void;
-  request(method: string, params: unknown): Promise<unknown>;
-  /** The first `session/update` after the previous match whose `update` satisfies `pred`. */
-  nextUpdate(pred: (update: unknown) => boolean): Promise<unknown>;
+  /** Opens the one session `prompt` talks to, as a client with forms and, if `tasks`, task lists. */
+  session(caps?: { forms?: boolean; tasks?: boolean }): Promise<void>;
+  /** Runs one turn to its end; rejects on any other stop reason. */
+  prompt(text: string): Promise<void>;
+  /** The tool names the faux model reads from its own request, which the wire does not show. */
+  declaredTools(): Promise<string[]>;
+  formsAsked(): number;
+  /** Resolves once the agent has said `text`. */
+  agentSaid(text: string): Promise<void>;
+  /** The content of every completed tool call, as JSON. */
+  toolResults(): string[];
+  /** The task list of the first update after the previous match whose items satisfy `pred`. */
+  nextTasks(pred: (items: unknown[]) => boolean): Promise<unknown[]>;
+  /**
+   * A shell command that waits for `release()`, with a cap so it cannot outlive the test. Pi's
+   * bash runs outside tengi's process group, so the test's end must release it too.
+   */
+  gate(name: string): { command: string; release(): void };
 }
 
 /**
- * Starts tengi with this package in a fresh agent dir's `packages`, the faux model as default
- * and the probe extension loaded. When the test finishes it stops tengi, removes its dirs, and
- * fails the test if tengi exited on its own, left a queued form unasked, or put invalid ACP on
- * the wire.
+ * Starts tengi with this package installed, the faux model as default and the reload probe
+ * loaded. When the test finishes it stops tengi, and fails the test if tengi exited on its own,
+ * left a queued form unasked, or put invalid ACP on the wire.
  */
 export function startTengi(): Tengi {
   const tengiDir = TENGI_DIR;
@@ -95,7 +107,7 @@ export function startTengi(): Tengi {
       packages: [PACKAGE],
     }),
   );
-  const probeFile = join(out, "probe.jsonl");
+  const probeFile = join(out, "probe.log");
   const env: Record<string, string> = {
     SHELL: "/bin/bash",
     PI_OFFLINE: "1",
@@ -119,7 +131,7 @@ export function startTengi(): Tengi {
       "--extension",
       join(FIXTURES, "faux-provider.ts"),
       "--extension",
-      join(FIXTURES, "dialog-probe.ts"),
+      join(FIXTURES, "reload-probe.ts"),
     ],
     { cwd, env, stdio: "pipe", detached: true },
   );
@@ -130,6 +142,7 @@ export function startTengi(): Tengi {
   const forms: unknown[] = [];
   let stderr = "";
   let nextId = 1;
+  let sessionId = "";
   let updateMark = 0;
   let exit: string | undefined;
   let stopping = false;
@@ -176,13 +189,20 @@ export function startTengi(): Tengi {
   child.stdin.on("error", () => {
     // EPIPE once tengi has exited; its exit is reported below, with its stderr
   });
-  const exited = new Promise<void>((resolve) =>
-    child.on("close", (code, signal) => {
-      if (!stopping) exit = `tengi exited on its own (${signal ?? code})`;
+  // `exit`, not `close`: a grandchild holding the stdout pipe would delay `close` past the hook
+  const exited = new Promise<void>((resolve) => {
+    const ended = (why: string) => {
+      if (!stopping) exit = why;
       for (const listener of [...listeners]) listener();
       resolve();
-    }),
-  );
+    };
+    child.on("exit", (code, signal) =>
+      ended(`tengi exited on its own (${signal ?? code})`),
+    );
+    child.on("error", (error) =>
+      ended(`tengi did not start: ${error.message}`),
+    );
+  });
 
   /** Resolves with `found()`'s first value; rejects at once if tengi exits first. */
   function until<T>(found: () => T | undefined, what: string): Promise<T> {
@@ -223,6 +243,8 @@ export function startTengi(): Tengi {
       process.kill(-child.pid, signal);
     }
     await exited;
+    child.stdout.destroy();
+    child.stderr.destroy();
     rmSync(root, { recursive: true, force: true });
     const problems = [
       ...(exit === undefined ? [] : [`${exit}\n${stderr}`]),
@@ -233,150 +255,111 @@ export function startTengi(): Tengi {
     if (problems.length > 0) throw new Error(problems.join("\n"));
   }, 3 * STOP_STEP_MS);
 
+  async function request(method: string, params: unknown): Promise<unknown> {
+    const id = nextId++;
+    const reply = until<Record<string, unknown>>(() => {
+      const answer = records.find(
+        (r) =>
+          r.dir === "agent->client" &&
+          isRecord(r.msg) &&
+          r.msg.id === id &&
+          !("method" in r.msg),
+      )?.msg;
+      return isRecord(answer) ? answer : undefined;
+    }, `the ${method} answer`);
+    send({ id, method, params });
+    const msg = await reply;
+    if ("error" in msg)
+      throw new Error(`${method} failed: ${JSON.stringify(msg.error)}`);
+    return msg.result;
+  }
+
+  const updates = () =>
+    records.flatMap(({ msg }): Record<string, unknown>[] => {
+      const update =
+        isRecord(msg) && msg.method === "session/update" && isRecord(msg.params)
+          ? msg.params.update
+          : undefined;
+      return isRecord(update) ? [update] : [];
+    });
+  const agentText = () =>
+    updates()
+      .map((u) =>
+        u.sessionUpdate === "agent_message_chunk" && isRecord(u.content)
+          ? String(u.content.text)
+          : "",
+      )
+      .join("");
+  const prompt = async (text: string) => {
+    const result = await request("session/prompt", {
+      sessionId,
+      prompt: [{ type: "text", text }],
+    });
+    if (!isRecord(result) || result.stopReason !== "end_turn")
+      throw new Error(`turn stopped early: ${JSON.stringify(result)}`);
+  };
+
   return {
-    cwd,
-    out,
-    records,
-    probeLog: () =>
-      readFileSync(probeFile, "utf8")
-        .split("\n")
-        .filter((line) => line !== "")
-        .map((line): unknown => JSON.parse(line)),
+    loads: () => readFileSync(probeFile, "utf8").split("\n").length - 1,
     expectForm(content) {
       forms.push(content);
     },
-    async request(method, params) {
-      const id = nextId++;
-      const reply = until<Record<string, unknown>>(() => {
-        const answer = records.find(
-          (r) =>
-            r.dir === "agent->client" &&
-            isRecord(r.msg) &&
-            r.msg.id === id &&
-            !("method" in r.msg),
-        )?.msg;
-        return isRecord(answer) ? answer : undefined;
-      }, `the ${method} answer`);
-      send({ id, method, params });
-      const msg = await reply;
-      if ("error" in msg)
-        throw new Error(`${method} failed: ${JSON.stringify(msg.error)}`);
-      return msg.result;
+    async session(caps) {
+      await request("initialize", {
+        protocolVersion: 1,
+        clientCapabilities: clientCapabilities(caps),
+      });
+      const response = await request("session/new", { cwd, mcpServers: [] });
+      if (!isRecord(response) || typeof response.sessionId !== "string")
+        throw new Error("session/new did not answer with a sessionId");
+      sessionId = response.sessionId;
     },
-    nextUpdate(pred) {
-      return until(() => {
-        for (let i = updateMark; i < records.length; i++) {
-          const msg = records[i]?.msg;
-          if (!isRecord(msg) || msg.method !== "session/update") continue;
-          const update = isRecord(msg.params) ? msg.params.update : undefined;
-          if (!pred(update)) continue;
+    prompt,
+    async declaredTools() {
+      await prompt("@tools");
+      const names = /declared tools: (\S*)/.exec(agentText())?.[1];
+      if (names === undefined) throw new Error("no declared-tools reply");
+      return names.split(",");
+    },
+    formsAsked: () =>
+      records.filter(
+        (r) =>
+          r.dir === "agent->client" &&
+          isRecord(r.msg) &&
+          r.msg.method === "elicitation/create",
+      ).length,
+    agentSaid: async (text) => {
+      await until(
+        () => (agentText().includes(text) ? true : undefined),
+        `"${text}"`,
+      );
+    },
+    toolResults: () =>
+      updates()
+        .filter(
+          (u) =>
+            u.sessionUpdate === "tool_call_update" && u.status === "completed",
+        )
+        .map((u) => JSON.stringify(u.content)),
+    nextTasks: (pred) =>
+      until(() => {
+        const all = updates();
+        for (let i = updateMark; i < all.length; i++) {
+          const items = taskItems(all[i]);
+          if (items === undefined || !pred(items)) continue;
           updateMark = i + 1;
-          return update;
+          return items;
         }
         return undefined;
-      }, "a matching session/update");
+      }, "a matching task list"),
+    gate(name) {
+      const file = join(out, name);
+      const release = () => writeFileSync(file, "");
+      onTestFinished(release);
+      return {
+        command: `until [ -e '${file}' ] || [ $SECONDS -ge 30 ]; do sleep 0.1; done`,
+        release,
+      };
     },
   };
-}
-
-/** What a compiled JSON Schema check reports; the shape is ajv's, loaded from tengi's install. */
-type Check = ((value: unknown) => boolean) & {
-  errors?: { instancePath: string; message?: string }[] | null;
-};
-interface Ajv {
-  addFormat(name: string, format: unknown): void;
-  addSchema(schema: unknown, key: string): void;
-  getSchema(ref: string): Check | undefined;
-}
-
-// The schema's numeric formats; ajv-formats ships none of them
-const RANGE_FORMATS: Record<string, (n: unknown) => boolean> = {
-  uint16: (n) => Number.isInteger(n) && Number(n) >= 0 && Number(n) <= 0xffff,
-  uint32: (n) =>
-    Number.isInteger(n) && Number(n) >= 0 && Number(n) <= 0xffff_ffff,
-  uint64: (n) => Number.isInteger(n) && Number(n) >= 0,
-};
-
-/** Every string `format` keyword in the schema; an object at a `format` key is a data field. */
-function formatsUsed(node: unknown, found = new Set<string>()): Set<string> {
-  if (Array.isArray(node)) for (const item of node) formatsUsed(item, found);
-  else if (isRecord(node)) {
-    if (typeof node.format === "string") found.add(node.format);
-    for (const value of Object.values(node)) formatsUsed(value, found);
-  }
-  return found;
-}
-
-/**
- * Each record checked against the ACP schema's def for its method and direction: a request or
- * notification by its params, a response by the def of the request it answers.
- */
-function wireProblems(
-  tengiDir: string,
-  records: readonly WireRecord[],
-): string[] {
-  const fromTengi = createRequire(join(tengiDir, "package.json"));
-  const schema: unknown = JSON.parse(
-    readFileSync(
-      fromTengi.resolve("@agentclientprotocol/sdk/schema/v1/schema.json"),
-      "utf8",
-    ),
-  );
-  const ajv: Ajv = new (fromTengi("ajv/dist/2020.js").Ajv2020)({
-    strict: false,
-    allErrors: true,
-  });
-  const loaded: unknown = fromTengi("ajv-formats/dist/formats.js").fullFormats;
-  const formats = { ...(isRecord(loaded) ? loaded : {}), ...RANGE_FORMATS };
-  // ajv skips an unknown format silently, so a schema upgrade must not add one unchecked
-  const missing = [...formatsUsed(schema)].filter((f) => !(f in formats));
-  if (missing.length > 0)
-    return [`the ACP schema uses unchecked formats: ${missing.join(", ")}`];
-  for (const [name, format] of Object.entries(formats))
-    ajv.addFormat(name, format);
-  ajv.addSchema(schema, "acp");
-
-  const defs = isRecord(schema) && isRecord(schema.$defs) ? schema.$defs : {};
-  const defFor = (method: string, response: boolean) =>
-    Object.keys(defs).find((name) => {
-      const def = defs[name];
-      return (
-        isRecord(def) &&
-        def["x-method"] === method &&
-        name.endsWith("Response") === response
-      );
-    });
-  const check = (name: string | undefined, value: unknown, what: string) => {
-    if (name === undefined) return [`${what}: no schema def`];
-    const validate = ajv.getSchema(`acp#/$defs/${name}`);
-    if (validate === undefined) return [`${what}: ${name} does not compile`];
-    if (validate(value)) return [];
-    return (validate.errors ?? []).map(
-      (e) => `${what}: ${e.instancePath || "/"} ${e.message ?? ""}`,
-    );
-  };
-
-  // Ids are per sender: a response is matched against the other side's requests
-  const asked = {
-    "agent->client": new Map<unknown, string>(),
-    "client->agent": new Map<unknown, string>(),
-  };
-  return records.flatMap(({ dir, msg }) => {
-    if (!isRecord(msg)) return [`${dir}: not an object`];
-    if (typeof msg.method === "string") {
-      if ("id" in msg) asked[dir].set(msg.id, msg.method);
-      if (msg.method.startsWith("_")) return [];
-      return check(
-        defFor(msg.method, false),
-        msg.params ?? {},
-        `${dir} ${msg.method}`,
-      );
-    }
-    if ("error" in msg) return check("Error", msg.error, `${dir} error`);
-    const other = dir === "agent->client" ? "client->agent" : "agent->client";
-    const method = asked[other].get(msg.id);
-    if (method === undefined) return [`${dir}: answer to unknown id`];
-    if (method.startsWith("_")) return [];
-    return check(defFor(method, true), msg.result, `${dir} ${method} result`);
-  });
 }

@@ -129,7 +129,18 @@ async function expectParity(
 
 // What skyr adds to the description of Pi's bash
 const SUFFIX =
-  "A call still running after 120 s keeps running as a background job, and you are told when it ends.";
+  "A call still running after 120 s keeps running as a background job, and you are told when it ends; for anything you expect to run long, set `background: true`.";
+
+const propertiesOf = (parameters: unknown): Record<string, unknown> =>
+  (parameters as { properties: Record<string, unknown> }).properties;
+
+/** skyr's `bash` parameters less `background`, which is what Pi's are. */
+function withoutBackground(parameters: unknown): unknown {
+  const { background: _background, ...properties } = (
+    parameters as { properties: Record<string, unknown> }
+  ).properties;
+  return { ...(parameters as object), properties };
+}
 
 const PREFIX = { shellCommandPrefix: "export PREFIXED=yes" };
 
@@ -222,12 +233,16 @@ describe("bash parity with Pi's own", () => {
     expect(String(b?.renderCall)).toBe(String(a?.renderCall));
     expect(String(b?.renderResult)).toBe(String(a?.renderResult));
     expect(b?.description).toBe(`${a?.description} ${SUFFIX}`);
+    expect(withoutBackground(b?.parameters)).toEqual(a?.parameters);
+    expect(Object.keys(propertiesOf(b?.parameters))).toEqual([
+      ...Object.keys(propertiesOf(a?.parameters)),
+      "background",
+    ]);
     for (const key of [
       "name",
       "label",
       "promptSnippet",
       "promptGuidelines",
-      "parameters",
       "outputSchema",
       "constrainedSampling",
     ] as const)
@@ -253,7 +268,11 @@ describe("bash parity with Pi's own", () => {
       got.tools.map((t) => t.name).filter((n) => piNames.includes(n)),
     ).toEqual(piNames);
     const piBash = want.tools.find((t) => t.name === "bash");
-    expect(got.tools.find((t) => t.name === "bash")).toEqual({
+    const skyrBash = got.tools.find((t) => t.name === "bash");
+    expect({
+      ...skyrBash,
+      parameters: withoutBackground(skyrBash?.parameters),
+    }).toEqual({
       ...piBash,
       description: `${piBash?.description} ${SUFFIX}`,
     });

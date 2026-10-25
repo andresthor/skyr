@@ -77,6 +77,13 @@ const PREVIEW_LINES = 12;
 const DEFAULT_LIMIT_MS = 120_000;
 const DEFAULT_GRACE_MS = 5_000;
 
+const BackgroundParam = Type.Optional(
+  Type.Boolean({
+    description:
+      "Run the command as a background job and return at once. Use it for servers, watchers and builds whose result you don't need now. A message tells you when it ends. `timeout`, if set, ends the job after that many seconds.",
+  }),
+);
+
 const StopParams = Type.Object({
   id: Type.String({ description: "The 8-character job id." }),
 });
@@ -90,19 +97,31 @@ export interface ShellsDeps {
   identify?: typeof identify;
 }
 
-type Route = "plain" | "move";
+type Route = "plain" | "move" | "start";
 
 /**
  * How a call runs. A nested call (`toolCallId` has a `/`) and a call whose `timeout` ends it
- * within the limit are Pi's own; every other call moves at the limit, and a longer `timeout`
- * is then the job's deadline.
+ * within the limit are Pi's own; `background` starts a job at once; every other call moves at
+ * the limit, and a longer `timeout` is then the job's deadline. Throws for a nested
+ * `background` call, which has no result to carry a job.
  * @internal
  */
 export function routeOf(
-  call: { toolCallId: string; timeout: number | undefined },
+  call: {
+    toolCallId: string;
+    timeout: number | undefined;
+    background?: boolean | undefined;
+  },
   limitMs: number,
 ): Route {
-  if (call.toolCallId.includes("/")) return "plain";
+  if (call.toolCallId.includes("/")) {
+    if (call.background)
+      throw new Error(
+        "bash: background is not available inside another tool's call; run the command without background, or call bash directly.",
+      );
+    return "plain";
+  }
+  if (call.background) return "start";
   if (call.timeout !== undefined && call.timeout <= limitMs / 1000)
     return "plain";
   return "move";
@@ -214,18 +233,30 @@ export function wireShells(
 
     pi.registerTool({
       ...base,
-      description: `${base.description} A call still running after ${limitMs / 1000} s keeps running as a background job, and you are told when it ends.`,
+      description: `${base.description} A call still running after ${limitMs / 1000} s keeps running as a background job, and you are told when it ends; for anything you expect to run long, set \`background: true\`.`,
+      parameters: Type.Object({
+        ...base.parameters.properties,
+        background: BackgroundParam,
+      }),
       // Built per call, from the settings read at session start, so each call is Pi's own code path.
       async execute(id, params, signal, onUpdate, callCtx) {
+        const route = routeOf(
+          {
+            toolCallId: id,
+            timeout: params.timeout,
+            background: params.background,
+          },
+          limitMs,
+        );
         const operations =
-          routeOf({ toolCallId: id, timeout: params.timeout }, limitMs) ===
-          "move"
+          route !== "plain"
             ? movingOperations({
                 ops: piModule.createLocalBashOperations({ shellPath }),
                 limitMs,
                 root,
                 sessionId,
                 command: params.command,
+                background: route === "start",
                 truncateTail: piModule.truncateTail,
                 owner: () => (born === generation ? own.owner() : undefined),
                 identify: deps.identify ?? identify,
@@ -239,8 +270,11 @@ export function wireShells(
             .execute(id, params, signal, onUpdate, callCtx);
         } catch (error: unknown) {
           if (!(error instanceof Moved)) throw error;
-          const { job, tail } = error;
-          const moved = `Still running after ${limitMs / 1000} s; moved to the background as job ${job.id} in ${job.cwd}. Full log: ${join(job.dir, "out.log")}. You will be told automatically when it ends: do not sleep, poll or re-read the log to wait. Keep working on anything that does not depend on it; if nothing does, end your turn. Stop it with bash_stop {"id":"${job.id}"}.`;
+          const { job, tail, immediate } = error;
+          const log = join(job.dir, "out.log");
+          const moved = immediate
+            ? `Started in the background: moved to the background as job ${job.id} in ${job.cwd}. Output goes to ${log}; programs may buffer output, so an empty log may only mean nothing was flushed. You will be told automatically when it ends: do not sleep, poll or re-read the log to wait. Stop it with bash_stop {"id":"${job.id}"}.`
+            : `Still running after ${limitMs / 1000} s; moved to the background as job ${job.id} in ${job.cwd}. Full log: ${log}. You will be told automatically when it ends: do not sleep, poll or re-read the log to wait. Keep working on anything that does not depend on it; if nothing does, end your turn. Stop it with bash_stop {"id":"${job.id}"}.`;
           // No structuredContent although outputSchema is inherited: codemode's calls come through
           // ctx.executeTool with nested ids, which never move, so it never sees this result.
           // Pi's bash details keys are all optional, so this still reads as a bash result's details.

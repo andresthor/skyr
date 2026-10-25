@@ -32,6 +32,8 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
   warning, and leaves `bash` alone when another extension or the host provides one, when Pi's
   `bash` takes other parameters than `command` and `timeout`, when `shellPath` is not bash, sh,
   zsh, dash or ksh, or when `ps` is missing.
+  `background: true` starts the command as a job and returns at once; `timeout`, if set, is the
+  job's deadline; if the job can't be identified it runs as a normal call.
   A call still running after 120 s is not killed: it keeps running as a background job, and the
   model is told by a message when it ends. A `timeout` of 120 s or less keeps Pi's kill; a longer
   one becomes the job's deadline. Jobs end with Pi: `/quit`, `/new`, `/resume` and `/reload`

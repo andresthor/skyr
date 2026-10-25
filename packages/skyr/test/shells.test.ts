@@ -363,6 +363,62 @@ describe("a slow bash call in a session", () => {
     expect(JSON.stringify(last)).toContain("exited with code 4");
   });
 
+  test("background: true starts a job at once, and its end is told like any other", async () => {
+    const gate = gateFile();
+    const command = slow(gate);
+    const rt = await shellRuntime({
+      extensions: [shellsWith({ limitMs: 60_000, graceMs: 50 })],
+      respond: script(
+        fauxAssistantMessage([
+          fauxToolCall("bash", { command, background: true }, { id: "bg" }),
+        ]),
+      ),
+    });
+    await rt.session.prompt("go");
+    const started = resultOf(rt.session, "bg");
+    const job = started.job as ShellSnapshot;
+    expect(started.isError).toBe(false);
+    expect(
+      started.text.endsWith(
+        `Started in the background: moved to the background as job ${job.id} in ${job.cwd}. Output goes to ${job.log}; programs may buffer output, so an empty log may only mean nothing was flushed. You will be told automatically when it ends: do not sleep, poll or re-read the log to wait. Stop it with bash_stop {"id":"${job.id}"}.`,
+      ),
+    ).toBe(true);
+    expect(groupAlive(pgidOf(job))).toBe(true);
+    const delivery = rt.nextDelivery();
+    writeFileSync(gate, "");
+    expect(await delivery).toContain(`(id ${job.id}): exited with code 4`);
+  });
+
+  test("a nested background call is refused with what to do instead", async () => {
+    const nest = defineTool({
+      name: "nest",
+      label: "nest",
+      description: "Runs bash as a nested call.",
+      parameters: Type.Object({}),
+      async execute(_id, _params, _signal, _onUpdate, ctx) {
+        const outcome = await ctx.executeTool("bash", {
+          command: "true",
+          background: true,
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(outcome) }],
+          details: {},
+        };
+      },
+    }) as unknown as ToolDefinition;
+    const rt = await shellRuntime({
+      extensions: [shells],
+      customTools: [nest],
+      respond: script(
+        fauxAssistantMessage([fauxToolCall("nest", {}, { id: "n1" })]),
+      ),
+    });
+    await rt.session.prompt("go");
+    expect(resultOf(rt.session, "n1").text).toContain(
+      "bash: background is not available inside another tool's call; run the command without background, or call bash directly.",
+    );
+  });
+
   test("two calls in one message move as two jobs, each result paired with its own call, and end separately", async () => {
     const [gateA, gateB] = [gateFile(), gateFile()];
     const [a, b] = [slow(gateA), slow(gateB)];

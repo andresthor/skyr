@@ -30,7 +30,7 @@ import { fileAppears, killGroup } from "./shells-jobs.js";
 
 // Only the limit is fake, so a test fires it by hand and counts what is left armed.
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -95,6 +95,7 @@ async function rig(
     root,
     sessionId: "s1",
     command,
+    background: false,
     truncateTail: pi.truncateTail,
     owner: () => "owner-token",
     identify,
@@ -130,6 +131,13 @@ async function rig(
     output: () => Buffer.concat(chunks).toString("utf8"),
     run,
     fire,
+    /** A background call: the shell has written its pid, and the 5 ms poll sees it. */
+    startsNow: async (signal?: AbortSignal, timeout?: number) => {
+      const call = rejection(run(signal, timeout));
+      await entryAppears(join(root, ".pending"));
+      await vi.advanceTimersByTimeAsync(5);
+      return call;
+    },
     /** Starts a call, lets it reach the limit, and gives what it rejects with. */
     reachesLimit: async (signal?: AbortSignal, timeout?: number) => {
       const call = rejection(run(signal, timeout));
@@ -482,3 +490,122 @@ test("an onMoved that throws leaves the call in the foreground with its output",
   expect(await call).toEqual({ exitCode: 4 });
   expect(r.output()).toBe("before\nafter\n");
 });
+
+test("a background call moves as soon as the shell has written its pid, within the call's first moments", async () => {
+  const r = await rig({ background: true, limitMs: 60_000 });
+  const start = Date.now();
+  const error = await r.startsNow();
+  expect(error).toBeInstanceOf(Moved);
+  expect((error as Moved).immediate).toBe(true);
+  expect((error as Moved).job.startedAt).toBeLessThan(start + 100);
+  expect(vi.getTimerCount()).toBe(0);
+  r.release();
+  expect(await fileAppears(join((error as Moved).job.dir, "exit"))).toMatch(
+    /^4 /,
+  );
+});
+
+test("a background call that cannot move at once moves at the limit, counted from the call's start", async () => {
+  let ready = false;
+  const r = await rig({
+    background: true,
+    limitMs: 10_000,
+    owner: () => (ready ? "owner-token" : undefined),
+  });
+  const start = Date.now();
+  const call = rejection(r.run());
+  await vi.advanceTimersByTimeAsync(4_000);
+  ready = true;
+  await entryAppears(join(r.root, ".pending"));
+  await vi.advanceTimersByTimeAsync(6_000);
+  const error = await call;
+  expect(error).toBeInstanceOf(Moved);
+  expect((error as Moved).immediate).toBe(false);
+  expect((error as Moved).job.startedAt).toBe(start);
+  expect(Date.now() - start).toBe(10_000);
+});
+
+test("a call that settles during the pid poll leaves no timer", async () => {
+  const r = await rig({ background: true, command: "echo hi" });
+  expect(await r.run()).toEqual({ exitCode: 0 });
+  expect(r.moved).toEqual([]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("Esc during the pid poll is Pi's abort and leaves no timer", async () => {
+  const r = await rig({ background: true });
+  const controller = new AbortController();
+  const call = rejection(r.run(controller.signal));
+  controller.abort();
+  expect(await call).toEqual(new Error("aborted"));
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("a session that ends during the pid poll takes no call, and the call carries on", async () => {
+  let live = true;
+  const r = await rig({
+    background: true,
+    owner: () => (live ? "owner-token" : undefined),
+  });
+  const call = r.run();
+  live = false;
+  await entryAppears(join(r.root, ".pending"));
+  await vi.advanceTimersByTimeAsync(5);
+  r.release();
+  expect(await call).toEqual({ exitCode: 4 });
+  expect(r.moved).toEqual([]);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("a background call's timeout is the job's deadline", async () => {
+  const r = await rig({
+    background: true,
+    command: "echo up; sleep 30",
+  });
+  const error = await r.startsNow(undefined, 0.3);
+  expect(error).toBeInstanceOf(Moved);
+  vi.advanceTimersByTime(300);
+  expect(await fileAppears(join((error as Moved).job.dir, "exit"))).toMatch(
+    /^124 /,
+  );
+});
+
+test("a background call in a bad cwd is Pi's error and records no job", async () => {
+  const r = await rig({ background: true });
+  const outcome = await rejection(
+    movingOperations({
+      ops: (await loadPi()).createLocalBashOperations(),
+      limitMs: 80,
+      root: r.root,
+      sessionId: "s1",
+      command: "true",
+      background: true,
+      truncateTail: (await loadPi()).truncateTail,
+      owner: () => "t",
+      identify,
+      onMoved: () => {},
+      onExited: () => {},
+    }).exec("true", join(r.root, "missing"), {
+      onData: () => {},
+      env: process.env,
+    }),
+  );
+  expect(String(outcome)).toContain("Working directory does not exist");
+  expect(readdirSync(r.root)).toEqual([".pending"]);
+});
+
+test.each([
+  ["a pid file that never comes", { pending: false }],
+  ["no owner", { owner: () => undefined }],
+] as const)(
+  "a background call with %s is an ordinary call: it stays in the foreground at the limit",
+  async (_name, o) => {
+    const r = await rig({ background: true, limitMs: 80, ...o });
+    const call = r.run();
+    await vi.advanceTimersByTimeAsync(2_500);
+    r.release();
+    expect(await call).toEqual({ exitCode: 4 });
+    expect(r.moved).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);

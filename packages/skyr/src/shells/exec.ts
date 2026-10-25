@@ -30,6 +30,8 @@ import {
 
 /** Output a call keeps in memory while it has no log; past it the log is opened and fed. */
 const HEAD_CAP = 256 * 1024;
+const START_POLL_MS = 5;
+const START_WAIT_MS = 2_000;
 
 /** Rejects Pi's `exec` once the call has become a job; the tool turns it into the moved result. */
 export class Moved extends Error {
@@ -37,6 +39,8 @@ export class Moved extends Error {
     readonly job: JobRecord,
     /** The call's last output, from memory. */
     readonly tail: string,
+    /** Moved by `background`, as against at the limit. */
+    readonly immediate: boolean,
   ) {
     super(`moved to the background as job ${job.id}`);
   }
@@ -102,6 +106,8 @@ function logWriter(dir: string, fail: (error: unknown) => void): LogWriter {
  * @param opts.owner This Pi's identity token, or undefined while a call must not move (the
  *   session is not up, or has ended); read when the limit fires.
  * @param opts.identify Names the shell's process group and start time at the move.
+ * @param opts.background Move as soon as the shell has written its pid instead of at the limit;
+ *   with no pid within two seconds, or no owner, the call is an ordinary one that moves at the limit.
  * @param opts.onMoved Called once, synchronously, after the job is on disk; must not throw.
  * @param opts.onExited Called once, after a moved job's `exit` is written or could not be; the
  *   owning process learns the shell's end here. A reload that replaced the owner leaves it a
@@ -113,6 +119,7 @@ export function movingOperations(opts: {
   root: string;
   sessionId: string;
   command: string;
+  background: boolean;
   truncateTail: TruncateTail;
   owner(): string | undefined;
   identify: typeof identify;
@@ -182,12 +189,12 @@ export function movingOperations(opts: {
 
       return new Promise((resolve, reject) => {
         const finish = () => {
-          clearTimeout(timer);
+          if (timer) clearTimeout(timer);
           signal?.removeEventListener("abort", forward);
           rmSync(pidFile, { force: true });
         };
 
-        async function tryMove(): Promise<void> {
+        async function tryMove(immediate: boolean): Promise<void> {
           if (opts.owner() === undefined) return;
           const pid = readPid(pidFile);
           if (pid === undefined) return;
@@ -218,7 +225,7 @@ export function movingOperations(opts: {
             startedAt,
           });
           // Anything that can throw comes before `moved`, which Pi's call cannot come back from.
-          const rejection = new Moved(job, tail);
+          const rejection = new Moved(job, tail, immediate);
           opts.onMoved(job);
           signal?.removeEventListener("abort", forward);
           moved = job;
@@ -226,9 +233,42 @@ export function movingOperations(opts: {
           reject(rejection);
         }
 
-        const timer = setTimeout(() => {
-          tryMove().catch(fail);
-        }, opts.limitMs);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        /** The limit counts from the call's start, whatever the wait for a pid took. */
+        const armLimit = () => {
+          timer = setTimeout(
+            () => {
+              tryMove(false).catch(fail);
+            },
+            Math.max(0, opts.limitMs - (Date.now() - startedAt)),
+          );
+        };
+        const nap = (ms: number) =>
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, ms);
+          });
+
+        /** Waits for the shell's pid, moves at once, and otherwise falls back to the limit. */
+        async function startNow(): Promise<void> {
+          try {
+            while (
+              Date.now() - startedAt < START_WAIT_MS &&
+              !settled &&
+              opts.owner() !== undefined
+            ) {
+              if (readPid(pidFile) !== undefined) {
+                await tryMove(true);
+                break;
+              }
+              await nap(START_POLL_MS);
+            }
+          } finally {
+            if (!settled && !moved) armLimit();
+          }
+        }
+
+        if (opts.background) startNow().catch(fail);
+        else armLimit();
 
         // The continuation: touches files only, so a reload that replaced this instance does not
         // matter to it.

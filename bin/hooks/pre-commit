@@ -1,0 +1,3 @@
+#!/bin/sh
+# Every commit passes typecheck and lint.
+pnpm -s lint && pnpm -s typecheck

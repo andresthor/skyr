@@ -4,6 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@10.20.0",
   "scripts": {
+    "prepare": "sh bin/hooks/install || true",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check --error-on-warnings . && knip && knip --production --exclude types && node bin/craft-check.mjs",

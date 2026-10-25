@@ -27,27 +27,11 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
 - `subagent` — hands a task to an agent defined in a markdown file. The agent runs as a fresh
   session with its own context and returns only its final answer. Several calls in one turn run
   in parallel, and Esc stops them.
-- `bash` — skyr serves Pi's own `bash`, with the same parameters, output and limits, in the TUI and
-  in RPC mode; print and json runs and Windows keep Pi's, silently. skyr steps aside, with a
-  warning, and leaves `bash` alone when another extension or the host provides one, when Pi's
-  `bash` takes other parameters than `command` and `timeout`, when `shellPath` is not bash, sh,
-  zsh, dash or ksh, or when `ps` is missing.
-  `background: true` starts the command as a job and returns at once; `timeout`, if set, is the
-  job's deadline; if the job can't be identified it runs as a normal call.
-  A call still running after 120 s is not killed: it keeps running as a background job, and the
-  model is told by a message when it ends. A `timeout` of 120 s or less keeps Pi's kill; a longer
-  one becomes the job's deadline. Jobs end with Pi: `/quit`, `/new` and `/resume`
-  stop them (SIGTERM, then SIGKILL after 5 s), so quitting can take up to 6 s while a job ignores
-  SIGTERM; `/reload` hands them to the reloaded session. Closing the terminal or a crash by signal
-  ends them at once. A hard kill (SIGKILL, out of memory) leaves them running until the next
-  session's cleanup stops them and the session that started them is told they ended with Pi.
-  Under tengi, jobs end when tengi exits. After a `/compact` the model is reminded of the jobs
-  still running.
-- `bash_stop` — stops a background job by its id: SIGTERM to its process group, then SIGKILL after
-  5 s. Stopping a job that has ended is not an error. Processes that leave the group (`setsid`,
-  `docker run -d`, `tmux`) are neither tracked nor stopped.
-- `/shells` — lists this session's background jobs; `/shells stop <id|all>` stops them. Running
-  jobs also show in a widget under the editor. The model is told of a stop without a new turn.
+- `bash` — Pi's own `bash` with the same parameters, output and limits, plus `background`; a slow
+  call keeps running as a background job. See [Background shells](#background-shells).
+- `bash_stop` — stops a background job by its id; see [Background shells](#background-shells).
+- `/shells` — lists this session's background jobs and stops them; see
+  [Background shells](#background-shells).
 - `ask_user` — asks you a question in place of the input editor and waits for your answer; see
   [Ask user](#ask-user).
 - `advisor` — asks a stronger model to review the session so far; off until `skyr.json` names a
@@ -185,6 +169,50 @@ A stopped heart's row shows `· stalled`; nothing kills a stalled child, the use
 session start; nothing keeps a stale child crossing sessions.
 
 `packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.
+
+## Background shells
+
+skyr serves Pi's own `bash` in the TUI and in RPC mode, built from Pi's definition so a call
+behaves as Pi's does, with output, limits and `shellPath` unchanged. What it adds is that a command
+is not lost to a timeout or a wait: it can keep running, and the model is told when it ends.
+
+- **A slow call moves.** A call still running after 120 s is not killed. It keeps running as a
+  background job, the call returns what it printed so far with the job's id and log path, and a
+  message tells the model when the job ends. A `timeout` of 120 s or less keeps Pi's kill and stays
+  in the foreground; a longer `timeout` becomes the job's deadline.
+- **`background: true`** starts the command as a job and returns at once, for servers, watchers
+  and builds. `timeout`, if set, is the job's deadline. If the job can't be identified, it runs as a
+  normal call and moves at 120 s.
+- **`bash_stop {id}`** stops a job: SIGTERM to its process group, then SIGKILL after 5 s.
+  Stopping a job that has ended is not an error. Processes that leave the group (`setsid`,
+  `docker run -d`, `tmux`) are neither tracked nor stopped.
+- **`/shells`** lists this session's jobs, running first, with their state and log. `/shells stop
+  <id|all>` stops them; the model is told, without a new turn. Running jobs also show in a
+  widget above the editor, and in an ACP client's task list.
+- **Messages.** A job's end arrives when the session is idle and starts a turn: its exit code or
+  how it was stopped, the last lines of output and the log path. After a `/compact` the model is
+  reminded of the jobs still running. A shell that exits and leaves processes in its group is
+  reported once as lingering, and `bash_stop` ends them.
+
+**When skyr leaves `bash` alone.** Print and json runs and Windows keep Pi's `bash`, silently, and
+so do a subagent's children. skyr steps aside, with a warning that names the cause ("background
+shells are off because …; bash is left as it is"), when another extension or the host already
+provides `bash`, when Pi's `bash` takes other parameters than `command` and `timeout`, when
+`shellPath` is not bash, sh, zsh, dash or ksh, when `ps` is missing or cannot identify Pi's own
+process, or when the job directory can't be created.
+
+One case is not detected. Pi picks a tool by extension load order, and skyr registers `bash` in
+its `session_start`. An extension that loads after skyr and registers its own `bash` in its
+`session_start` or later (a sandbox switched on by a command, say) is silently shadowed by skyr's:
+skyr checked before it registered, and nothing reports it.
+
+**Jobs end with Pi.** `/reload` hands running jobs to the reloaded session. `/quit`, `/new` and
+`/resume` stop them (SIGTERM, then SIGKILL after 5 s), so quitting can take up to 6 s while a job
+ignores SIGTERM. Closing the terminal, or a SIGTERM to Pi, stops them the same way. A job's output
+still runs through Pi, so after a hard kill (SIGKILL, out of memory) a job dies the next time it
+writes; a quiet one keeps running until the next session's cleanup stops it, and the session that
+started it is told it ended with Pi. Under tengi, jobs end when tengi exits.
+Job directories are kept for seven days.
 
 ## Advisor
 

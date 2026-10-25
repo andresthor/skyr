@@ -4,6 +4,8 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
   createBashToolDefinition,
+  createEventBus,
+  type EventBus,
   type ExtensionAPI,
   type ExtensionContext,
   type ExtensionFactory,
@@ -16,7 +18,13 @@ import { loadPi } from "../src/pi.js";
 import { registerShells, wireShells } from "../src/shells/index.js";
 import { groupAlive, readOutcome } from "../src/shells/job.js";
 import type { ShellSnapshot } from "../src/shells/store.js";
-import { expectInert, HOSTILE, scratchDir, script } from "./session.js";
+import {
+  expectInert,
+  HOSTILE,
+  scratchDir,
+  script,
+  taskHost,
+} from "./session.js";
 import { gated, gateFile } from "./shells-jobs.js";
 import {
   nestTool,
@@ -38,6 +46,7 @@ const fakePi = (parts: Record<string, unknown>) =>
     get: (target, key: string) => target[key] ?? (() => {}),
   }) as unknown as ExtensionAPI;
 const FISH = { shellPath: "/usr/local/bin/fish" };
+const SHELLS = "skyr/shells";
 
 describe("registerShells in a session", () => {
   test.each([
@@ -238,12 +247,13 @@ const pgidOf = (job: ShellSnapshot): number =>
   JSON.parse(readFileSync(join(dirname(job.log), "job.json"), "utf8")).pgid;
 
 /** A session whose first prompt runs `slow` past the limit, so it comes back as a moved job. */
-async function runningJob() {
+async function runningJob(o: { eventBus?: EventBus } = {}) {
   const gate = gateFile();
   const command = slow(gate);
   const rt = await shellRuntime({
     extensions: [shells],
     respond: script(call(command, "c1")),
+    eventBus: o.eventBus,
   });
   await rt.session.prompt("go");
   const moved = resultOf(rt.session, "c1");
@@ -361,8 +371,11 @@ describe("a slow bash call in a session", () => {
     expect(told).toHaveLength(1);
   });
 
-  test("a /reload that steps aside stops the jobs it was handed, for the session's end", async () => {
-    const { rt, job } = await runningJob();
+  test("a /reload that steps aside stops the jobs it was handed, for the session's end, and clears the task list", async () => {
+    const bus = createEventBus();
+    const host = taskHost(bus, true);
+    const { rt, job } = await runningJob({ eventBus: bus });
+    expect(host.last(SHELLS)).toHaveLength(1);
     const pgid = pgidOf(job);
     writeFileSync(join(rt.agentDir, "settings.json"), JSON.stringify(FISH));
     await rt.session.reload();
@@ -371,6 +384,16 @@ describe("a slow bash call in a session", () => {
     expect(await readOutcome(dirname(job.log))).toMatchObject({
       stopReason: "session",
     });
+    expect(host.last(SHELLS)).toEqual([]);
+  });
+
+  test("/new stops the last session's jobs and clears them from the task list", async () => {
+    const bus = createEventBus();
+    const host = taskHost(bus, true);
+    const { rt } = await runningJob({ eventBus: bus });
+    expect(host.last(SHELLS)).toHaveLength(1);
+    await rt.newSession();
+    expect(host.last(SHELLS)).toEqual([]);
   });
 
   test("the widget follows a job and /shells lists and stops it, telling the model without starting a turn", async () => {

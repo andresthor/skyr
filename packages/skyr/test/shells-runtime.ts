@@ -14,6 +14,7 @@ import {
   createAgentSessionRuntime,
   createAgentSessionServices,
   defineTool,
+  type EventBus,
   type ExtensionContext,
   type ExtensionFactory,
   type ExtensionUIContext,
@@ -94,6 +95,8 @@ export async function shellRuntime(
     extensions?: ExtensionFactory[];
     settings?: Record<string, unknown>;
     customTools?: ToolDefinition[];
+    /** The bus every session's extensions share, so a test can play an ACP host on it. */
+    eventBus?: EventBus;
     mode?: ExtensionContext["mode"];
   } = {},
 ): Promise<ShellRuntime> {
@@ -162,6 +165,7 @@ export async function shellRuntime(
         noThemes: true,
         noContextFiles: true,
         extensionFactories: [...(o.extensions ?? [registerSkyr]), record],
+        eventBus: o.eventBus,
       },
     });
     const created = await createAgentSessionFromServices({

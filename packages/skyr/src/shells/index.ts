@@ -251,6 +251,8 @@ export function wireShells(
     const root = join(piModule.getAgentDir(), "skyr", "shells");
     // Jobs a /reload handed to this Pi must not outlive the shells that own them
     const releaseHandedOver = async () => {
+      // No session serves the list now, so nothing else would clear what the last one showed
+      publishTasks(pi.events, TASK_SOURCE, []);
       if (self !== undefined) await stopHandedOver(root, self, graceMs);
     };
     if (

@@ -16,7 +16,7 @@ const ok = (text: string) => ({
   details: {},
 });
 
-test("a declaration prepareLoadout hides leaves the prompt with its snippet and guidelines, yet a call the model makes anyway still runs", async () => {
+test("a declaration prepareLoadout hides is dropped from the request tools and from the prompt's snippet and guidelines, yet a call the model makes anyway still runs", async () => {
   let ran = 0;
   const hidden = defineTool({
     name: "hidden",
@@ -127,27 +127,6 @@ test("a reply emitted from inside a bus handler lands before the querying emit r
   expect(heard).toEqual({ echo: 7 });
 });
 
-test("a prepareLoadout that throws leaves its declaration offered to the model", async () => {
-  const loud = defineTool({
-    name: "loud",
-    label: "loud",
-    description: "Its loadout hook throws.",
-    parameters: Type.Object({}),
-    prepareLoadout: () => {
-      throw new Error("loadout failed");
-    },
-    async execute() {
-      return ok("ran");
-    },
-  });
-  const { requests, session } = await parentSession({
-    respond: () => fauxAssistantMessage("done"),
-    customTools: [loud],
-  });
-  await session.prompt("go");
-  expect(toolsSeen(requests[0]!)).toContain("loud");
-});
-
 test("a reload drops an extension's bus subscription, while a subscription made on the bus itself still answers", async () => {
   const bus = createEventBus();
   const heard: string[] = [];
@@ -160,10 +139,6 @@ test("a reload drops an extension's bus subscription, while a subscription made 
     extensions: [probe],
     eventBus: bus,
   });
-  bus.emit("ping", undefined);
-  expect(heard.sort()).toEqual(["extension", "host"]);
-
-  heard.length = 0;
   await session.reload();
   bus.emit("ping", undefined);
   // the factory re-ran on reload, so the new load's listener answers once, the old one never

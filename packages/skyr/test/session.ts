@@ -169,7 +169,10 @@ export async function parentSession(o: {
 /** A temp directory, removed when the test ends. */
 export function scratchDir(name: string): string {
   const dir = tmp(name);
-  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+  // A job's continuation may still be writing into it as the test ends
+  onTestFinished(() =>
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3 }),
+  );
   return dir;
 }
 

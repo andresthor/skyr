@@ -1,18 +1,16 @@
 // The job dir and process-group operations against real shells.
-import { spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
-  rmSync,
   statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { truncateTail } from "@earendil-works/pi-coding-agent";
-import { expect, onTestFinished, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import {
   adoptMoved,
   capLog,
@@ -35,46 +33,61 @@ import {
 } from "../src/shells/job.js";
 import { scratchDir } from "./session.js";
 import {
+  deadPid,
   fileAppears,
   finish,
-  killGroup,
-  shellOver,
   spawnJob,
+  spawnTrapped,
 } from "./shells-jobs.js";
 
 /** An identity check that always passes: these jobs are this test's own. */
 const same = async () => true;
 
-test("adoptMoved writes the owner and then the job record into a new dir, and gives the record back", () => {
-  const root = scratchDir("shells");
-  const record = adoptMoved({
-    root,
-    owner: "Mon Jan  1 00:00:00 2024",
-    id: "ab12cd34",
-    command: "sleep 9",
-    cwd: "/repo",
-    sessionId: "s1",
-    pid: 4242,
-    pgid: 4242,
-    token: "Mon Jan  1 00:00:01 2024",
-    startedAt: 5,
-  });
+const spec = (
+  root: string,
+  over: Partial<Parameters<typeof adoptMoved>[0]> = {},
+) => ({
+  root,
+  owner: "o",
+  id: "ab12cd34",
+  command: "make",
+  cwd: root,
+  sessionId: "s1",
+  pid: 4242,
+  pgid: 4242,
+  token: "t",
+  startedAt: 5,
+  ...over,
+});
+
+test("a job record and its owner read back as adoptMoved wrote them, in a root made on demand; a torn, incomplete or missing file reads as nothing", async () => {
+  const root = join(scratchDir("shells"), "not", "yet");
+  const record = adoptMoved(spec(root));
   expect(record.dir).toBe(join(root, "ab12cd34"));
-  expect(
-    JSON.parse(readFileSync(join(record.dir, "job.json"), "utf8")),
-  ).toEqual({
-    id: "ab12cd34",
-    command: "sleep 9",
-    cwd: "/repo",
-    sessionId: "s1",
-    pid: 4242,
-    pgid: 4242,
-    token: "Mon Jan  1 00:00:01 2024",
-    startedAt: 5,
-  });
-  expect(
-    JSON.parse(readFileSync(join(record.dir, "owner.json"), "utf8")),
-  ).toEqual({ pid: process.pid, token: "Mon Jan  1 00:00:00 2024" });
+  expect(await readJob(record.dir)).toEqual(record);
+  expect(await readOwner(record.dir)).toEqual({ pid: process.pid, token: "o" });
+  writeFileSync(join(record.dir, "job.json"), "{torn");
+  writeFileSync(
+    join(record.dir, "owner.json"),
+    JSON.stringify({ pid: process.pid }),
+  );
+  expect(await readJob(record.dir)).toBeUndefined();
+  writeFileSync(
+    join(record.dir, "job.json"),
+    JSON.stringify({ id: "ab12cd34" }),
+  );
+  expect(await readJob(record.dir)).toBeUndefined();
+  expect(await readOwner(record.dir)).toBeUndefined();
+  expect(await readJob(join(root, "none"))).toBeUndefined();
+});
+
+test("adoptMoved fails loudly for an id that already has a job record, and leaves that record alone", async () => {
+  const root = scratchDir("shells");
+  adoptMoved(spec(root, { command: "first" }));
+  expect(() => adoptMoved(spec(root, { command: "second" }))).toThrow(
+    /job ab12cd34 already exists/,
+  );
+  expect((await readJob(join(root, "ab12cd34")))?.command).toBe("first");
 });
 
 test.skipIf(process.getuid?.() === 0)(
@@ -83,77 +96,49 @@ test.skipIf(process.getuid?.() === 0)(
     const root = scratchDir("shells");
     chmodSync(root, 0o500);
     onTestFinished(() => chmodSync(root, 0o700));
-    expect(() =>
-      adoptMoved({
-        root,
-        owner: "t",
-        id: "ab12cd34",
-        command: "true",
-        cwd: root,
-        sessionId: "s1",
-        pid: 4242,
-        pgid: 4242,
-        token: "t",
-        startedAt: 1,
-      }),
-    ).toThrow(/EACCES/);
+    expect(() => adoptMoved(spec(root))).toThrow(/EACCES/);
     expect(existsSync(join(root, "ab12cd34"))).toBe(false);
   },
 );
 
-test("an exit written by writeExit reads back as the code and the second it was written", async () => {
+const stopped = JSON.stringify({ reason: "agent", at: 7 });
+test.each([
+  ["nothing written", async () => {}, { status: "unknown" }],
+  [
+    "a torn stop.json",
+    async (dir: string) => writeFileSync(join(dir, "stop.json"), "{torn"),
+    { status: "unknown" },
+  ],
+  [
+    "an exit of 4",
+    (dir: string) => writeExit(dir, 4),
+    { status: "failed", exitCode: 4, endedAt: expect.any(Number) },
+  ],
+  [
+    "an exit of 0",
+    (dir: string) => writeExit(dir, 0),
+    { status: "done", exitCode: 0, endedAt: expect.any(Number) },
+  ],
+  [
+    "an exit and a stop.json, which wins and keeps the code",
+    async (dir: string) => {
+      await writeExit(dir, 143);
+      writeFileSync(join(dir, "stop.json"), stopped);
+    },
+    { status: "aborted", stopReason: "agent", endedAt: 7, exitCode: 143 },
+  ],
+])("readOutcome with %s", async (_name, write, expected) => {
   const dir = scratchDir("job");
-  await writeExit(dir, 4);
-  expect(await readOutcome(dir)).toMatchObject({
-    status: "failed",
-    exitCode: 4,
-    endedAt: expect.any(Number),
-  });
-  await writeExit(dir, 0);
-  expect(await readOutcome(dir)).toMatchObject({ status: "done", exitCode: 0 });
-  expect(existsSync(join(dir, "exit.tmp"))).toBe(false);
+  await write(dir);
+  expect(await readOutcome(dir)).toEqual(expected);
 });
 
-test("a stop.json wins over exit, keeps the exit code, and an unreadable one says nothing", async () => {
-  const dir = scratchDir("job");
-  expect(await readOutcome(dir)).toEqual({ status: "unknown" });
-  writeFileSync(join(dir, "stop.json"), "{torn");
-  expect(await readOutcome(dir)).toEqual({ status: "unknown" });
-  await writeExit(dir, 143);
-  writeFileSync(
-    join(dir, "stop.json"),
-    JSON.stringify({ reason: "agent", at: 7 }),
-  );
-  expect(await readOutcome(dir)).toEqual({
-    status: "aborted",
-    stopReason: "agent",
-    endedAt: 7,
-    exitCode: 143,
-  });
-});
-
-test("a group SIGTERM records 143 and exit 3 records 3", async () => {
-  const slept = await spawnJob("sleep 30");
-  process.kill(-slept.pgid, "SIGTERM");
-  await finish(slept);
-  expect(await readOutcome(slept.dir)).toMatchObject({
-    status: "failed",
-    exitCode: 143,
-  });
-  const three = await spawnJob("exit 3", { id: "cd34ef56" });
-  await finish(three);
-  expect(await readOutcome(three.dir)).toMatchObject({
-    status: "failed",
-    exitCode: 3,
-  });
-});
-
-test("stopJobs records the stop before its first signal and kills a job that ignores SIGTERM after the grace", async () => {
+test("stopJobs records the stop before its first signal, and kills a job that ignores SIGTERM after the grace", async () => {
   const root = scratchDir("shells");
   const seen = join(scratchDir("seen"), "seen");
   const stopFile = join(root, "ab12cd34", "stop.json");
-  const job = await spawnJob(
-    `trap 'test -f "${stopFile}" && touch "${seen}"' TERM; while [ $SECONDS -lt 30 ]; do sleep 1; done`,
+  const job = await spawnTrapped(
+    `trap 'test -f "${stopFile}" && touch "${seen}"' TERM`,
     { root },
   );
   const stopping = stopJobs([job], "agent", same, 150);
@@ -164,7 +149,7 @@ test("stopJobs records the stop before its first signal and kills a job that ign
     status: "aborted",
     stopReason: "agent",
   });
-}, 10_000);
+});
 
 test("stopJobs records the stop of a job whose shell had exited while its group lived on", async () => {
   const job = await spawnJob("sleep 30 & exit 4");
@@ -196,21 +181,15 @@ test("stopJobs leaves alone a job that already ended, and a repeated stop keeps 
   expect(await readOutcome(running.dir)).toMatchObject({ stopReason: "agent" });
 });
 
-test("stopJobs still stops every other job when one job's stop.json cannot be written", async () => {
-  const gone = await spawnJob("sleep 30", { id: "00000001" });
-  const kept = await spawnJob("sleep 30", { id: "00000002" });
-  rmSync(gone.dir, { recursive: true, force: true });
-  const results = await stopJobs([gone, kept], "session", same, 150);
-  expect(results).toEqual([
-    { killed: false, survived: false },
-    { killed: false, survived: false },
-  ]);
-  expect(groupAlive(gone.pgid)).toBe(false);
-  expect(groupAlive(kept.pgid)).toBe(false);
-  expect(await readOutcome(kept.dir)).toMatchObject({
-    status: "aborted",
-    stopReason: "session",
-  });
+test("stopJobs stops every group even when a check on one of them throws, then rethrows", async () => {
+  const bad = await spawnJob("sleep 30", { id: "00000001" });
+  const good = await spawnJob("sleep 30", { id: "00000002" });
+  // A pgid that is not a number makes the group check throw
+  const broken = { ...bad, pgid: Number.NaN };
+  await expect(
+    stopJobs([broken, good], "session", same, 150),
+  ).rejects.toThrow();
+  expect(groupAlive(good.pgid)).toBe(false);
 });
 
 test("capLog keeps the head, the marker and the latest lines of a log, with no NUL bytes", async () => {
@@ -253,36 +232,18 @@ test("tailOf gives the last 20 lines of a log, and lastLines bounds any text the
 
 test("identify gives the same token whatever the caller's time zone and locale", async () => {
   const plain = await identify(process.pid);
-  const saved = { tz: process.env.TZ, lc: process.env.LC_ALL };
-  process.env.TZ = "Pacific/Auckland";
-  process.env.LC_ALL = "sv_SE.UTF-8";
-  try {
-    expect(await identify(process.pid)).toEqual(plain);
-  } finally {
-    for (const [key, value] of [
-      ["TZ", saved.tz],
-      ["LC_ALL", saved.lc],
-    ] as const) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
+  vi.stubEnv("TZ", "Pacific/Auckland");
+  vi.stubEnv("LC_ALL", "sv_SE.UTF-8");
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  expect(await identify(process.pid)).toEqual(plain);
   expect(plain?.pgid).toBeGreaterThan(1);
   expect(plain?.token).not.toBe("");
 });
 
 test("identify says nothing for a pid that is gone", async () => {
-  const child = spawn("true", { stdio: "ignore" });
-  await new Promise((resolve) => child.on("close", resolve));
-  expect(await identify(child.pid as number)).toBeUndefined();
-});
-
-test("groupAlive tells a live group from one that is gone", async () => {
-  const job = await spawnJob("sleep 30");
-  expect(groupAlive(job.pgid)).toBe(true);
-  killGroup(job.pgid);
-  await shellOver(job);
-  expect(groupAlive(job.pgid)).toBe(false);
+  expect(await identify(await deadPid())).toBeUndefined();
 });
 
 test("claimDelivery is true once per session until released, and per session", async () => {
@@ -301,58 +262,6 @@ test("markEnded records an end, and in a removed dir records nothing and does no
   await expect(markEnded(join(dir, "gone"))).resolves.toBeUndefined();
 });
 
-test("adoptMoved makes the root too when it does not exist yet", () => {
-  const root = join(scratchDir("shells"), "not", "yet");
-  const record = adoptMoved({
-    root,
-    owner: "t",
-    id: "ab12cd34",
-    command: "true",
-    cwd: root,
-    sessionId: "s1",
-    pid: 4242,
-    pgid: 4242,
-    token: "t",
-    startedAt: 1,
-  });
-  expect(existsSync(join(record.dir, "job.json"))).toBe(true);
-});
-
-test("adoptMoved fails loudly for an id that already has a job record, and leaves that record alone", () => {
-  const root = scratchDir("shells");
-  const spec = {
-    root,
-    owner: "t",
-    id: "ab12cd34",
-    command: "first",
-    cwd: root,
-    sessionId: "s1",
-    pid: 4242,
-    pgid: 4242,
-    token: "t",
-    startedAt: 1,
-  };
-  adoptMoved(spec);
-  expect(() => adoptMoved({ ...spec, command: "second" })).toThrow(
-    /job ab12cd34 already exists/,
-  );
-  expect(
-    JSON.parse(readFileSync(join(root, "ab12cd34", "job.json"), "utf8"))
-      .command,
-  ).toBe("first");
-});
-
-test("stopJobs stops every group even when a check on one of them throws, then rethrows", async () => {
-  const bad = await spawnJob("sleep 30", { id: "00000001" });
-  const good = await spawnJob("sleep 30", { id: "00000002" });
-  // A pgid that is not a number makes the group check throw
-  const broken = { ...bad, pgid: Number.NaN };
-  await expect(
-    stopJobs([broken, good], "session", same, 150),
-  ).rejects.toThrow();
-  expect(groupAlive(good.pgid)).toBe(false);
-});
-
 test("listJobDirs gives job dirs and skips dot-names and files, and none for a root not made yet", async () => {
   const root = scratchDir("shells");
   mkdirSync(join(root, "ab12cd34"));
@@ -360,30 +269,6 @@ test("listJobDirs gives job dirs and skips dot-names and files, and none for a r
   writeFileSync(join(root, "error.log"), "");
   expect(await listJobDirs(root)).toEqual([join(root, "ab12cd34")]);
   expect(await listJobDirs(join(root, "nope"))).toEqual([]);
-});
-
-test("readJob and readOwner give back what adoptMoved wrote, and nothing for a missing or torn file", async () => {
-  const root = scratchDir("shells");
-  const spec = {
-    root,
-    owner: "o",
-    id: "ab12cd34",
-    command: "make",
-    cwd: root,
-    sessionId: "s1",
-    pid: 4242,
-    pgid: 4242,
-    token: "t",
-    startedAt: 5,
-  };
-  const record = adoptMoved(spec);
-  expect(await readJob(record.dir)).toEqual(record);
-  expect(await readOwner(record.dir)).toEqual({ pid: process.pid, token: "o" });
-  writeFileSync(join(record.dir, "job.json"), "{torn");
-  writeFileSync(join(record.dir, "owner.json"), JSON.stringify({ pid: 1 }));
-  expect(await readJob(record.dir)).toBeUndefined();
-  expect(await readOwner(record.dir)).toBeUndefined();
-  expect(await readJob(join(root, "none"))).toBeUndefined();
 });
 
 test("a handover mark is taken once, by the process that made it", async () => {

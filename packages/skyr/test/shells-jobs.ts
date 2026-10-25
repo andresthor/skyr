@@ -1,13 +1,8 @@
 import { spawn } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  watch,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { clearInterval, setInterval } from "node:timers";
 import { onTestFinished } from "vitest";
 import {
   adoptMoved,
@@ -30,9 +25,8 @@ export function killGroup(pgid: number): void {
 const shellsOver = new WeakMap<JobRecord, Promise<number>>();
 
 /**
- * A real shell in its own detached group running `command`, its output in `out.log`, and a job
- * record for it adopted into `root`. Like Pi's shell it leaves its end to someone else: `finish`
- * records it the way a moved call's continuation does. The group is killed when the test ends.
+ * A real shell in its own detached group running `command`, adopted as a job in `root`. Its end is
+ * left to `finish`, as to a moved call's continuation. The group is killed when the test ends.
  */
 export async function spawnJob(
   command: string,
@@ -91,18 +85,54 @@ export async function finish(job: JobRecord): Promise<void> {
   await writeExit(job.dir, await shellOver(job));
 }
 
-/** Resolves with the file's text once it exists; watches its dir, so it never polls. */
-export function fileAppears(path: string): Promise<string> {
+/**
+ * Resolves once `check()` holds. It polls on the real clock because `fs.watch` drops events under
+ * load; a throwing check is not yet (the file may be mid-write or gone). The test's timeout is its deadline.
+ */
+export function appears(check: () => boolean): Promise<void> {
   return new Promise((resolve) => {
-    const watcher = watch(dirname(path), () => {
-      if (existsSync(path)) {
-        watcher.close();
-        resolve(readFileSync(path, "utf8"));
+    const look = () => {
+      try {
+        if (!check()) return;
+      } catch {
+        return;
       }
-    });
-    if (existsSync(path)) {
-      watcher.close();
-      resolve(readFileSync(path, "utf8"));
-    }
+      clearInterval(poll);
+      resolve();
+    };
+    const poll = setInterval(look, 10);
+    onTestFinished(() => clearInterval(poll));
+    look();
   });
+}
+
+/** Resolves with the file's text once it exists. */
+export const fileAppears = (path: string) =>
+  appears(() => existsSync(path)).then(() => readFileSync(path, "utf8"));
+
+/** Holds a command until `gate` exists; the cap ends one a failed test never released. */
+export const gated = (gate: string) =>
+  `until [ -e '${gate}' ] || [ $SECONDS -ge 30 ]; do sleep 0.02; done`;
+
+export const gateFile = () => join(scratchDir("gate"), "go");
+
+/** The pid of a child that has already been reaped. */
+export async function deadPid(): Promise<number> {
+  const child = spawn("true", { stdio: "ignore" });
+  await new Promise((resolve) => child.on("close", resolve));
+  return child.pid as number;
+}
+
+/** A job idling under `trap`, returned once bash has installed it: an earlier signal would kill it. */
+export async function spawnTrapped(
+  trap: string,
+  o: { root?: string; id?: string } = {},
+): Promise<JobRecord> {
+  const ready = join(scratchDir("ready"), "ready");
+  const job = await spawnJob(
+    `${trap}\ntouch '${ready}'\nwhile [ $SECONDS -lt 30 ]; do sleep 0.05; done`,
+    o,
+  );
+  await fileAppears(ready);
+  return job;
 }

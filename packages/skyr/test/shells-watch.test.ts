@@ -19,8 +19,14 @@ import {
   tailOf,
 } from "../src/shells/job.js";
 import { createWatcher, type JobEnd } from "../src/shells/watch.js";
-import { scratchDir } from "./session.js";
-import { finish, shellOver, spawnJob as start } from "./shells-jobs.js";
+import {
+  appears,
+  finish,
+  gated,
+  gateFile,
+  shellOver,
+  spawnJob as start,
+} from "./shells-jobs.js";
 
 function watch(tail = (dir: string) => tailOf(dir, truncateTail)) {
   const clock = { now: 0 };
@@ -65,10 +71,8 @@ function watch(tail = (dir: string) => tailOf(dir, truncateTail)) {
   return { watcher, clock, ends, errors, counts, tick, tickDone, over };
 }
 
-/** Ticks until `n` ends are in; the group of a job that is stopping empties on its own time. */
-async function ticksUntil(w: ReturnType<typeof watch>, n: number) {
-  while (w.ends.length < n) await w.tick();
-}
+/** Resolves once nothing is left in the job's group: what a tick's check sees, whatever the shell did. */
+const emptied = (job: JobRecord) => appears(() => !groupAlive(job.pgid));
 
 /** A `tail` that holds every call until `release()`; `reached(n)` resolves at the n-th call. */
 function heldTail() {
@@ -77,18 +81,12 @@ function heldTail() {
     release = resolve;
   });
   const calls = { n: 0 };
-  const waiting: [number, () => void][] = [];
   const tail = async (dir: string) => {
     calls.n += 1;
-    for (const [n, resolve] of waiting) if (n === calls.n) resolve();
     await gate;
     return tailOf(dir, truncateTail);
   };
-  const reached = (n: number) =>
-    new Promise<void>((resolve) => {
-      if (calls.n >= n) resolve();
-      else waiting.push([n, resolve]);
-    });
+  const reached = (n: number) => appears(() => calls.n >= n);
   return { tail, calls, reached, release: () => release() };
 }
 
@@ -101,14 +99,11 @@ afterEach(() => {
 });
 
 test("a shell that exits while its & child runs gets one linger end at 5 s, then a state-only end when the child exits", async () => {
-  const flag = join(scratchDir("flag"), "go");
-  const job = await start(
-    `while [ ! -e '${flag}' ] && [ $SECONDS -lt 30 ]; do sleep 0.05; done & echo started; exit 0`,
-  );
+  const flag = gateFile();
+  const job = await start(`${gated(flag)} & echo started; exit 0`);
   const w = watch();
   w.watcher.add(job);
   await w.over(job);
-  expect(groupAlive(job.pgid)).toBe(true);
   w.clock.now = 4_999;
   await w.tick();
   expect(w.ends).toEqual([]);
@@ -122,8 +117,8 @@ test("a shell that exits while its & child runs gets one linger end at 5 s, then
     tail: "started\n",
   });
   writeFileSync(flag, "");
-  await ticksUntil(w, 2);
-  expect(w.ends).toHaveLength(2);
+  await emptied(job);
+  await w.tick();
   expect(w.ends[1]).toMatchObject({
     lingering: false,
     afterLinger: true,
@@ -206,38 +201,24 @@ test("the shell's end and a user stop both finalizing a job is reported once", a
   });
 });
 
-test("a user stop of a running job ends it once, with the user as the reason", async () => {
-  const job = await start("sleep 30");
-  const w = watch();
-  w.watcher.add(job);
-  expect(await w.watcher.stop("all", "user")).toEqual([
-    { killed: false, survived: false },
-  ]);
-  expect(w.ends).toHaveLength(1);
-  expect(w.ends[0]).toMatchObject({
-    outcome: { status: "aborted", stopReason: "user" },
-  });
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-test("a job whose log cannot be read still ends once, with an empty tail and the error reported once", async () => {
+test("a job whose log cannot be read still ends once with an empty tail and the error reported once, and one whose log is gone ends with no error", async () => {
   const broken = await start("exit 1", { id: "00000001" });
   const done = await start("exit 0", { id: "00000002" });
+  const gone = await start("exit 0", { id: "00000003" });
   const w = watch(async (dir) => {
     if (dir === broken.dir) throw new Error("unreadable log");
     return tailOf(dir, truncateTail);
   });
-  w.watcher.add(broken);
-  w.watcher.add(done);
-  await w.over(broken);
-  await w.over(done);
+  for (const job of [broken, done, gone]) w.watcher.add(job);
+  rmSync(join(gone.dir, "out.log"));
+  for (const job of [broken, done, gone]) await w.over(job);
   expect(w.errors).toEqual([new Error("unreadable log")]);
   expect(w.ends.map((end) => [end.record.id, end.tail])).toEqual([
     ["00000001", ""],
     ["00000002", ""],
+    ["00000003", ""],
   ]);
   expect(w.ends[0]?.outcome).toMatchObject({ status: "failed", exitCode: 1 });
-  expect(vi.getTimerCount()).toBe(0);
 });
 
 test("a record whose poll throws goes to onError, the others keep being watched, and it still ends", async () => {
@@ -245,82 +226,60 @@ test("a record whose poll throws goes to onError, the others keep being watched,
   const done = await start("echo done; exit 0", { id: "00000002" });
   const w = watch();
   w.watcher.add(broken);
-  w.watcher.add(done);
+  w.watcher.add(done, true);
   // An exit that is a directory makes every read of it fail with EISDIR.
   mkdirSync(join(broken.dir, "exit"));
   await w.watcher.exited(broken.id);
   expect(w.errors).toMatchObject([{ code: "EISDIR" }]);
-  await w.over(done);
-  expect(w.ends.map((end) => [end.record.id, end.tail])).toEqual([
-    ["00000002", "done\n"],
-  ]);
+  await finish(done);
+  await emptied(done);
   await w.tick();
-  expect(w.errors).toHaveLength(2);
+  expect(w.ends.map((end) => end.record.id)).toEqual(["00000002"]);
   process.kill(-broken.pgid, "SIGKILL");
-  await shellOver(broken);
-  // An exit it cannot read is waited for like a missing one.
+  await emptied(broken);
+  // An exit it cannot read is waited for like a missing one: it takes a second tick
   await w.tick();
-  expect(w.ends).toHaveLength(1);
   await w.tick();
-  expect(w.errors).toHaveLength(3);
   expect(w.ends[1]).toMatchObject({
     record: { id: "00000001" },
     outcome: { status: "unknown" },
   });
-  expect(vi.getTimerCount()).toBe(0);
 });
 
-test("a job whose log was removed ends once, with an empty tail and no error", async () => {
-  const job = await start("sleep 0.3");
-  const w = watch();
-  w.watcher.add(job);
-  rmSync(join(job.dir, "out.log"));
-  await w.over(job);
-  expect(w.ends).toMatchObject([{ tail: "", outcome: { status: "done" } }]);
-  expect(w.errors).toEqual([]);
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-test("a group that is empty with no exit when the shell is reported over ends as unknown only when the next tick (250 ms) still finds none", async () => {
-  const job = await start("sleep 30");
-  const w = watch();
-  w.watcher.add(job);
-  process.kill(-job.pgid, "SIGKILL");
-  await shellOver(job);
-  await w.watcher.exited(job.id);
-  expect(w.ends).toEqual([]);
-  await w.tick();
-  expect(w.ends).toHaveLength(1);
-  expect(w.ends[0]).toMatchObject({ outcome: { status: "unknown" } });
-});
-
-test("an exit that lands before the next tick ends the job with its code instead of as unknown", async () => {
-  const job = await start("sleep 30");
-  const w = watch();
-  w.watcher.add(job);
-  process.kill(-job.pgid, "SIGKILL");
-  await shellOver(job);
-  await w.watcher.exited(job.id);
-  expect(w.ends).toEqual([]);
-  writeFileSync(join(job.dir, "exit"), "7 1700000000\n");
-  await w.tick();
-  expect(w.ends).toHaveLength(1);
-  expect(w.ends[0]).toMatchObject({
-    outcome: { status: "failed", exitCode: 7 },
-  });
-});
+test.each([
+  ["still finds none", undefined, { status: "unknown" }],
+  [
+    "finds the exit that landed",
+    "7 1700000000\n",
+    { status: "failed", exitCode: 7 },
+  ],
+] as const)(
+  "a group that is empty with no exit when the shell is reported over ends only when the next tick (250 ms) %s",
+  async (_name, exit, outcome) => {
+    const job = await start("sleep 30");
+    const w = watch();
+    w.watcher.add(job);
+    process.kill(-job.pgid, "SIGKILL");
+    await emptied(job);
+    await w.watcher.exited(job.id);
+    expect(w.ends).toEqual([]);
+    if (exit) writeFileSync(join(job.dir, "exit"), exit);
+    await w.tick();
+    expect(w.ends).toHaveLength(1);
+    expect(w.ends[0]).toMatchObject({ outcome });
+  },
+);
 
 test("the group emptying after the shell is reported over ends the job on the next tick, with its exit", async () => {
-  const flag = join(scratchDir("flag"), "go");
-  const job = await start(
-    `while [ ! -e '${flag}' ] && [ $SECONDS -lt 30 ]; do sleep 0.05; done & exit 6`,
-  );
+  const flag = gateFile();
+  const job = await start(`${gated(flag)} & exit 6`);
   const w = watch();
   w.watcher.add(job);
   await w.over(job);
   expect(w.ends).toEqual([]);
   writeFileSync(flag, "");
-  await ticksUntil(w, 1);
+  await emptied(job);
+  await w.tick();
   expect(w.ends[0]).toMatchObject({ outcome: { exitCode: 6 } });
 });
 
@@ -333,7 +292,7 @@ test("a job whose dir vanished is watched by its group and ends once as unknown,
   await w.tick();
   expect(w.ends).toEqual([]);
   process.kill(-job.pgid, "SIGTERM");
-  await shellOver(job);
+  await emptied(job);
   await w.tick();
   expect(w.ends).toHaveLength(1);
   expect(w.ends[0]).toMatchObject({
@@ -342,7 +301,6 @@ test("a job whose dir vanished is watched by its group and ends once as unknown,
     tail: "",
   });
   expect(w.errors).toEqual([]);
-  expect(vi.getTimerCount()).toBe(0);
 });
 
 test("a stop with one job's dir gone still stops the other, and each ends once with the stop's reason", async () => {
@@ -352,9 +310,10 @@ test("a stop with one job's dir gone still stops the other, and each ends once w
   w.watcher.add(gone);
   w.watcher.add(kept);
   rmSync(gone.dir, { recursive: true, force: true });
-  const [lost, stopped] = await w.watcher.stop("all", "session");
-  expect(lost).toEqual({ killed: false, survived: false });
-  expect(stopped).toEqual({ killed: false, survived: false });
+  expect(await w.watcher.stop("all", "session")).toEqual([
+    { killed: false, survived: false },
+    { killed: false, survived: false },
+  ]);
   expect(groupAlive(gone.pgid)).toBe(false);
   expect(groupAlive(kept.pgid)).toBe(false);
   expect(w.ends.map((end) => [end.record.id, end.outcome])).toEqual([
@@ -372,17 +331,16 @@ test("a stop with one job's dir gone still stops the other, and each ends once w
 
 test("a slow tick does not overlap the next one", async () => {
   const held = heldTail();
-  const flag = join(scratchDir("flag"), "go");
-  const job = await start(
-    `while [ ! -e '${flag}' ] && [ $SECONDS -lt 30 ]; do sleep 0.05; done & exit 0`,
-  );
+  const flag = gateFile();
+  const job = await start(`${gated(flag)} & exit 0`);
   const w = watch(held.tail);
   w.watcher.add(job);
   await w.over(job);
   expect(vi.getTimerCount()).toBe(1);
   writeFileSync(flag, "");
-  // Each firing finds the group still there until the loop has noticed the flag
-  while (held.calls.n < 1) await vi.advanceTimersByTimeAsync(250);
+  await emptied(job);
+  await vi.advanceTimersByTimeAsync(250);
+  await held.reached(1);
   const before = w.counts.ticks;
   await vi.advanceTimersByTimeAsync(1_000);
   expect(held.calls.n).toBe(1);

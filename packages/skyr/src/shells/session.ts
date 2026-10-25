@@ -139,6 +139,9 @@ interface Pending {
   wantsTurn: boolean;
 }
 
+/** All `bash_stop` knows once its signal emptied the group and the job's files cannot be read. */
+const SIGNALLED: Outcome = { status: "aborted", stopReason: "agent" };
+
 /** A job's pid still carries the start time recorded for it: the pid was not reused. */
 const sameStart = async (job: JobRecord) =>
   (await identify(job.pid))?.token === job.token;
@@ -370,7 +373,7 @@ export function createShellSession(o: {
         ? after.ended
         : groupAlive(record.pgid)
           ? undefined
-          : await readOutcome(record.dir);
+          : await readOutcome(record.dir).catch(() => SIGNALLED);
     if (outcome === undefined)
       throw new Error(
         `bash_stop: job ${record.id} did not stop: ${result?.survived ? "processes remain in its group after SIGKILL" : "its process group is still alive"}. Tell the user; do not signal it yourself. Log: ${log}`,
@@ -392,7 +395,7 @@ export function createShellSession(o: {
       ]);
       clearTimeout(giveUp);
     }
-    const { exitCode } = await readOutcome(record.dir);
+    const { exitCode } = await readOutcome(record.dir).catch(() => SIGNALLED);
     const how = result?.killed
       ? `it ignored SIGTERM and was killed with SIGKILL after ${o.graceMs / 1000} s`
       : `SIGTERM${exitCode !== undefined ? `; exit code ${exitCode}` : ""}`;

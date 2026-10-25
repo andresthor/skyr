@@ -2,7 +2,7 @@
 // watcher's interval and the clock are fake and driven by hand; everything else runs on real
 // files and processes, and each job's shell is reported over by the test, as the owner's
 // continuation does in production.
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatSize, truncateTail } from "@earendil-works/pi-coding-agent";
 import {
@@ -261,6 +261,17 @@ test("bash_stop's stop ends the job, words how, and the job is not told again", 
   expect(vi.getTimerCount()).toBe(0);
   await vi.advanceTimersByTimeAsync(1_000);
   expect(h.sent).toEqual([]);
+});
+
+test("a stop whose job files cannot be read still reports the stop it made", async () => {
+  const h = await harness();
+  const job = await spawnJob("sleep 30", { root: h.root });
+  h.session.track(job);
+  // A directory where the stop record goes: reading it fails with EISDIR
+  mkdirSync(join(job.dir, "stop.json"));
+  const { text } = await h.session.stopJob(job.id);
+  expect(text).toMatch(/^Stopped job ab12cd34 ".*" after \d+s \(SIGTERM\)/);
+  expect(groupAlive(job.pgid)).toBe(false);
 });
 
 test("bash_stop says when a job ignored SIGTERM and needed SIGKILL", async () => {

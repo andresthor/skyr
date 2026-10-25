@@ -45,14 +45,16 @@ const EXIT_WAIT_MS = 1_000;
 export interface ShellSession {
   /**
    * Sweeps the job root, then arms the watcher. The sweep takes on this Pi's jobs handed over by
-   * a `/reload`, stops the survivors of a Pi that is gone, and queues the ends of this session's
-   * jobs that were never told. A dir with no owner record is skipped.
+   * a `/reload`, starts stopping the survivors of a Pi that is gone without waiting for them, and
+   * queues the ends of this session's jobs that were never told. A dir with no owner record is
+   * skipped.
    */
   start(): Promise<void>;
   /**
    * Stops every running job (SIGTERM, then SIGKILL after `graceMs`) and everything that polls
-   * or retries. With `handOver`, for a `/reload`, the jobs are marked for the next session of
-   * this Pi and left running. Awaited by the caller; nothing is told to the model afterwards.
+   * or retries, and waits for the sweep's stop of survivors. With `handOver`, for a `/reload`,
+   * the jobs are marked for the next session of this Pi and left running. Awaited by the caller;
+   * nothing is told to the model afterwards.
    */
   stop(o?: { handOver?: boolean }): Promise<void>;
   /**
@@ -202,6 +204,8 @@ export function createShellSession(o: {
   // Ends waiting for the session to be idle. Claimed only at the send, so ends a quit drops
   // stay unclaimed.
   let pending: Pending[] = [];
+  /** The sweep's stop of a gone Pi's survivors, still under way or over. */
+  let stopping: Promise<void> = Promise.resolve();
 
   /** Never throws: it runs from the watcher's timer and from promise continuations. */
   const complain = (error: unknown) => logError(o.root, "shells", error);
@@ -509,7 +513,13 @@ export function createShellSession(o: {
         complain(error);
       }
     }
-    if (survivors.length === 0) return;
+    // A session closed during the inspect has no stop left to wait for this one
+    if (survivors.length === 0 || closed) return;
+    // Not awaited: Pi waits for session_start, and a survivor may ignore SIGTERM for the grace
+    stopping = stopSurvivors(survivors).catch(complain);
+  }
+
+  async function stopSurvivors(survivors: JobRecord[]): Promise<void> {
     // One call, so the grace periods of several survivors do not add up
     const results = await stopJobs(survivors, "pi", sameStart, o.graceMs).catch(
       (error: unknown) => {
@@ -519,6 +529,10 @@ export function createShellSession(o: {
     );
     for (const [i, record] of survivors.entries())
       await afterStop(record, results[i]).catch(complain);
+    if (!closed && pending.length > 0) {
+      wake();
+      flushIfIdle();
+    }
   }
 
   return {
@@ -549,12 +563,18 @@ export function createShellSession(o: {
       closed = true;
       pending = [];
       if (how?.handOver) {
+        // The next session's sweep would find these survivors again, still mid-stop
+        await stopping;
         for (const { record, ended } of watcher.records())
           if (!ended) await markHandover(record.dir).catch(complain);
         watcher.dispose();
         return;
       }
-      await watcher.stop("all", "session").catch(complain);
+      // At once: survivors are a gone Pi's and the watcher's jobs this one's, so no job is in both
+      await Promise.all([
+        stopping,
+        watcher.stop("all", "session").catch(complain),
+      ]);
       watcher.dispose();
     },
     async stopByUser(target) {

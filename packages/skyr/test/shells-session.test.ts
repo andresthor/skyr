@@ -358,6 +358,7 @@ test("a quiet survivor of a gone Pi is stopped by another session's sweep and to
   const job = await orphan("sleep 30", { root });
   const other = await harness({ root, sessionId: "other", hold: true });
   await other.session.start();
+  await other.session.stop();
   await shellOver(job);
   expect(groupAlive(job.pgid)).toBe(false);
   expect(await readOutcome(job.dir)).toMatchObject({
@@ -372,6 +373,36 @@ test("a quiet survivor of a gone Pi is stopped by another session's sweep and to
     /\): ended with Pi after \d+s; its exit status was lost\]\n/,
   );
 }, 15_000);
+
+test("a session starts without waiting for a survivor that ignores SIGTERM, and its stop waits for it", async () => {
+  const root = scratchDir("shells");
+  const job = await spawnTrapped("trap '' TERM", { root });
+  writeOwner(job, { pid: await deadPid(), token: "no such token" });
+  const h = await harness({ root, graceMs: 2_000, hold: true });
+  await h.session.start();
+  // Inside the grace, so the survivor's stop is still under way
+  expect(groupAlive(job.pgid)).toBe(true);
+  await h.session.stop();
+  expect(groupAlive(job.pgid)).toBe(false);
+});
+
+test("a stop waits out one grace for a stubborn survivor and a stubborn job of its own, not two", async () => {
+  const root = scratchDir("shells");
+  const survivor = await spawnTrapped("trap '' TERM", { root });
+  writeOwner(survivor, { pid: await deadPid(), token: "no such token" });
+  const h = await harness({ root, graceMs: 1_500, hold: true });
+  await h.session.start();
+  const own = await spawnTrapped("trap '' TERM", { root, id: "cd34ef56" });
+  h.session.track(own);
+  const began = performance.now();
+  await h.session.stop();
+  // Back to back would be two graces, 3 s
+  expect(performance.now() - began).toBeLessThan(2_500);
+  expect([groupAlive(survivor.pgid), groupAlive(own.pgid)]).toEqual([
+    false,
+    false,
+  ]);
+});
 
 test("a dir with no owner record is never touched", async () => {
   const root = scratchDir("shells");
@@ -395,6 +426,7 @@ test("a job whose pid no longer carries its token is never signalled", async () 
   );
   const h = await harness({ root, hold: true });
   await h.session.start();
+  await h.session.stop();
   expect(groupAlive(job.pgid)).toBe(true);
   expect(existsSync(join(job.dir, "stop.json"))).toBe(false);
 });

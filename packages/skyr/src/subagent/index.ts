@@ -14,6 +14,7 @@ import type {
 import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { loadPi } from "../pi.js";
+import { hostCapabilities } from "../tengi.js";
 import {
   clip,
   errnoOf,
@@ -49,6 +50,7 @@ const PULSE_MS = 250;
 // An unchanged snapshot is resent at this rate so the row's clock moves between store changes.
 const PULSE_FLOOR_MS = 1000;
 const WIDGET_KEY = "skyr.subagents";
+const TASK_SOURCE = "skyr/subagents";
 const WIDGET_WIDTH = 100;
 const MESSAGE_TYPE = "skyr.subagent";
 const PREVIEW_LINES = 12;
@@ -177,6 +179,20 @@ function childSessionDir(parentFile: string | undefined): string | undefined {
     : join(dirname(parentFile), basename(parentFile, ".jsonl"));
 }
 
+/** A run's turns, tools and state, or why it waits; empty for a queued run with nobody ahead. */
+function progressOf(run: RunSnapshot): string {
+  if (run.status === "queued") return run.behind ? `behind ${run.behind}` : "";
+  return [
+    count(run.turns, "turn"),
+    count(run.toolCalls, "tool"),
+    run.tool,
+    run.worktree && "worktree",
+    run.activity === "unknown" && "stalled",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 const labelOf = (run: { agent?: string; description: string }) =>
   run.agent ?? `"${clip(run.description)}"`;
 
@@ -260,6 +276,7 @@ function delivery(outcome: Outcome): string {
 
 export function registerSubagent(pi: ExtensionAPI): void {
   const store = createRunStore();
+  store.subscribe(publishTasks);
   // One writer per directory: a key's chain resolves once every earlier writer has released.
   const writers = new Map<string, Slot>();
   // Per-child abort, for `/subagents stop`; everything a UI reads stays in the store.
@@ -559,15 +576,31 @@ export function registerSubagent(pi: ExtensionAPI): void {
           : run.background
             ? "↗ running"
             : "● running";
-      const progress =
-        run.status === "queued"
-          ? run.behind
-            ? ` · behind ${run.behind}`
-            : ""
-          : ` · ${count(run.turns, "turn")} · ${count(run.toolCalls, "tool")}${run.tool ? ` · ${run.tool}` : ""}${run.worktree ? " · worktree" : ""}${run.activity === "unknown" ? " · stalled" : ""}`;
-      const line = `${mark} ${labelOf(run)}${progress} · ${Math.round((now - run.startedAt) / 1000)}s · ${run.id.slice(0, 8)}`;
+      const progress = progressOf(run);
+      const line = `${mark} ${labelOf(run)}${progress ? ` · ${progress}` : ""} · ${Math.round((now - run.startedAt) / 1000)}s · ${run.id.slice(0, 8)}`;
       return truncateToWidth(sanitize(line), WIDGET_WIDTH);
     });
+  }
+
+  /** The live runs as an ACP task list, when the host forwards one; plain Pi answers nothing. */
+  function publishTasks(): void {
+    if (!hostCapabilities(pi.events)?.taskLists) return;
+    const items = store.running().map((run) => {
+      const detail = progressOf(run);
+      return {
+        id: run.id,
+        title: labelOf(run),
+        status: run.status,
+        ...(detail ? { detail } : {}),
+        startedAt: run.startedAt,
+      };
+    });
+    try {
+      pi.events.emit("tengi:tasks", { source: TASK_SOURCE, items });
+    } catch {
+      // A stale extension API after a reload throws here, outside any handler; the next
+      // session's store publishes afresh
+    }
   }
 
   function stopTick(): void {

@@ -31,7 +31,7 @@ test("a project agent overrides a user agent of the same name", async () => {
     "---\ndescription: project scout\n---\nProject body.",
   );
 
-  const { agents, errors } = await loadAgents({ user, project });
+  const { agents, errors } = await loadAgents({ user, project: [project] });
 
   expect(errors).toEqual([]);
   expect(agents.get("scout")).toMatchObject({
@@ -91,7 +91,7 @@ test("a malformed file is skipped and the others load", async () => {
 
   const { agents, errors } = await loadAgents({
     user,
-    project: join(root, "missing"),
+    project: [join(root, "missing")],
   });
 
   expect([...agents.keys()]).toEqual(["fine"]);
@@ -195,4 +195,31 @@ test("a field name cannot carry invisible or bidi characters into the warning", 
   const { warnings } = await loadAgents({ user });
 
   expect(warnings).toEqual([`${join(user, "odd.md")}: "xyz31m"`]);
+});
+
+test("a later project dir overrides an earlier one and both override the user dir", async () => {
+  const claude = join(root, "claude");
+  await mkdir(claude);
+  const agent = (description: string) =>
+    `---\ndescription: ${description}\n---\nBody.`;
+  await writeFile(join(user, "scout.md"), agent("user scout"));
+  await writeFile(join(user, "helper.md"), agent("user helper"));
+  await writeFile(join(claude, "scout.md"), agent("claude scout"));
+  await writeFile(join(claude, "helper.md"), agent("claude helper"));
+  await writeFile(join(claude, "only.md"), agent("claude only"));
+  await writeFile(join(project, "scout.md"), agent("project scout"));
+
+  const { agents, errors } = await loadAgents({
+    user,
+    project: [claude, project],
+  });
+
+  expect(errors).toEqual([]);
+  expect(
+    [...agents.values()].map((a) => `${a.name}: ${a.description}`).sort(),
+  ).toEqual([
+    "helper: claude helper",
+    "only: claude only",
+    "scout: project scout",
+  ]);
 });

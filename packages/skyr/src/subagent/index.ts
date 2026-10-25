@@ -41,6 +41,7 @@ import { createRunStore, type RunSnapshot, type RunStatus } from "./store.js";
 import {
   addWorktree,
   planWorktree,
+  repoRoot,
   type WorktreePlan,
   worktreeNote,
 } from "./worktree.js";
@@ -1052,8 +1053,12 @@ export function registerSubagent(pi: ExtensionAPI): void {
     const loaded = await loadAgents({
       user: join(getAgentDir(), "agents"),
       // Pi reads a project's .pi/ resources only once the user trusts the project.
+      // Claude Code's dir sits at the repo root and loses to Pi's own.
       project: ctx.isProjectTrusted()
-        ? join(ctx.cwd, CONFIG_DIR_NAME, "agents")
+        ? [
+            join(repoRoot(ctx.cwd), ".claude", "agents"),
+            join(ctx.cwd, CONFIG_DIR_NAME, "agents"),
+          ]
         : undefined,
     });
     agents = loaded.agents;

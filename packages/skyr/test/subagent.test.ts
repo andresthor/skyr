@@ -743,3 +743,39 @@ test("the row and status count follow the store while a child runs, and a resume
     })[0],
   ).toMatch(/^✓ done · 1 turn · 0 tools · \d+k? tok · \d+\.\ds/);
 });
+
+const descriptionOf = async (o: Parameters<typeof parentSession>[0]) => {
+  const { session, requests } = await parentSession(o);
+  await session.prompt("go");
+  return requests[0]!.messages
+    .flatMap((m) => (m.role === "system" ? (m.toolsAdded ?? []) : []))
+    .find((t) => t.name === "subagent")?.description;
+};
+
+test("an agent found only in .claude/agents at the repo root is listed, and a .pi agent of the same name wins", async () => {
+  const description = await descriptionOf({
+    respond: () => fauxAssistantMessage("ok"),
+    git: true,
+    claudeAgents: {
+      "scout.md": agentFile("Claude scout"),
+      "reviewer.md": agentFile("Claude reviewer"),
+    },
+    repoAgents: { "scout.md": agentFile("Pi scout") },
+  });
+
+  expect(description).toMatch(
+    /\n- reviewer: Claude reviewer\n- scout: Pi scout$/,
+  );
+});
+
+test("an untrusted project loads neither .claude/agents nor .pi/agents", async () => {
+  const description = await descriptionOf({
+    respond: () => fauxAssistantMessage("ok"),
+    untrusted: true,
+    claudeAgents: { "reviewer.md": agentFile("Claude reviewer") },
+    repoAgents: { "scout.md": agentFile("Pi scout") },
+    userAgents: { "helper.md": agentFile("Helps out") },
+  });
+
+  expect(description).toMatch(/\n- helper: Helps out$/);
+});

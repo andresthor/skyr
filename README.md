@@ -120,7 +120,9 @@ You are a scout. …
 ```
 
 Pi looks for agents in `agents/` under its config dir (`~/.pi/agent/agents/` by default) and, in
-a project Pi trusts, in `.pi/agents/`. A project agent replaces a user agent of the same name.
+a project Pi trusts, in `.claude/agents/` at the repo root (Claude Code's location) and in
+`.pi/agents/`. A project agent replaces a user agent of the same name, and a `.pi/agents/` agent
+replaces a `.claude/agents/` one.
 Edits apply after `/reload`. An agent with a field skyr does not act on, such as Claude Code's
 `disallowedTools` or another extension's, still loads; the field is named in a warning. Without
 `tools`, an agent gets `read`, `grep`, `find`, `ls`, `bash`, `web_search` and `web_fetch`. Pi

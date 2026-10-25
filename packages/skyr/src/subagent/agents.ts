@@ -182,14 +182,16 @@ async function loadDir(
 
 /**
  * Reads the `*.md` agent files in each dir. A missing dir contributes nothing. A project agent
- * replaces a user agent of the same name; within one dir the first file by name wins. A file
+ * replaces a user agent of the same name, and a later project dir replaces an earlier one;
+ * within one dir the first file by name wins. A file
  * or dir that cannot be read, parsed or validated is skipped and described in `errors`; nothing
  * throws for one bad file. A loaded file with frontmatter fields skyr does not act on, such as
  * another tool's agent format, is described in `warnings`.
  */
 export async function loadAgents(dirs: {
   user: string;
-  project?: string;
+  /** In rising precedence. */
+  project?: string[];
 }): Promise<{
   agents: Map<string, AgentDef>;
   errors: string[];
@@ -199,8 +201,14 @@ export async function loadAgents(dirs: {
   const errors: string[] = [];
   const warnings: string[] = [];
   const user = await loadDir(dirs.user, parseFrontmatter, errors, warnings);
-  const project = dirs.project
-    ? await loadDir(dirs.project, parseFrontmatter, errors, warnings)
-    : new Map<string, AgentDef>();
-  return { agents: new Map([...user, ...project]), errors, warnings };
+  const merged = new Map(user);
+  for (const dir of dirs.project ?? [])
+    for (const [name, agent] of await loadDir(
+      dir,
+      parseFrontmatter,
+      errors,
+      warnings,
+    ))
+      merged.set(name, agent);
+  return { agents: merged, errors, warnings };
 }

@@ -54,6 +54,10 @@ export async function parentSession(o: {
   /** Agent files by file name, written to the user's and the repo's agents dirs. */
   userAgents?: Record<string, string>;
   repoAgents?: Record<string, string>;
+  /** Agent files in `.claude/agents` at the repo root. */
+  claudeAgents?: Record<string, string>;
+  /** Start the session with the project untrusted. */
+  untrusted?: boolean;
   /** Make the parent's cwd a git repo with one seed commit (for worktree-y tests). */
   git?: boolean;
   /** The run mode extensions see; Pi's default is print. */
@@ -108,6 +112,7 @@ export async function parentSession(o: {
     );
   writeAll(join(agentDir, "agents"), o.userAgents);
   writeAll(join(cwd, CONFIG_DIR_NAME, "agents"), o.repoAgents);
+  writeAll(join(cwd, ".claude", "agents"), o.claudeAgents);
 
   // Further models: for an agent file that names one, and for the advisor. faux-2's output cap
   // is below the advisor's own, so a test can tell which one a request used; faux-3 and faux-4
@@ -136,7 +141,9 @@ export async function parentSession(o: {
   // Pi marks a native provider configured only once its async availability check lands.
   await modelRuntime.refresh({ allowNetwork: false });
 
-  const settingsManager = SettingsManager.create(cwd, agentDir);
+  const settingsManager = SettingsManager.create(cwd, agentDir, {
+    projectTrusted: !o.untrusted,
+  });
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,

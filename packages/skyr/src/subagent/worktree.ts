@@ -28,6 +28,18 @@ function slug(text: string): string {
   return clean || "change";
 }
 
+/** The git toplevel of `cwd`, or `cwd` itself when it is not in a repo or git is unusable. */
+export function repoRoot(cwd: string): string {
+  try {
+    return execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return cwd;
+  }
+}
+
 /**
  * Probes the parent's cwd for a usable git repo and reserves a worktree path & branch.
  * Sync, since the caller resolves calls synchronously; cheap git reads only, no side effects.

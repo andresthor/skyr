@@ -22,6 +22,7 @@ import {
   deadPid,
   fileAppears,
   finish,
+  hangingPs,
   shellOver,
   spawnJob,
   spawnTrapped,
@@ -415,6 +416,30 @@ test("a dir with no owner record is never touched", async () => {
   expect(existsSync(join(job.dir, "stop.json"))).toBe(false);
   expect(h.sent).toEqual([]);
 });
+
+test("a live owner that ps cannot answer for keeps its job: the sweep never signals it", async () => {
+  const root = scratchDir("shells");
+  const job = await spawnJob("sleep 30", { root });
+  writeOwner(job, { pid: process.pid, token: "another Pi in this process" });
+  // The owner check's ps hangs; the identity check after it would match the job
+  hangingPs(0);
+  const h = await harness({ root, hold: true });
+  await h.session.start();
+  await h.session.stop();
+  expect(groupAlive(job.pgid)).toBe(true);
+  expect(existsSync(join(job.dir, "stop.json"))).toBe(false);
+}, 10_000);
+
+test("a survivor whose identity check ps cannot answer is left running and not marked ended", async () => {
+  const root = scratchDir("shells");
+  const job = await orphan("sleep 30", { root });
+  hangingPs(1);
+  const h = await harness({ root, hold: true });
+  await h.session.start();
+  await h.session.stop();
+  expect(groupAlive(job.pgid)).toBe(true);
+  expect(existsSync(join(job.dir, "ended"))).toBe(false);
+}, 10_000);
 
 test("a job whose pid no longer carries its token is never signalled", async () => {
   const root = scratchDir("shells");

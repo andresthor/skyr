@@ -524,11 +524,14 @@ export function createShellSession(o: {
     const results = await stopJobs(survivors, "pi", sameStart, o.graceMs).catch(
       (error: unknown) => {
         complain(error);
-        return [];
+        return undefined;
       },
     );
-    for (const [i, record] of survivors.entries())
-      await afterStop(record, results[i]).catch(complain);
+    for (const [i, record] of survivors.entries()) {
+      // After a failed stop, a group still alive is left to the next sweep, not marked ended
+      if (!results && groupAlive(record.pgid)) continue;
+      await afterStop(record, results?.[i]).catch(complain);
+    }
     if (!closed && pending.length > 0) {
       wake();
       flushIfIdle();

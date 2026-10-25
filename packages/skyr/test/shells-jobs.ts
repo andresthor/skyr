@@ -1,5 +1,11 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
 import { clearInterval, setInterval } from "node:timers";
@@ -11,6 +17,32 @@ import {
   writeExit,
 } from "../src/shells/job.js";
 import { scratchDir } from "./session.js";
+
+/**
+ * Puts a `ps` first on PATH until the test ends that hangs, ignoring SIGTERM, on call `hangAt`
+ * (from 0), or on every call without it; every other call runs the real `ps`. Install it after
+ * spawning jobs: `spawnJob` asks `ps` too.
+ */
+export function hangingPs(hangAt?: number): void {
+  const bin = scratchDir("bin");
+  const calls = join(bin, "calls");
+  const hangs = hangAt === undefined ? "true" : `[ "$n" = ${hangAt} ]`;
+  writeFileSync(
+    join(bin, "ps"),
+    [
+      "#!/bin/bash",
+      `n=$(cat '${calls}' 2>/dev/null || echo 0); echo $((n + 1)) > '${calls}'`,
+      `if ${hangs}; then trap '' TERM; while :; do sleep 0.1; done; fi`,
+      'exec /bin/ps "$@"',
+    ].join("\n"),
+  );
+  chmodSync(join(bin, "ps"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  onTestFinished(() => {
+    process.env.PATH = path;
+  });
+}
 
 export function killGroup(pgid: number): void {
   try {

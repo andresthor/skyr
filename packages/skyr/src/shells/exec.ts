@@ -198,7 +198,8 @@ export function movingOperations(opts: {
           if (opts.owner() === undefined) return;
           const pid = readPid(pidFile);
           if (pid === undefined) return;
-          const identity = await opts.identify(pid);
+          // A ps that does not answer is no identity, so the call stays Pi's
+          const identity = await opts.identify(pid).catch(() => undefined);
           // The session may have ended during the await. Pi spawns the shell detached, so it leads
           // its own group; any other group means `pid` is not the shell.
           const owner = opts.owner();

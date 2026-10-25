@@ -36,6 +36,7 @@ import {
   deadPid,
   fileAppears,
   finish,
+  hangingPs,
   spawnJob,
   spawnTrapped,
 } from "./shells-jobs.js";
@@ -245,6 +246,11 @@ test("identify gives the same token whatever the caller's time zone and locale",
 test("identify says nothing for a pid that is gone", async () => {
   expect(await identify(await deadPid())).toBeUndefined();
 });
+
+test("identify throws for a ps that hangs, even one that ignores SIGTERM, rather than answering as for a gone pid", async () => {
+  hangingPs();
+  await expect(identify(process.pid)).rejects.toThrow(/did not answer/);
+}, 10_000);
 
 test("claimDelivery is true once per session until released, and per session", async () => {
   const dir = scratchDir("job");

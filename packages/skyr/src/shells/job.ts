@@ -26,6 +26,7 @@ import type { StopReason } from "./store.js";
 const KILL_WAIT_MS = 1_000;
 const REAP_MS = 7 * 24 * 60 * 60 * 1000;
 const POLL_MS = 50;
+const PS_TIMEOUT_MS = 2_000;
 /** The size past which a log's writer cuts it with `capLog`. */
 export const LOG_CAP = 8 * 1024 * 1024;
 const LOG_HEAD = 64 * 1024;
@@ -95,18 +96,30 @@ export function adoptMoved(
   return { ...rest, dir };
 }
 
-/** The process group and start-time token of `pid`, or undefined when `ps` cannot report it. */
+/**
+ * The process group and start-time token of `pid`, or undefined when `ps` cannot report it.
+ * Throws when `ps` does not answer in time, which says nothing about whether `pid` is gone.
+ */
 export async function identify(
   pid: number,
 ): Promise<{ pgid: number; token: string } | undefined> {
   const out = await execFileAsync(
     "ps",
     ["-o", "pgid=", "-o", "lstart=", "-p", String(pid)],
-    { env: { ...process.env, LC_ALL: "C", TZ: "UTC" } },
+    {
+      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+      // Pi's start awaits this; SIGKILL, because a ps that ignores SIGTERM would hold it up
+      timeout: PS_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    },
   ).then(
     ({ stdout }) => stdout,
-    // ps exits non-zero for a pid that is gone; a missing ps is the same answer.
-    () => "",
+    (error: unknown) => {
+      if ((error as { killed?: boolean }).killed)
+        throw new Error(`ps did not answer within ${PS_TIMEOUT_MS / 1000} s`);
+      // ps exits non-zero for a pid that is gone; a missing ps is the same answer.
+      return "";
+    },
   );
   const match = /^(\d+)\s+(\S.*)$/.exec(out.trim());
   const pgid = Number(match?.[1]);

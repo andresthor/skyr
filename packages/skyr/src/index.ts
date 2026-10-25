@@ -29,7 +29,8 @@ export async function registerSkyr(pi: ExtensionAPI): Promise<void> {
   registerAdvisor(pi);
   const piModule = await loadPi();
   // Read in the factory, so the shells' `session_start` registers `bash` before its first await.
-  const self = (await identify(process.pid))?.token;
+  // A ps that does not answer leaves Pi unidentified, so the shells step aside
+  const self = (await identify(process.pid).catch(() => undefined))?.token;
   registerShells(pi, piModule, self);
 }
 

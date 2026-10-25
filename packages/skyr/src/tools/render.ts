@@ -3,13 +3,16 @@
  * invisible characters stripped from anything a model, a web page or a server produced.
  */
 import type {
+  ExtensionAPI,
   KeybindingsManager,
   Theme,
   ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import {
+  Box,
   sliceByColumn,
   stripTerminalSequences,
+  Text,
   TruncatedText,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -233,4 +236,44 @@ export function took(context: {
   return state.startedAt === undefined || state.endedAt === undefined
     ? []
     : seconds(state.endedAt - state.startedAt);
+}
+
+/**
+ * Draws messages of `customType` as their text, one sanitized line per line, cut to
+ * `previewLines` until expanded. Their text carries a model's or a process's output, which Pi's
+ * default renderer would draw as markdown with its escape sequences intact.
+ */
+export function registerTextMessageRenderer(
+  pi: ExtensionAPI,
+  customType: string,
+  previewLines: number,
+): void {
+  pi.registerMessageRenderer(
+    customType,
+    (message, { expanded, outputPad }, theme) => {
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .map((c) => (c.type === "text" ? c.text : ""))
+              .join("");
+      const lines = text.split("\n").map(sanitize);
+      const shown = expanded ? lines : lines.slice(0, previewLines);
+      const hidden = lines.length - shown.length;
+      const box = new Box(outputPad, 1, (t) => theme.bg("customMessageBg", t));
+      box.addChild(
+        new Text(
+          [
+            ...shown,
+            ...(hidden > 0
+              ? [theme.fg("muted", `… ${hidden} more lines`)]
+              : []),
+          ].join("\n"),
+          0,
+          0,
+        ),
+      );
+      return box;
+    },
+  );
 }

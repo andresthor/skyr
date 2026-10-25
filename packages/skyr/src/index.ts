@@ -8,6 +8,7 @@ import { registerAskUser } from "./ask-user/index.js";
 import { reportSkyrFile } from "./config.js";
 import { loadPi } from "./pi.js";
 import { registerShells } from "./shells/index.js";
+import { identify } from "./shells/job.js";
 import { registerSubagent } from "./subagent/index.js";
 import { registerWebFetch } from "./tools/web-fetch.js";
 import { registerWebSearch } from "./tools/web-search.js";
@@ -26,7 +27,10 @@ export async function registerSkyr(pi: ExtensionAPI): Promise<void> {
   registerSubagent(pi);
   registerAskUser(pi);
   registerAdvisor(pi);
-  registerShells(pi, await loadPi());
+  const piModule = await loadPi();
+  // Read in the factory, so the shells' `session_start` registers `bash` before its first await.
+  const self = (await identify(process.pid))?.token;
+  registerShells(pi, piModule, self);
 }
 
 export default async function skyr(pi: ExtensionAPI): Promise<void> {

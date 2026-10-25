@@ -32,6 +32,14 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
   warning, and leaves `bash` alone when another extension or the host provides one, when Pi's
   `bash` takes other parameters than `command` and `timeout`, when `shellPath` is not bash, sh,
   zsh, dash or ksh, or when `ps` is missing.
+  A call still running after 120 s is not killed: it keeps running as a background job, and the
+  model is told by a message when it ends. A `timeout` of 120 s or less keeps Pi's kill; a longer
+  one becomes the job's deadline. Jobs end with Pi: `/quit`, `/new`, `/resume` and `/reload`
+  stop them (SIGTERM, then SIGKILL after 5 s), so quitting can take up to 6 s while a job ignores
+  SIGTERM.
+- `bash_stop` — stops a background job by its id: SIGTERM to its process group, then SIGKILL after
+  5 s. Stopping a job that has ended is not an error. Processes that leave the group (`setsid`,
+  `docker run -d`, `tmux`) are neither tracked nor stopped.
 - `ask_user` — asks you a question in place of the input editor and waits for your answer; see
   [Ask user](#ask-user).
 - `advisor` — asks a stronger model to review the session so far; off until `skyr.json` names a

@@ -21,6 +21,41 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { onTestFinished } from "vitest";
 import { registerSkyr } from "../src/index.js";
+import { loadPi } from "../src/pi.js";
+import { type ShellsDeps, wireShells } from "../src/shells/index.js";
+import { identify } from "../src/shells/job.js";
+import { registerWebFetch } from "../src/tools/web-fetch.js";
+
+/**
+ * skyr's shells alone, with their test seams. `web_fetch` is registered because skyr's reload
+ * recognises its own `bash` by the file that registered it. `spy` sees every `setActiveTools`
+ * the shells make, with the set that was active just before.
+ */
+export function shellsWith(
+  deps: ShellsDeps,
+  spy?: (before: string[], requested: string[]) => void,
+): ExtensionFactory {
+  return async (pi) => {
+    registerWebFetch(pi);
+    const seen = spy
+      ? new Proxy(pi, {
+          get: (target, key) =>
+            key === "setActiveTools"
+              ? (names: string[]) => {
+                  spy(target.getActiveTools(), names);
+                  target.setActiveTools(names);
+                }
+              : Reflect.get(target, key),
+        })
+      : pi;
+    wireShells(
+      seen,
+      await loadPi(),
+      (await identify(process.pid))?.token,
+      deps,
+    );
+  };
+}
 
 export interface ShellRuntime {
   /** The current session; `/new` and `/resume` replace it. */
@@ -32,6 +67,12 @@ export interface ShellRuntime {
   structured: Map<string, unknown>;
   /** Each partial result Pi streamed, by tool-call id. */
   updates: Map<string, unknown[]>;
+  /** The agent dir the session's settings are read from. */
+  agentDir: string;
+  /** Resolves with the text of the next message skyr delivers about a background job. */
+  nextDelivery(): Promise<string>;
+  /** Ends the session as `/quit` does, awaiting every `session_shutdown` handler. */
+  quit(): Promise<void>;
   /** `/new`, bound to a UI as Pi's modes do. */
   newSession(): Promise<void>;
   /** `/resume` of an earlier session file. */
@@ -157,15 +198,43 @@ export async function shellRuntime(
   runtime.setRebindSession(bind);
   await bind(runtime.session);
 
+  let quit: Promise<void> | undefined;
+  const dispose = () => {
+    quit ??= runtime.dispose();
+    return quit;
+  };
   onTestFinished(async () => {
-    await runtime.dispose();
-    process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await dispose();
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     rmSync(root, { recursive: true, force: true });
   });
   return {
     get session() {
       return runtime.session;
     },
+    agentDir,
+    quit: dispose,
+    nextDelivery: () =>
+      new Promise((resolve) => {
+        const off = runtime.session.subscribe((event) => {
+          if (
+            event.type === "message_end" &&
+            event.message.role === "custom" &&
+            event.message.customType === "skyr.shell"
+          ) {
+            off();
+            const { content } = event.message;
+            resolve(
+              typeof content === "string"
+                ? content
+                : content
+                    .map((c) => (c.type === "text" ? c.text : ""))
+                    .join(""),
+            );
+          }
+        });
+      }),
     notices,
     requests,
     structured,

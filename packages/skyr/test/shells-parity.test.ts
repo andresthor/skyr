@@ -1,6 +1,6 @@
 // skyr's bash runs Pi's own code path. These rows pin that against the pinned Pi, so a Pi bump that
 // changes what a call returns, or what `bash` declares, turns one of them red.
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -9,7 +9,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { describe, expect, onTestFinished, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { registerSkyr } from "../src/index.js";
 import { scratchDir, script } from "./session.js";
 import {
@@ -127,6 +127,10 @@ async function expectParity(
   expect(partialClasses(skyr)).toEqual(partialClasses(pi));
 }
 
+// What skyr adds to the description of Pi's bash
+const SUFFIX =
+  "A call still running after 120 s keeps running as a background job, and you are told when it ends.";
+
 const PREFIX = { shellCommandPrefix: "export PREFIXED=yes" };
 
 describe("bash parity with Pi's own", () => {
@@ -195,13 +199,13 @@ describe("bash parity with Pi's own", () => {
     expectParity({}, [["missing", { command: "nosuchcmd" }]]));
 
   test("a background child without a redirect leaves the call as Pi does", () => {
-    const gate = join(scratchDir("gate"), "release");
-    onTestFinished(() => writeFileSync(gate, ""));
+    // The child ends when the test's scratch dir is removed, or after 30 s
+    const dir = scratchDir("gate");
     return expectParity({}, [
       [
         "amp",
         {
-          command: `(until [ -e '${gate}' ]; do sleep 0.05; done) & echo started`,
+          command: `(while [ -d '${dir}' ] && [ $SECONDS -lt 30 ]; do sleep 0.05; done) & echo started`,
         },
       ],
     ]);
@@ -210,17 +214,17 @@ describe("bash parity with Pi's own", () => {
   test("a nested call runs as Pi's does", () =>
     expectParity({}, [["nest", {}]]));
 
-  test("the definition is Pi's: renderers, schemas and prompt text", async () => {
+  test("the definition is Pi's plus one sentence: renderers, schemas and prompt text", async () => {
     const { pi, skyr } = await bothRun({}, [["x", { command: "true" }]]);
     const a = pi.session.getToolDefinition("bash");
     const b = skyr.session.getToolDefinition("bash");
     expect(b).toBeDefined();
     expect(String(b?.renderCall)).toBe(String(a?.renderCall));
     expect(String(b?.renderResult)).toBe(String(a?.renderResult));
+    expect(b?.description).toBe(`${a?.description} ${SUFFIX}`);
     for (const key of [
       "name",
       "label",
-      "description",
       "promptSnippet",
       "promptGuidelines",
       "parameters",
@@ -248,9 +252,11 @@ describe("bash parity with Pi's own", () => {
     expect(
       got.tools.map((t) => t.name).filter((n) => piNames.includes(n)),
     ).toEqual(piNames);
-    expect(got.tools.find((t) => t.name === "bash")).toEqual(
-      want.tools.find((t) => t.name === "bash"),
-    );
+    const piBash = want.tools.find((t) => t.name === "bash");
+    expect(got.tools.find((t) => t.name === "bash")).toEqual({
+      ...piBash,
+      description: `${piBash?.description} ${SUFFIX}`,
+    });
     expect(got.lines).toEqual(want.lines);
     expect(want.lines.length).toBeGreaterThan(0);
   });

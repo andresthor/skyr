@@ -1,21 +1,28 @@
 /**
  * skyr serves `bash` in place of Pi's, built from Pi's own definition so a call behaves as
- * Pi's does, and keeps `bash_stop` ready for the jobs a later change starts.
+ * Pi's does, plus one thing: a call still running at the limit keeps running as a background
+ * job, and `bash_stop` ends one.
  *
  * It registers in `session_start`, after every extension has loaded, and only when Pi's own
  * `bash` is the one in effect: Pi lets the first registration of a name win and never lets a
  * tool be taken back out, so the checks come before the first registration.
  */
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
+  BashToolDetails,
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import type { PiModule } from "../pi.js";
+import { registerTextMessageRenderer } from "../tools/render.js";
+import { Moved, movingOperations } from "./exec.js";
+import { identify } from "./job.js";
+import { createShellSession, snapshotOf } from "./session.js";
+import type { ShellSnapshot } from "./store.js";
 
 const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
 
@@ -41,6 +48,7 @@ function stepAsideCause(
   pi: ExtensionAPI,
   piParameters: string[],
   shellPath: string | undefined,
+  self: string | undefined,
 ): string | undefined {
   const tools = pi.getAllTools();
   const bash = tools.find((t) => t.name === "bash");
@@ -60,32 +68,89 @@ function stepAsideCause(
   if (shellPath && !POSIX_SHELLS.has(basename(shellPath)))
     return `shellPath names ${basename(shellPath)}, which is not a POSIX shell`;
   if (!onPath("ps")) return "ps is not on PATH";
+  if (self === undefined) return "ps cannot identify this Pi process";
   return undefined;
 }
 
-function registerBashStop(pi: ExtensionAPI): void {
-  pi.registerTool({
-    name: "bash_stop",
-    label: "bash_stop",
-    description:
-      "Stop a background job: SIGTERM to its process group, then SIGKILL after 5 s; returns how it ended. Stopping a job that has already ended is not an error. You never need it to wait, because a job reports its own end.",
-    parameters: Type.Object({
-      id: Type.String({ description: "The 8-character job id." }),
-    }),
-    // Nothing starts jobs yet, so the model is not offered the tool.
-    defaultActive: false,
-    async execute() {
-      throw new Error("bash_stop: no background jobs exist yet.");
-    },
-  });
+const MESSAGE_TYPE = "skyr.shell";
+const PREVIEW_LINES = 12;
+const DEFAULT_LIMIT_MS = 120_000;
+const DEFAULT_GRACE_MS = 5_000;
+
+const StopParams = Type.Object({
+  id: Type.String({ description: "The 8-character job id." }),
+});
+
+/** Test seams of `wireShells`; production passes none. */
+export interface ShellsDeps {
+  /** Milliseconds a call may run in the foreground before it moves. */
+  limitMs?: number;
+  /** Milliseconds between SIGTERM and SIGKILL when a job is stopped. */
+  graceMs?: number;
+  identify?: typeof identify;
+}
+
+type Route = "plain" | "move";
+
+/**
+ * How a call runs. A nested call (`toolCallId` has a `/`) and a call whose `timeout` ends it
+ * within the limit are Pi's own; every other call moves at the limit, and a longer `timeout`
+ * is then the job's deadline.
+ * @internal
+ */
+export function routeOf(
+  call: { toolCallId: string; timeout: number | undefined },
+  limitMs: number,
+): Route {
+  if (call.toolCallId.includes("/")) return "plain";
+  if (call.timeout !== undefined && call.timeout <= limitMs / 1000)
+    return "plain";
+  return "move";
 }
 
 /**
  * Serves `bash` and `bash_stop` from `session_start`, unless the mode, the host or the
  * settings leave `bash` to Pi. A step-aside warns the user and registers neither tool.
  */
-export function registerShells(pi: ExtensionAPI, piModule: PiModule): void {
+export function registerShells(
+  pi: ExtensionAPI,
+  piModule: PiModule,
+  self: string | undefined,
+): void {
+  wireShells(pi, piModule, self);
+}
+
+/**
+ * `registerShells` with its test seams.
+ * @internal
+ */
+export function wireShells(
+  pi: ExtensionAPI,
+  piModule: PiModule,
+  self: string | undefined,
+  deps: ShellsDeps = {},
+): void {
+  const limitMs = deps.limitMs ?? DEFAULT_LIMIT_MS;
+  const graceMs = deps.graceMs ?? DEFAULT_GRACE_MS;
+  // Bumped at every session start and shutdown: a call that began in an earlier one never moves.
+  let generation = 0;
+  let serving = false;
+
+  // Only added to the active set, never removed: Pi drops its pending restored tools when a
+  // tool leaves it.
+  const activateBashStop = () => {
+    const names = pi.getActiveTools();
+    if (names.includes("bash") && !names.includes("bash_stop"))
+      pi.setActiveTools([...names, "bash_stop"]);
+  };
+
+  registerTextMessageRenderer(pi, MESSAGE_TYPE, PREVIEW_LINES);
+
+  let session: ReturnType<typeof createShellSession> | undefined;
+
   pi.on("session_start", (_event, ctx: ExtensionContext) => {
+    generation += 1;
+    const born = generation;
     if (
       ctx.mode === "print" ||
       ctx.mode === "json" ||
@@ -100,27 +165,134 @@ export function registerShells(pi: ExtensionAPI, piModule: PiModule): void {
     const options = { commandPrefix: settings.shellCommandPrefix, shellPath };
     const base = piModule.createBashToolDefinition(ctx.cwd, options);
 
-    const cause = stepAsideCause(
+    const root = join(piModule.getAgentDir(), "skyr", "shells");
+    let cause = stepAsideCause(
       pi,
       Object.keys(base.parameters.properties),
       shellPath,
+      self,
     );
-    if (cause) {
+    if (!cause && self !== undefined) {
+      // Where a call's shell writes its pid; without it no call could move.
+      const pending = join(root, ".pending");
+      try {
+        mkdirSync(pending, { recursive: true });
+      } catch (error: unknown) {
+        cause = `${pending} cannot be created (${error instanceof Error ? error.message : String(error)})`;
+      }
+    }
+    // `self` is undefined only with a cause saying so
+    if (cause || self === undefined) {
       ctx.ui.notify(
-        `skyr: background shells are off because ${cause}; bash is left as it is.`,
+        `skyr: background shells are off because ${cause ?? "ps cannot identify this Pi process"}; bash is left as it is.`,
         "warning",
       );
       return;
     }
 
+    const sessionId = ctx.sessionManager.getSessionId();
+    const own = createShellSession({
+      root,
+      owner: self,
+      sessionId,
+      graceMs,
+      pi: piModule,
+      send: (text, jobs) =>
+        pi.sendMessage(
+          {
+            customType: MESSAGE_TYPE,
+            content: [{ type: "text", text }],
+            display: true,
+            details: jobs,
+          },
+          { triggerTurn: true },
+        ),
+      isIdle: () => ctx.isIdle(),
+    });
+    session = own;
+    serving = true;
+
     pi.registerTool({
       ...base,
+      description: `${base.description} A call still running after ${limitMs / 1000} s keeps running as a background job, and you are told when it ends.`,
       // Built per call, from the settings read at session start, so each call is Pi's own code path.
-      execute: (id, params, signal, onUpdate, callCtx) =>
-        piModule
-          .createBashToolDefinition(callCtx.cwd, options)
-          .execute(id, params, signal, onUpdate, callCtx),
+      async execute(id, params, signal, onUpdate, callCtx) {
+        const operations =
+          routeOf({ toolCallId: id, timeout: params.timeout }, limitMs) ===
+          "move"
+            ? movingOperations({
+                ops: piModule.createLocalBashOperations({ shellPath }),
+                limitMs,
+                root,
+                sessionId,
+                command: params.command,
+                truncateTail: piModule.truncateTail,
+                owner: () => (born === generation ? own.owner() : undefined),
+                identify: deps.identify ?? identify,
+                onMoved: (job) => own.track(job),
+                onExited: (job) => own.exited(job),
+              })
+            : undefined;
+        try {
+          return await piModule
+            .createBashToolDefinition(callCtx.cwd, { ...options, operations })
+            .execute(id, params, signal, onUpdate, callCtx);
+        } catch (error: unknown) {
+          if (!(error instanceof Moved)) throw error;
+          const { job, tail } = error;
+          const moved = `Still running after ${limitMs / 1000} s; moved to the background as job ${job.id} in ${job.cwd}. Full log: ${join(job.dir, "out.log")}. You will be told automatically when it ends: do not sleep, poll or re-read the log to wait. Keep working on anything that does not depend on it; if nothing does, end your turn. Stop it with bash_stop {"id":"${job.id}"}.`;
+          // No structuredContent although outputSchema is inherited: codemode's calls come through
+          // ctx.executeTool with nested ids, which never move, so it never sees this result.
+          // Pi's bash details keys are all optional, so this still reads as a bash result's details.
+          const details: BashToolDetails & { job: ShellSnapshot } = {
+            job: snapshotOf(job),
+          };
+          return {
+            content: [
+              {
+                type: "text",
+                text: tail.trim() ? `${tail.trimEnd()}\n\n${moved}` : moved,
+              },
+            ],
+            details,
+          };
+        }
+      },
     });
-    registerBashStop(pi);
+    pi.registerTool({
+      name: "bash_stop",
+      label: "bash_stop",
+      description:
+        "Stop a background job: SIGTERM to its process group, then SIGKILL after 5 s; returns how it ended. Stopping a job that has already ended is not an error. You never need it to wait, because a job reports its own end.",
+      parameters: StopParams,
+      // Unannotated, Pi's gates treat a tool as destructive and open-world and may ask each time.
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      // Active only alongside `bash`, so a tool set without it gains nothing; activated below.
+      defaultActive: false,
+      async execute(_id, params: Static<typeof StopParams>) {
+        const { text, job } = await own.stopJob(params.id);
+        return { content: [{ type: "text", text }], details: job };
+      },
+    });
+    activateBashStop();
+    own.start();
+  });
+
+  // /tree restores the active tools from the branch's transcript, which may lack bash_stop.
+  pi.on("session_tree", () => {
+    if (serving) activateBashStop();
+  });
+
+  pi.on("session_shutdown", async () => {
+    generation += 1;
+    serving = false;
+    const ending = session;
+    session = undefined;
+    await ending?.stop();
   });
 }

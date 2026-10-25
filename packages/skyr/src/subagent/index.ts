@@ -11,7 +11,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { loadPi } from "../pi.js";
 import { hostCapabilities } from "../tengi.js";
@@ -20,6 +20,7 @@ import {
   errnoOf,
   errorRow,
   quoted,
+  registerTextMessageRenderer,
   type Segment,
   sanitize,
   seconds,
@@ -893,34 +894,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerMessageRenderer<RunSnapshot[]>(
-    MESSAGE_TYPE,
-    (message, { expanded, outputPad }, theme) => {
-      const text =
-        typeof message.content === "string"
-          ? message.content
-          : message.content
-              .map((c) => (c.type === "text" ? c.text : ""))
-              .join("");
-      const lines = text.split("\n").map(sanitize);
-      const shown = expanded ? lines : lines.slice(0, PREVIEW_LINES);
-      const hidden = lines.length - shown.length;
-      const box = new Box(outputPad, 1, (t) => theme.bg("customMessageBg", t));
-      box.addChild(
-        new Text(
-          [
-            ...shown,
-            ...(hidden > 0
-              ? [theme.fg("muted", `… ${hidden} more lines`)]
-              : []),
-          ].join("\n"),
-          0,
-          0,
-        ),
-      );
-      return box;
-    },
-  );
+  registerTextMessageRenderer(pi, MESSAGE_TYPE, PREVIEW_LINES);
 
   pi.registerCommand("subagents", {
     description:

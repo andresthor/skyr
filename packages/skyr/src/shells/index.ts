@@ -18,11 +18,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import type { PiModule } from "../pi.js";
+import { publishTasks } from "../tengi.js";
 import { registerTextMessageRenderer } from "../tools/render.js";
 import { Moved, movingOperations } from "./exec.js";
 import { identify } from "./job.js";
 import { createShellSession, snapshotOf, stopHandedOver } from "./session.js";
-import type { ShellSnapshot } from "./store.js";
+import { type ShellSnapshot, taskItems } from "./store.js";
 
 const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
 
@@ -73,6 +74,7 @@ function stepAsideCause(
 }
 
 const MESSAGE_TYPE = "skyr.shell";
+const TASK_SOURCE = "skyr/shells";
 const PREVIEW_LINES = 12;
 const DEFAULT_LIMIT_MS = 120_000;
 const DEFAULT_GRACE_MS = 5_000;
@@ -235,6 +237,9 @@ export function wireShells(
     });
     session = own;
     serving = true;
+    const publish = () =>
+      publishTasks(pi.events, TASK_SOURCE, taskItems(own.jobs()));
+    own.subscribe(publish);
 
     pi.registerTool({
       ...base,
@@ -320,6 +325,8 @@ export function wireShells(
     });
     activateBashStop();
     await own.start();
+    // A closing session never publishes its stops, so this clears what /new or /resume left listed
+    publish();
   });
 
   // A /compact drops what the model knew of the jobs that still run

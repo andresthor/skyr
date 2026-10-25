@@ -199,4 +199,68 @@ describe.skipIf(TENGI_DIR === undefined)("inside tengi", () => {
     },
     TIMEOUT,
   );
+
+  test(
+    "a background shell's end reaches the client as a message that starts a turn",
+    async () => {
+      const tengi = startTengi();
+      const sessionId = await newSession(tengi);
+      const gate = join(tengi.out, "shell-release");
+      // The shell is detached from tengi's test, so a failed assertion must still end it
+      onTestFinished(() => writeFileSync(gate, ""));
+      const command = `until [ -e '${gate}' ] || [ $SECONDS -ge 30 ]; do sleep 0.1; done`;
+      expect(
+        await prompt(
+          tengi,
+          sessionId,
+          `@tool ${JSON.stringify({ name: "bash", args: { command, background: true } })}`,
+        ),
+      ).toEqual({ stopReason: "end_turn" });
+
+      writeFileSync(gate, "");
+      // Only the turn the job's end starts answers with this; the tool result's reply does not
+      await tengi.nextUpdate((u) => {
+        const content = isObj(u) ? u.content : undefined;
+        return (
+          isObj(u) &&
+          u.sessionUpdate === "agent_message_chunk" &&
+          isObj(content) &&
+          typeof content.text === "string" &&
+          content.text.includes("quick reply")
+        );
+      });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a running background shell shows as one task in the client, and the list empties when it ends",
+    async () => {
+      const tengi = startTengi();
+      const sessionId = await newSession(
+        tengi,
+        clientCapabilities({ _meta: { agentui: { version: 1, tasks: true } } }),
+      );
+      const gate = join(tengi.out, "task-release");
+      onTestFinished(() => writeFileSync(gate, ""));
+      const command = `cd /tmp && until [ -e '${gate}' ] || [ $SECONDS -ge 30 ]; do sleep 0.1; done`;
+      const turn = prompt(
+        tengi,
+        sessionId,
+        `@tool ${JSON.stringify({ name: "bash", args: { command, background: true } })}`,
+      );
+
+      const running = await tengi.nextUpdate((u) => taskItems(u)?.length === 1);
+      expect(taskItems(running)?.[0]).toMatchObject({
+        id: expect.stringMatching(/^skyr\/shells\//),
+        title: expect.stringMatching(/^until \[ -e /),
+        status: "running",
+      });
+      expect(await turn).toEqual({ stopReason: "end_turn" });
+
+      writeFileSync(gate, "");
+      await tengi.nextUpdate((u) => taskItems(u)?.length === 0);
+    },
+    TIMEOUT,
+  );
 });

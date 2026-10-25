@@ -55,6 +55,10 @@ export interface ShellSession {
    * this Pi and left running. Awaited by the caller; nothing is told to the model afterwards.
    */
   stop(o?: { handOver?: boolean }): Promise<void>;
+  /** Every job, oldest start first. */
+  jobs(): readonly ShellSnapshot[];
+  /** Calls `listener` synchronously after every change to the jobs; returns the unsubscribe. */
+  subscribe(listener: () => void): () => void;
   /** Tells the model which jobs still run, after a `/compact` dropped what it knew; starts no turn. */
   rollCall(): void;
   /** This Pi's identity token; undefined after `stop`. */
@@ -535,6 +539,8 @@ export function createShellSession(o: {
       await watcher.stop("all", "session").catch(complain);
       watcher.dispose();
     },
+    jobs: () => store.jobs(),
+    subscribe: (listener) => store.subscribe(listener),
     owner: () => (closed ? undefined : o.owner),
     track: (job) => hold(job),
     exited(job) {

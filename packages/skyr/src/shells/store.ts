@@ -2,6 +2,7 @@
  * The background jobs as plain snapshots, and the words that name them. Snapshots hold facts only
  * (epoch ms, nothing rendered or derived), so a snapshot can be drawn or published as it is.
  */
+import type { TaskItem } from "../tengi.js";
 import { oneLine } from "../tools/render.js";
 
 type ShellStatus = "running" | "done" | "failed" | "aborted" | "unknown";
@@ -32,15 +33,23 @@ export interface ShellStore {
   put(snapshot: ShellSnapshot): void;
   /** Every job, oldest start first. Snapshots already handed out never change. */
   jobs(): readonly ShellSnapshot[];
+  /** Calls `listener` synchronously after every put. Returns the unsubscribe function. */
+  subscribe(listener: () => void): () => void;
 }
 
 export function createShellStore(): ShellStore {
   const jobs = new Map<string, ShellSnapshot>();
+  const listeners = new Set<() => void>();
   return {
     put(snapshot) {
       jobs.set(snapshot.id, { ...snapshot });
+      for (const listener of listeners) listener();
     },
     jobs: () => [...jobs.values()].sort((a, b) => a.startedAt - b.startedAt),
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
   };
 }
 
@@ -72,4 +81,15 @@ export function duration(ms: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m${String(s % 60).padStart(2, "0")}s`;
   return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** The active jobs as an ACP client's task list; ended ones leave it. */
+export function taskItems(jobs: readonly ShellSnapshot[]): TaskItem[] {
+  return jobs.filter(active).map((job) => ({
+    id: job.id,
+    title: titleOf(job.command),
+    status: "running",
+    ...(job.lingering && { detail: "lingering" }),
+    startedAt: job.startedAt,
+  }));
 }

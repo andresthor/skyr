@@ -1,39 +1,13 @@
 /**
- * ask_user's side of the `tengi:` event-bus contract: the capability query that says whether a
- * form would reach anyone, and the form request itself. The query is answered inside the asking
- * `emit`, so it is synchronous; the request carries its own abort signal and reply callbacks, so
- * no later reply has to cross the bus, where a reload would drop this extension's listeners.
+ * ask_user's form request over the `tengi:` event-bus contract. The request carries its own
+ * abort signal and reply callbacks, so no later reply has to cross the bus, where a reload would
+ * drop this extension's listeners.
  */
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isRecord } from "../tengi.js";
 
 type Events = ExtensionAPI["events"];
-
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
-
-/**
- * True only for a v1 reply to this query with `forms` and `formRequests` both true, so a form
- * built here reaches someone who can answer it. Never throws, because Pi offers a tool whose
- * `prepareLoadout` throws; a stale extension API after a reload reads as no host.
- */
-export function hostServesForms(events: Events): boolean {
-  const id = randomUUID();
-  let serves = false;
-  let off: (() => void) | undefined;
-  try {
-    off = events.on("tengi:capabilities", (data) => {
-      if (!isRecord(data) || data.id !== id || data.v !== 1) return;
-      serves ||= data.forms === true && data.formRequests === true;
-    });
-    events.emit("tengi:capabilities?", { id });
-  } catch {
-    return false;
-  } finally {
-    off?.();
-  }
-  return serves;
-}
 
 export interface FormRequest {
   toolCallId: string;

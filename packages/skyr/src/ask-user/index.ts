@@ -10,6 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
+import { hostCapabilities } from "../tengi.js";
 import {
   clip,
   errorRow,
@@ -30,7 +31,7 @@ import {
   shortHeader,
 } from "./dialog.js";
 import { buildForm, parseForm } from "./form.js";
-import { askHost, hostServesForms } from "./host.js";
+import { askHost } from "./host.js";
 
 const MAX_QUESTIONS = 4;
 const MIN_OPTIONS = 2;
@@ -98,7 +99,7 @@ function offerFor(
   if (mode === "tui") return "dialog";
   // Pi builds the first loadout before session_start, when no request goes out yet
   if (mode === undefined) return "none";
-  return hostServesForms(events) ? "form" : "none";
+  return hostCapabilities(events)?.formRequests ? "form" : "none";
 }
 
 const failed = (why: string) =>

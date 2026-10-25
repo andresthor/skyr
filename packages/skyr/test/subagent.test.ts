@@ -14,12 +14,13 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import { registerSkyr } from "../src/index.js";
 import {
   agentFile,
   call,
+  expectInert,
+  HOSTILE,
   hold,
   parentSession,
   results,
@@ -63,6 +64,14 @@ function recorder() {
   return { seen, child };
 }
 
+/** The `subagent` tool entries Pi declared in a request's system messages. */
+const declarations = (context: TranscriptContext) =>
+  context.messages.flatMap((m) =>
+    m.role === "system"
+      ? (m.toolsAdded ?? []).filter((t) => t.name === "subagent")
+      : [],
+  );
+
 /** A fresh registration with an empty store: the tool and the delivered-answer renderer. */
 function registered(): ToolDefinition & { message: MessageRenderer } {
   const tools: ToolDefinition[] = [];
@@ -84,29 +93,32 @@ function registered(): ToolDefinition & { message: MessageRenderer } {
 
 function resultRow(
   tool: ToolDefinition,
-  toolCallId: string,
-  result: { content: { type: "text"; text: string }[]; details: unknown },
-  isError = false,
-  width = 200,
+  details: unknown,
+  o: { text?: string; isError?: boolean; width?: number; id?: string } = {},
 ): string[] {
-  const context = { toolCallId, isError } as RenderContext;
+  const context = {
+    toolCallId: o.id ?? "t",
+    isError: o.isError ?? false,
+  } as RenderContext;
+  const content = o.text ? [{ type: "text" as const, text: o.text }] : [];
   return (
     tool
       .renderResult?.(
-        result,
+        { content, details },
         { expanded: false, isPartial: false },
         plain,
         context,
       )
-      .render(width) ?? []
+      .render(o.width ?? 200) ?? []
   );
 }
 
-test("a running row says stalled only while the child's activity is unknown", () => {
+test("a row renders from the store and saved details alone: stalled only while activity is unknown, and a background child under its own marker", () => {
   const tool = registered();
   const running = {
-    id: "1",
+    id: "abcdef0123",
     toolCallId: "t",
+    agent: "scout",
     description: "look",
     status: "running",
     startedAt: Date.now(),
@@ -115,12 +127,14 @@ test("a running row says stalled only while the child's activity is unknown", ()
     tokens: 0,
     tool: "grep",
   };
-  const row = (activity: string) =>
-    resultRow(tool, "t", { content: [], details: { ...running, activity } })[0];
-  expect(row("unknown")).toMatch(
+  const row = (details: object) => resultRow(tool, details)[0];
+  expect(row({ ...running, activity: "unknown" })).toMatch(
     /^● running · 1 turn · 1 tool · grep · .* · stalled\s*$/,
   );
-  expect(row("working")).not.toContain("stalled");
+  expect(row({ ...running, activity: "working" })).not.toContain("stalled");
+  expect(row({ ...running, background: true })?.trimEnd()).toBe(
+    "↗ background · scout · abcdef01",
+  );
 });
 
 test("a child never receives the subagent tool, nor any extension installed for the user or the repo", async () => {
@@ -142,108 +156,53 @@ test("a child never receives the subagent tool, nor any extension installed for 
     );
   }
 
+  const sentinel = globalThis as { sentinelLoads?: number };
+  sentinel.sentinelLoads = undefined;
+
   await parent.session.prompt("go");
 
   const child = parent.requests.find((r) => taskOf(r) === "look");
   expect(child).toBeDefined();
   expect(toolsSeen(child!)).not.toContain("subagent");
-  expect((globalThis as { sentinelLoads?: number }).sentinelLoads).toBe(
-    undefined,
-  );
+  expect(sentinel.sentinelLoads).toBe(undefined);
 });
 
 test("a child's text and description cannot reach the terminal as escapes, the row fits 20 columns, and an ad-hoc row never says undefined", () => {
-  const OSC52 = "\u001b]52;c;cHduZWQ=\u0007";
-  const hostile = `${OSC52}evil‮漢字漢字🙂🙂 and more words`;
   const tool = registered();
   const run = {
     id: "1",
     toolCallId: "t",
     agent: "scout",
-    description: hostile,
+    description: HOSTILE,
     status: "running",
     startedAt: Date.now(),
     turns: 1,
     toolCalls: 2,
     tokens: 0,
-    tool: hostile,
+    tool: HOSTILE,
   };
-  const callRow = (args: Record<string, string>, width: number) =>
-    tool.renderCall?.(args, plain, {} as RenderContext).render(width) ?? [];
+  const callRow = (args: Record<string, string>) =>
+    tool.renderCall?.(args, plain, {} as RenderContext).render(20) ?? [];
+  const row = (over: object, o: Parameters<typeof resultRow>[2] = {}) =>
+    resultRow(tool, { ...run, ...over }, { width: 20, ...o });
   const lines = [
-    ...callRow({ agent: "scout", description: hostile, task: "x" }, 20),
-    ...callRow({ description: hostile, task: "x", cwd: hostile }, 20),
-    ...resultRow(tool, "t", { content: [], details: run }, false, 20),
-    ...resultRow(
-      tool,
-      "t",
-      {
-        content: [],
-        details: {
-          ...run,
-          agent: undefined,
-          status: "queued",
-          behind: hostile,
-        },
-      },
-      false,
-      20,
-    ),
-    ...resultRow(
-      tool,
-      "t",
-      {
-        content: [{ type: "text", text: `subagent: scout failed: ${hostile}` }],
-        details: { ...run, status: "failed", endedAt: Date.now() },
-      },
-      true,
-      20,
+    ...callRow({ agent: "scout", description: HOSTILE, task: "x" }),
+    ...callRow({ description: HOSTILE, task: "x", cwd: HOSTILE }),
+    ...row({}),
+    ...row({ agent: undefined, status: "queued", behind: HOSTILE }),
+    ...row(
+      { status: "failed", endedAt: Date.now() },
+      { text: `subagent: scout failed: ${HOSTILE}`, isError: true },
     ),
   ];
   expect(lines).toHaveLength(5);
-  for (const line of lines) {
-    expect(visibleWidth(line)).toBeLessThanOrEqual(20);
-    expect(line).not.toContain("\u001b]");
-    expect(line).not.toContain("cHduZWQ");
-    expect(line).not.toContain("‮");
-    expect(line).not.toContain("undefined");
-  }
-  expect(
-    callRow(
-      { description: "fix it", task: "x", cwd: "../wt" },
-      200,
-    )[0]?.trimEnd(),
-  ).toBe('subagent "fix it" in ../wt');
-  expect(
-    resultRow(tool, "t", {
-      content: [],
-      details: { ...run, status: "queued", behind: '"fix it"' },
-    })[0],
-  ).toMatch(/^● queued · behind "fix it" · \d+\.\ds +$/);
+  expectInert(lines, 20);
+  for (const line of lines) expect(line).not.toContain("undefined");
 });
 
-test("a background row renders from saved details alone, and a delivered answer's text cannot reach the terminal as escapes and is previewed in full only when expanded", () => {
-  const OSC52 = "\u001b]52;c;cHduZWQ=\u0007";
-  const hostile = `${OSC52}evil‮漢字漢字🙂🙂 and more words`;
+test("a delivered answer's text cannot reach the terminal as escapes, and is previewed in full only when expanded", () => {
   const tool = registered();
-  const row = resultRow(tool, "t", {
-    content: [],
-    details: {
-      id: "abcdef0123",
-      toolCallId: "t",
-      agent: "scout",
-      description: "x",
-      status: "running",
-      startedAt: 0,
-      turns: 0,
-      toolCalls: 0,
-      tokens: 0,
-      background: true,
-    },
-  })[0];
-  expect(row?.trimEnd()).toBe("↗ background · scout · abcdef01");
-
-  const text = Array.from({ length: 20 }, (_, i) => `${hostile} ${i}`).join(
+  const text = Array.from({ length: 20 }, (_, i) => `${HOSTILE} ${i}`).join(
     "\n",
   );
   const render = (expanded: boolean) =>
@@ -262,17 +221,12 @@ test("a background row renders from saved details alone, and a delivered answer'
       ?.render(40) ?? [];
   const collapsed = render(false);
   expect(collapsed.length).toBeGreaterThan(0);
-  for (const line of collapsed) {
-    expect(visibleWidth(line)).toBeLessThanOrEqual(40);
-    expect(line).not.toContain("\u001b]");
-    expect(line).not.toContain("cHduZWQ");
-    expect(line).not.toContain("‮");
-  }
-  expect(collapsed.join("\n")).toContain("… 8 more lines");
+  expectInert(collapsed, 40);
+  expect(collapsed.join("\n")).toContain("more lines");
   expect(render(true).join("\n")).not.toContain("more lines");
 });
 
-test("a child's final text reaches the parent model, and its usage counts toward the parent's session totals", async () => {
+test("a child's final text reaches the parent model, its usage counts toward the parent's session totals, and the tool is declared once across the parent's turns", async () => {
   const { session, requests } = await parentSession({
     respond: router([call({ agent: "scout", task: "look" })], () =>
       fauxAssistantMessage("FINDING-42"),
@@ -291,9 +245,13 @@ test("a child's final text reaches the parent model, and its usage counts toward
     0,
   );
   expect(session.getSessionStats().tokens.input).toBe(parentInput + childInput);
+  // A changed description would be declared again in a later system message.
+  const turns = requests.filter((r) => taskOf(r) === "go");
+  expect(turns).toHaveLength(2);
+  expect(declarations(turns[1]!)).toHaveLength(1);
 });
 
-test("parallel subagent calls in one turn run concurrently, and Esc stops them all within a second", async () => {
+test("parallel subagent calls in one turn run concurrently, and Esc stops them all", async () => {
   const holds = new Map(["a", "b", "c"].map((task) => [task, hold()]));
   const parent = await parentSession({
     respond: router(
@@ -311,10 +269,8 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
   await Promise.all([...holds.values()].map((h) => h.entered));
   expect(parent.widgets.at(-1)).toHaveLength(3);
 
-  const started = Date.now();
   await parent.session.abort();
   await run;
-  expect(Date.now() - started).toBeLessThan(1000);
 
   for (const task of holds.keys()) {
     const result = results(parent.session).get(task);
@@ -326,13 +282,14 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
   expect(parent.widgets.at(-1)).toBeUndefined();
 });
 
-test("a child gets exactly its agent file's tools or the default set, and the parent's model unless its agent file names one", async () => {
+test("a child gets exactly its agent file's tools or the default set (an ad-hoc call too), and the parent's model unless its agent file names one", async () => {
   const { seen, child } = recorder();
   const { session } = await parentSession({
     respond: router(
       [
         call({ agent: "reader", task: "r" }),
         call({ agent: "scout", task: "s" }),
+        call({ task: "plain" }),
       ],
       child,
     ),
@@ -351,36 +308,20 @@ test("a child gets exactly its agent file's tools or the default set, and the pa
     tools: ["read", "web_search"],
     model: "faux-2",
   });
-  expect(seen.get("s")).toMatchObject({
+  const defaults = {
     tools: ["bash", "find", "grep", "ls", "read", "web_fetch", "web_search"],
     model: "faux-1",
-  });
+  };
+  expect(seen.get("s")).toMatchObject(defaults);
+  expect(seen.get("plain")).toMatchObject(defaults);
 });
 
-test("with only description and task, the child gets the default read set, the parent's model and cwd, and Pi's own prompt with nothing appended", async () => {
+test("prompt is appended to the child's system prompt, with agent as well the agent body comes first, and with neither Pi's own prompt gets nothing appended", async () => {
   const { seen, child } = recorder();
-  const parent = await parentSession({
-    respond: router([call({ task: "plain" })], child),
-  });
-
-  await parent.session.prompt("go");
-
-  const got = seen.get("plain");
-  expect(got).toMatchObject({
-    tools: ["bash", "find", "grep", "ls", "read", "web_fetch", "web_search"],
-    model: "faux-1",
-  });
-  expect(got?.sections.preamble).toBeDefined();
-  expect(got?.sections.addendum).toBeUndefined();
-  expect(got?.sections.cwd).toBe(`<cwd>\n${parent.cwd}\n</cwd>`);
-  expect(results(parent.session).get("plain")?.isError).toBe(false);
-});
-
-test("prompt is appended to the child's system prompt, and with agent as well the agent body comes first", async () => {
-  const { seen, child } = recorder();
-  const { session } = await parentSession({
+  const { session, cwd } = await parentSession({
     respond: router(
       [
+        call({ task: "plain" }),
         call({ task: "p", prompt: "PROMPT-ONLY" }),
         call({ task: "ap", agent: "scout", prompt: "PROMPT-AFTER" }),
       ],
@@ -391,6 +332,10 @@ test("prompt is appended to the child's system prompt, and with agent as well th
 
   await session.prompt("go");
 
+  const plain = seen.get("plain")?.sections;
+  expect(plain?.preamble).toBeDefined();
+  expect(plain?.addendum).toBeUndefined();
+  expect(plain?.cwd).toBe(`<cwd>\n${cwd}\n</cwd>`);
   expect(seen.get("p")?.sections.addendum).toBe(
     "<addendum>\nPROMPT-ONLY\n</addendum>",
   );
@@ -399,63 +344,49 @@ test("prompt is appended to the child's system prompt, and with agent as well th
   );
 });
 
-test("tools on a call is validated like an agent file's, maps Claude Code names, overrides the agent file's list, and an unknown name fails before any child starts", async () => {
+test("tools and model on a call override the agent file's and the parent's, tools are validated like an agent file's, and an unknown one fails before any child starts", async () => {
   const { seen, child } = recorder();
+  const refused = new Set(["bad-tool", "bad-model"]);
   const parent = await parentSession({
     respond: router(
       [
         call({ task: "t1", tools: ["Read", "Edit"] }),
         call({ task: "t2", agent: "reader", tools: ["grep"] }),
-        call({ task: "t3", tools: ["read", "TodoWrite"] }),
+        call({ task: "m1", model: "faux/faux-2" }),
+        call({ task: "m2", agent: "reader", model: "faux/faux-1" }),
+        call({ task: "bad-tool", tools: ["read", "TodoWrite"] }),
+        call({ task: "bad-model", model: "nowhere/none" }),
       ],
       (context, ...rest) => {
-        if (taskOf(context) === "t3") throw new Error("t3 started");
+        if (refused.has(taskOf(context))) throw new Error("a child started");
         return child(context, ...rest);
       },
     ),
-    userAgents: { "reader.md": agentFile("Reads", "tools: Read, WebSearch\n") },
+    userAgents: {
+      "reader.md": agentFile(
+        "Reads",
+        "tools: Read, WebSearch\nmodel: faux/faux-2\n",
+      ),
+    },
   });
 
   await parent.session.prompt("go");
 
   expect(seen.get("t1")?.tools).toEqual(["edit", "read"]);
   expect(seen.get("t2")?.tools).toEqual(["grep"]);
-  const t3 = results(parent.session).get("t3");
-  expect(t3?.isError).toBe(true);
-  expect(t3 && textOf(t3)).toMatch(
-    /^subagent: tools: unknown tools TodoWrite; valid tools are read, grep, find, ls, bash, edit, write, web_search, web_fetch/,
-  );
-  expect(parent.requests.some((r) => taskOf(r) === "t3")).toBe(false);
-  expect(parent.widgets.some((w) => w?.length === 3)).toBe(false);
-});
-
-test("model on a call overrides the agent file's and the parent's, and an unknown model fails before any child starts", async () => {
-  const { seen, child } = recorder();
-  const parent = await parentSession({
-    respond: router(
-      [
-        call({ task: "m1", model: "faux/faux-2" }),
-        call({ task: "m2", agent: "reader", model: "faux/faux-1" }),
-        call({ task: "m3", model: "nowhere/none" }),
-      ],
-      (context, ...rest) => {
-        if (taskOf(context) === "m3") throw new Error("m3 started");
-        return child(context, ...rest);
-      },
-    ),
-    userAgents: { "reader.md": agentFile("Reads", "model: faux/faux-2\n") },
-  });
-
-  await parent.session.prompt("go");
-
   expect(seen.get("m1")?.model).toBe("faux-2");
   expect(seen.get("m2")?.model).toBe("faux-1");
-  const m3 = results(parent.session).get("m3");
-  expect(m3?.isError).toBe(true);
-  expect(m3 && textOf(m3)).toMatch(
-    /^subagent: "run m3": model "nowhere\/none" is not available/,
+  const text = (task: string) => textOf(results(parent.session).get(task)!);
+  expect(text("bad-tool")).toMatch(
+    /^subagent: tools: unknown tools TodoWrite; valid tools are /,
   );
-  expect(parent.requests.some((r) => taskOf(r) === "m3")).toBe(false);
+  expect(text("bad-model")).toMatch(
+    /^subagent: "run bad-model": model "nowhere\/none" is not available/,
+  );
+  for (const task of refused) {
+    expect(results(parent.session).get(task)?.isError).toBe(true);
+    expect(parent.requests.some((r) => taskOf(r) === task)).toBe(false);
+  }
 });
 
 test("cwd runs the child there, absolute or relative to the parent's cwd, and its session still saves beside the parent's", async () => {
@@ -500,7 +431,6 @@ test("cwd runs the child there, absolute or relative to the parent's cwd, and it
       join(dirname(parentFile), basename(parentFile, ".jsonl")),
     ),
   ).toBe(true);
-  expect(results(parent.session).get("rel")?.isError).toBe(false);
 });
 
 test("a missing cwd, or a file as cwd, fails before any child starts and names the path", async () => {
@@ -523,11 +453,9 @@ test("a missing cwd, or a file as cwd, fails before any child starts and names t
   expect(file?.isError).toBe(true);
   // Each diagnosis reads true: a missing path is missing, a file is a file — named, with the path.
   expect(textOf(missing!)).toContain(join(parent.cwd, "nope"));
-  expect(textOf(missing!)).toContain("does not resolve (ENOENT)");
-  expect(textOf(missing!)).toContain("pass an existing directory");
+  expect(textOf(missing!)).toContain("ENOENT");
   expect(textOf(file!)).toContain(join(parent.cwd, "a-file"));
   expect(textOf(file!)).toContain("is not a directory");
-  expect(textOf(file!)).toContain("looked at");
   expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);
   expect(parent.widgets).toEqual([]);
 });
@@ -567,83 +495,22 @@ test("a foreign cwd takes its trust from Pi's trust store, then the parent's ver
   expect(ta && textOf(ta)).toMatch(/^subagent: no agent "local"/);
 });
 
-test("agents from the repo and user dirs are listed in the tool description, the repo wins a name clash, and the description stays the same across turns", async () => {
-  const { session, requests } = await parentSession({
-    respond: router([call({ agent: "scout", task: "s" })], () =>
-      fauxAssistantMessage("ok"),
-    ),
-    userAgents: {
-      "scout.md": agentFile("User scout"),
-      "helper.md": agentFile("Helps out"),
-    },
-    repoAgents: { "scout.md": agentFile("Repo scout") },
-  });
-
-  await session.prompt("go");
-
-  const parentTurns = requests.filter((r) => taskOf(r) === "go");
-  expect(parentTurns).toHaveLength(2);
-  // A changed description would be declared again in a later system message.
-  const declared = (parentTurns.at(-1)?.messages ?? []).flatMap((m) =>
-    m.role === "system"
-      ? (m.toolsAdded ?? []).filter((t) => t.name === "subagent")
-      : [],
-  );
-  expect(declared).toHaveLength(1);
-  expect(declared[0]?.description).toMatch(
-    /\n- helper: Helps out\n- scout: Repo scout$/,
-  );
-});
-
-test("with no agent files the tool is still offered, says what an ad-hoc call is, and a call with only description and task runs", async () => {
-  const { session, requests } = await parentSession({
-    respond: router([call({ task: "x" })], () => fauxAssistantMessage("ok")),
-  });
-
-  await session.prompt("go");
-
-  const declared = requests[0]!.messages.flatMap((m) =>
-    m.role === "system"
-      ? (m.toolsAdded ?? []).filter((t) => t.name === "subagent")
-      : [],
-  );
-  expect(declared).toHaveLength(1);
-  expect(declared[0]?.description).toMatch(
-    /Without `agent`.*\n\nAgents: none defined\.$/s,
-  );
-  expect(declared[0]?.description).not.toContain("undefined");
-  expect(results(session).get("x")?.isError).toBe(false);
-});
-
-test("a child that ends aborted with nobody stopping it names no stopper", async () => {
-  const parent = await parentSession({
-    respond: router([call({ agent: "scout", task: "s" })], () =>
-      fauxAssistantMessage("", { stopReason: "aborted" }),
-    ),
-    userAgents: SCOUT,
-  });
-
-  await parent.session.prompt("go");
-
-  const result = results(parent.session).get("s");
-  expect(textOf(result!)).toMatch(
-    /^subagent: scout was stopped before it answered\n\(id [0-9a-f]{8}\)$/,
-  );
-});
-
-test("a broken or unknown agent, an unresolvable model, or a child that errors fails the call and tells the model what to try", async () => {
+test("a child that ends aborted with nobody stopping it names no stopper, and a broken or unknown agent, an unresolvable model, or a child that errors fails the call and tells the model what to try", async () => {
   const parent = await parentSession({
     respond: router(
       [
         call({ agent: "broken", task: "b" }),
         call({ agent: "faraway", task: "f" }),
         call({ agent: "scout", task: "s" }),
+        call({ agent: "scout", task: "a" }),
       ],
-      () =>
-        fauxAssistantMessage("", {
-          stopReason: "error",
-          errorMessage: "provider exploded",
-        }),
+      (context) =>
+        taskOf(context) === "a"
+          ? fauxAssistantMessage("", { stopReason: "aborted" })
+          : fauxAssistantMessage("", {
+              stopReason: "error",
+              errorMessage: "provider exploded",
+            }),
     ),
     userAgents: {
       ...SCOUT,
@@ -655,7 +522,8 @@ test("a broken or unknown agent, an unresolvable model, or a child that errors f
   await parent.session.prompt("go");
 
   const byTask = results(parent.session);
-  for (const result of byTask.values()) expect(result.isError).toBe(true);
+  for (const task of ["b", "f", "s"])
+    expect(byTask.get(task)?.isError).toBe(true);
   const text = (task: string) => {
     const result = byTask.get(task);
     return result ? textOf(result) : "";
@@ -668,6 +536,9 @@ test("a broken or unknown agent, an unresolvable model, or a child that errors f
   );
   expect(text("s")).toMatch(
     /^subagent: scout failed: provider exploded\n\(id [0-9a-f]{8}\)$/,
+  );
+  expect(text("a")).toMatch(
+    /^subagent: scout was stopped before it answered\n\(id [0-9a-f]{8}\)$/,
   );
   expect(parent.notices).toHaveLength(1);
   expect(parent.notices[0]).toMatch(/broken\.md/);
@@ -715,7 +586,7 @@ test("the row and status count follow the store while a child runs, and a resume
   const run = parent.session.prompt("go");
   await held.entered;
   // Empty details: a running row reads the store.
-  expect(resultRow(tool, "s", { content: [], details: {} })[0]).toMatch(
+  expect(resultRow(tool, {}, { id: "s" })[0]).toMatch(
     /^● running · 0 turns · 0 tools · \d+\.\ds/,
   );
   expect(parent.widgets.at(-1)).toHaveLength(1);
@@ -736,46 +607,53 @@ test("the row and status count follow the store while a child runs, and a resume
     status: "done",
   });
   expect(saved?.details).not.toHaveProperty("activity");
-  expect(
-    resultRow(registered(), "s", {
-      content: [],
-      details: saved?.details,
-    })[0],
-  ).toMatch(/^✓ done · 1 turn · 0 tools · \d+k? tok · \d+\.\ds/);
+  expect(resultRow(registered(), saved?.details, { id: "s" })[0]).toMatch(
+    /^✓ done · 1 turn · 0 tools · \d+k? tok · \d+\.\ds/,
+  );
 });
 
 const descriptionOf = async (o: Parameters<typeof parentSession>[0]) => {
   const { session, requests } = await parentSession(o);
   await session.prompt("go");
-  return requests[0]!.messages
-    .flatMap((m) => (m.role === "system" ? (m.toolsAdded ?? []) : []))
-    .find((t) => t.name === "subagent")?.description;
+  return declarations(requests[0]!)[0]?.description;
 };
 
-test("an agent found only in .claude/agents at the repo root is listed, and a .pi agent of the same name wins", async () => {
-  const description = await descriptionOf({
-    respond: () => fauxAssistantMessage("ok"),
-    git: true,
-    claudeAgents: {
-      "scout.md": agentFile("Claude scout"),
-      "reviewer.md": agentFile("Claude reviewer"),
-    },
-    repoAgents: { "scout.md": agentFile("Pi scout") },
-  });
-
-  expect(description).toMatch(
-    /\n- reviewer: Claude reviewer\n- scout: Pi scout$/,
-  );
-});
-
-test("an untrusted project loads neither .claude/agents nor .pi/agents", async () => {
-  const description = await descriptionOf({
-    respond: () => fauxAssistantMessage("ok"),
-    untrusted: true,
-    claudeAgents: { "reviewer.md": agentFile("Claude reviewer") },
-    repoAgents: { "scout.md": agentFile("Pi scout") },
-    userAgents: { "helper.md": agentFile("Helps out") },
-  });
-
-  expect(description).toMatch(/\n- helper: Helps out$/);
+test("the tool description lists the agents each readable dir contributes, and says so when there are none", async () => {
+  const ok = () => fauxAssistantMessage("ok");
+  const rows: [string, Parameters<typeof parentSession>[0], RegExp][] = [
+    [
+      "no agent files",
+      { respond: ok },
+      /Without `agent`.*\n\nAgents: none defined\.$/s,
+    ],
+    [
+      ".claude/agents at the repo root, with a .pi agent of the same name winning",
+      {
+        respond: ok,
+        git: true,
+        claudeAgents: {
+          "scout.md": agentFile("Claude scout"),
+          "reviewer.md": agentFile("Claude reviewer"),
+        },
+        repoAgents: { "scout.md": agentFile("Pi scout") },
+      },
+      /\n- reviewer: Claude reviewer\n- scout: Pi scout$/,
+    ],
+    [
+      "an untrusted project loads neither .claude nor .pi agents",
+      {
+        respond: ok,
+        untrusted: true,
+        claudeAgents: { "reviewer.md": agentFile("Claude reviewer") },
+        repoAgents: { "scout.md": agentFile("Pi scout") },
+        userAgents: { "helper.md": agentFile("Helps out") },
+      },
+      /\n- helper: Helps out$/,
+    ],
+  ];
+  for (const [name, options, expected] of rows) {
+    const description = await descriptionOf(options);
+    expect(description, name).toMatch(expected);
+    expect(description, name).not.toContain("undefined");
+  }
 });

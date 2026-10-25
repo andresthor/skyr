@@ -4,10 +4,11 @@ import {
   fauxAssistantMessage,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test, vi } from "vitest";
 import {
   call,
+  expectInert,
+  HOSTILE,
   hold,
   type Parent,
   parentSession,
@@ -173,8 +174,7 @@ test("session_shutdown aborts background children and clears the widget, and the
 });
 
 test("the widget lists live children with sanitised text within the width, and clears when none are left", async () => {
-  const OSC52 = "\u001b]52;c;cHduZWQ=\u0007";
-  const hostile = `${OSC52}evil‮漢字漢字🙂🙂 ${"x".repeat(120)}`;
+  const hostile = `${HOSTILE} ${"x".repeat(120)}`;
   const holds = new Map(["bg", "fg"].map((task) => [task, hold()]));
   const parent = await parentSession({
     respond: bgRouter(
@@ -191,12 +191,7 @@ test("the widget lists live children with sanitised text within the width, and c
   await Promise.all([...holds.values()].map((h) => h.entered));
   const lines = parent.widgets.at(-1) ?? [];
   expect(lines).toHaveLength(2);
-  for (const line of lines) {
-    expect(visibleWidth(line)).toBeLessThanOrEqual(100);
-    expect(line).not.toContain("\u001b]");
-    expect(line).not.toContain("cHduZWQ");
-    expect(line).not.toContain("‮");
-  }
+  expectInert(lines, 100);
   expect(lines.map((l) => l.slice(0, 2)).sort()).toEqual(["↗ ", "● "]);
 
   for (const h of holds.values()) h.release();

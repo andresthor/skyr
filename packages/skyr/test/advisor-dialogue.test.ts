@@ -20,10 +20,8 @@ import {
   advisorResults,
   advisorRouter,
   echo,
-  parentSession,
-  script,
-  textOf,
-} from "./session.js";
+} from "./advisor.js";
+import { parentSession, script, textOf } from "./session.js";
 
 /** Numbered advice, so each reply can be told apart. */
 function numbered(): FauxResponseFactory {

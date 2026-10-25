@@ -22,8 +22,10 @@ import {
   advisorCall,
   advisorResults,
   advisorRouter,
-  call,
   echo,
+} from "./advisor.js";
+import {
+  call,
   hold,
   parentSession,
   router,

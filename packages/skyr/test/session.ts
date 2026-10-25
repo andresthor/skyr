@@ -7,7 +7,6 @@ import {
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
-  type SimpleStreamOptions,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
@@ -15,7 +14,6 @@ import {
   CONFIG_DIR_NAME,
   createAgentSession,
   DefaultResourceLoader,
-  defineTool,
   type EventBus,
   type ExtensionContext,
   type ExtensionFactory,
@@ -25,8 +23,8 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import { onTestFinished } from "vitest";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { expect, onTestFinished } from "vitest";
 import { registerSkyr } from "../src/index.js";
 
 const tmp = (name: string) => mkdtempSync(join(tmpdir(), `skyr-test-${name}-`));
@@ -72,26 +70,7 @@ export async function parentSession(o: {
   eventBus?: EventBus;
 }): Promise<Parent> {
   const cwd = tmp("cwd");
-  if (o.git) {
-    execFileSync("git", ["-C", cwd, "init"], { stdio: "ignore" });
-    writeFileSync(join(cwd, "seed.txt"), "seed\n");
-    execFileSync("git", ["-C", cwd, "add", "."], { stdio: "ignore" });
-    execFileSync(
-      "git",
-      [
-        "-C",
-        cwd,
-        "-c",
-        "user.name=skyr-test",
-        "-c",
-        "user.email=skyr-test@example.com",
-        "commit",
-        "-m",
-        "seed",
-      ],
-      { stdio: ["ignore", "ignore", "pipe"] },
-    );
-  }
+  if (o.git) seedRepo(cwd);
   const sessionDir = tmp("sessions");
   const agentDir = tmp("agent");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -194,9 +173,8 @@ export function scratchDir(name: string): string {
   return dir;
 }
 
-/** A temp git repo with one seed commit, removed when the test ends. */
-export function gitRepo(name: string): string {
-  const dir = scratchDir(name);
+/** Makes `dir` a git repo with one seed commit. */
+function seedRepo(dir: string): void {
   execFileSync("git", ["-C", dir, "init"], { stdio: "ignore" });
   writeFileSync(join(dir, "seed.txt"), "seed\n");
   execFileSync("git", ["-C", dir, "add", "."], { stdio: "ignore" });
@@ -215,7 +193,27 @@ export function gitRepo(name: string): string {
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
+}
+
+/** A temp git repo with one seed commit, removed when the test ends. */
+export function gitRepo(name: string): string {
+  const dir = scratchDir(name);
+  seedRepo(dir);
   return dir;
+}
+
+/** Text a model or repo could plant: an OSC 52 clipboard write, a bidi override, wide and emoji runs. */
+export const HOSTILE =
+  "\u001b]52;c;cHduZWQ=\u0007evil\u202e漢字漢字🙂🙂 and more words";
+
+/** Rendered `lines` fit `width` and carry nothing the terminal would act on. */
+export function expectInert(lines: string[], width: number): void {
+  for (const line of lines) {
+    expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    expect(line).not.toContain("\u001b]");
+    expect(line).not.toContain("cHduZWQ");
+    expect(line).not.toContain("\u202e");
+  }
 }
 
 export const agentFile = (description: string, fields = "") =>
@@ -275,36 +273,6 @@ export function router(
   };
 }
 
-/**
- * Sends requests to any model but the session's own `faux-1` (the advisor's, in tests) to
- * `advice` and records each one; the rest go to `parent`. By model, since the advisor's
- * transcript also opens on "go".
- */
-export function advisorRouter(
-  parent: FauxResponseFactory,
-  advice: FauxResponseFactory,
-): {
-  respond: FauxResponseFactory;
-  calls: {
-    context: TranscriptContext;
-    options: SimpleStreamOptions | undefined;
-  }[];
-} {
-  const calls: {
-    context: TranscriptContext;
-    options: SimpleStreamOptions | undefined;
-  }[] = [];
-  const respond: FauxResponseFactory = (context, options, state, model) => {
-    if (model.id === "faux-1") return parent(context, options, state, model);
-    calls.push({ context, options });
-    return advice(context, options, state, model);
-  };
-  return { respond, calls };
-}
-
-/** A `skyr.json` that turns the advisor on, on faux-2. */
-export const ADVISOR_ON = { advisor: { model: "faux/faux-2" } };
-
 /** The main model sends `turns` in order, one per request, then answers "done". */
 export function script(
   ...turns: ReturnType<typeof fauxAssistantMessage>[]
@@ -312,26 +280,6 @@ export function script(
   let next = 0;
   return () => turns[next++] ?? fauxAssistantMessage("done");
 }
-
-export const advisorCall = (id = "adv") => fauxToolCall("advisor", {}, { id });
-
-/** The session's advisor results, in order. */
-export function advisorResults(session: AgentSession) {
-  return session.messages.flatMap((m) =>
-    m.role === "toolResult" && m.toolName === "advisor" ? [m] : [],
-  );
-}
-
-/** A tool that answers "echoed", for a call in the transcript with a result after it. */
-export const echo = defineTool({
-  name: "echo",
-  label: "echo",
-  description: "Echoes.",
-  parameters: Type.Object({ x: Type.Optional(Type.Number()) }),
-  async execute() {
-    return { content: [{ type: "text", text: "echoed" }], details: {} };
-  },
-});
 
 /** The parent's tool results by tool-call id, which `call` sets to the task. */
 export function results(session: AgentSession) {
@@ -386,4 +334,43 @@ export function toolsSeen(context: TranscriptContext): string[] {
     for (const t of message.toolsAdded ?? []) tools.add(t.name);
   }
   return [...tools].sort();
+}
+
+/**
+ * Answers capability queries as an ACP host would and records every published task list;
+ * `taskLists` is whether it forwards them. `until` resolves once the last list of a source
+ * satisfies a predicate.
+ */
+export function taskHost(bus: EventBus, taskLists: boolean) {
+  const published: { source: string; items: unknown[] }[] = [];
+  let waiting: { done: () => boolean; resolve: () => void }[] = [];
+  bus.on("tengi:capabilities?", (q) => {
+    if (typeof q === "object" && q !== null && "id" in q)
+      bus.emit("tengi:capabilities", {
+        id: q.id,
+        v: 1,
+        forms: false,
+        notices: false,
+        agentui: { version: 1, tasks: taskLists },
+        formRequests: false,
+        taskLists,
+      });
+  });
+  bus.on("tengi:tasks", (payload) => {
+    published.push(payload as (typeof published)[number]);
+    for (const w of waiting) if (w.done()) w.resolve();
+    waiting = waiting.filter((w) => !w.done());
+  });
+  const last = (source: string) =>
+    published.filter((p) => p.source === source).at(-1)?.items;
+  const until = (source: string, pred: (items: unknown[]) => boolean) =>
+    new Promise<void>((resolve) => {
+      const done = () => {
+        const items = last(source);
+        return items !== undefined && pred(items);
+      };
+      if (done()) resolve();
+      else waiting.push({ done, resolve });
+    });
+  return { published, last, until };
 }

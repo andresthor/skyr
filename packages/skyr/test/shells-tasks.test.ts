@@ -5,43 +5,14 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { createEventBus, type EventBus } from "@earendil-works/pi-coding-agent";
 import { expect, onTestFinished, test } from "vitest";
 import { isRecord } from "../src/tengi.js";
-import { call, hold, parentSession, router, scratchDir } from "./session.js";
-
-/** Answers capability queries as an ACP host would; resolves `next` waiters per published list. */
-function taskHost(bus: EventBus, taskLists: boolean) {
-  const published: { source: string; items: unknown[] }[] = [];
-  let waiting: { done: () => boolean; resolve: () => void }[] = [];
-  bus.on("tengi:capabilities?", (q) => {
-    if (typeof q === "object" && q !== null && "id" in q)
-      bus.emit("tengi:capabilities", {
-        id: q.id,
-        v: 1,
-        forms: false,
-        notices: false,
-        agentui: { version: 1, tasks: taskLists },
-        formRequests: false,
-        taskLists,
-      });
-  });
-  bus.on("tengi:tasks", (payload) => {
-    published.push(payload as (typeof published)[number]);
-    for (const w of waiting) if (w.done()) w.resolve();
-    waiting = waiting.filter((w) => !w.done());
-  });
-  const last = (source: string) =>
-    published.filter((p) => p.source === source).at(-1)?.items;
-  /** Resolves once the last list of `source` satisfies `pred`. */
-  const until = (source: string, pred: (items: unknown[]) => boolean) =>
-    new Promise<void>((resolve) => {
-      const done = () => {
-        const items = last(source);
-        return items !== undefined && pred(items);
-      };
-      if (done()) resolve();
-      else waiting.push({ done, resolve });
-    });
-  return { published, last, until };
-}
+import {
+  call,
+  hold,
+  parentSession,
+  router,
+  scratchDir,
+  taskHost,
+} from "./session.js";
 
 /** A gated shell that starts at once and cannot outlive the test. */
 function gatedShell() {

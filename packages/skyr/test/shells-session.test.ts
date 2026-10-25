@@ -562,3 +562,27 @@ test("survivors whose identity cannot be confirmed are not marked ended, and are
   await again.tick();
   expect(again.sent).toEqual([]);
 });
+
+test("a user's stop ends the job, and the model is told in a message that starts no turn", async () => {
+  const h = await harness();
+  const job = await spawnJob("sleep 30", { root: h.root });
+  h.session.track(job);
+  const stopping = h.session.stopByUser("ab12");
+  await h.over(job);
+  expect(await stopping).toBe("shells: stopped ab12cd34");
+  await h.delivered(1);
+  expect(h.sent[0]?.text.split("\n")[0]).toMatch(
+    /^\[background job "sleep 30" \(id ab12cd34\): stopped by the user after \d+s\]$/,
+  );
+  expect(h.sent[0]?.triggerTurn).toBe(false);
+});
+
+test("a user's stop of an id nothing matches says what runs, and signals nothing", async () => {
+  const h = await harness();
+  const job = await spawnJob("sleep 30", { root: h.root });
+  h.session.track(job);
+  expect(await h.session.stopByUser("ff")).toBe(
+    'shells: nothing matches "ff"; running: ab12cd34',
+  );
+  expect(groupAlive(job.pgid)).toBe(true);
+});

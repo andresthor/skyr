@@ -46,6 +46,8 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
 - `bash_stop` — stops a background job by its id: SIGTERM to its process group, then SIGKILL after
   5 s. Stopping a job that has ended is not an error. Processes that leave the group (`setsid`,
   `docker run -d`, `tmux`) are neither tracked nor stopped.
+- `/shells` — lists this session's background jobs; `/shells stop <id|all>` stops them. Running
+  jobs also show in a widget under the editor. The model is told of a stop without a new turn.
 - `ask_user` — asks you a question in place of the input editor and waits for your answer; see
   [Ask user](#ask-user).
 - `advisor` — asks a stronger model to review the session so far; off until `skyr.json` names a

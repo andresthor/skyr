@@ -207,6 +207,7 @@ async function sessionStart(o: {
     setActiveTools: () => {},
     registerTool: (t: { name: string }) => registered.push(t.name),
     registerMessageRenderer: () => {},
+    registerCommand: () => {},
   } as unknown as ExtensionAPI;
   registerShells(
     pi,
@@ -506,6 +507,36 @@ describe("a slow bash call in a session", () => {
     });
   });
 
+  test("the widget follows a job and /shells lists and stops it, telling the model without starting a turn", async () => {
+    const gate = gateFile();
+    const rt = await shellRuntime({
+      extensions: [shells],
+      respond: script(call(slow(gate), "c1")),
+    });
+    await rt.session.prompt("go");
+    const job = resultOf(rt.session, "c1").job as ShellSnapshot;
+    expect(rt.widgets.at(-1)).toEqual([
+      expect.stringMatching(
+        new RegExp(`^\\$ echo working; until .* · \\d+s · ${job.id}$`),
+      ),
+    ]);
+
+    await rt.session.prompt("/shells");
+    expect(rt.notices.at(-1)).toMatch(
+      new RegExp(
+        `^${job.id} "echo working; until .*" · running for \\d+s · ${job.log}$`,
+      ),
+    );
+    const requests = rt.requests.length;
+    const delivery = rt.nextDelivery();
+    await rt.session.prompt("/shells stop all");
+    expect(rt.notices.at(-1)).toBe(`shells: stopped ${job.id}`);
+    expect(await delivery).toContain("stopped by the user after");
+    await rt.session.waitForIdle();
+    expect(rt.requests.length).toBe(requests);
+    expect(rt.widgets.at(-1)).toBeUndefined();
+  });
+
   test("a nested call (a script's, through executeTool) never moves, however long it runs", async () => {
     const nest = defineTool({
       name: "nest",
@@ -698,6 +729,7 @@ describe("the message a job's end is delivered in", () => {
     wireShells(
       {
         on: () => {},
+        registerCommand: () => {},
         registerMessageRenderer: (
           type: string,
           fn: (typeof renderers)[string],

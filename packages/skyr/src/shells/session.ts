@@ -55,6 +55,11 @@ export interface ShellSession {
    * this Pi and left running. Awaited by the caller; nothing is told to the model afterwards.
    */
   stop(o?: { handOver?: boolean }): Promise<void>;
+  /**
+   * Stops the running job `target` names (an id or a unique prefix), or all of them, for the
+   * user. Gives the words for the user; the model is told of it in a message that starts no turn.
+   */
+  stopByUser(target: string): Promise<string>;
   /** Every job, oldest start first. */
   jobs(): readonly ShellSnapshot[];
   /** Calls `listener` synchronously after every change to the jobs; returns the unsubscribe. */
@@ -298,7 +303,11 @@ export function createShellSession(o: {
     const { record, outcome, lingering } = end;
     const job = snapshotOf(record, { outcome, lingering });
     // A linger end told the model already; a stop has its own result, or no one to tell.
-    if (end.afterLinger || outcome.stopReason !== undefined)
+    if (
+      end.afterLinger ||
+      outcome.stopReason === "agent" ||
+      outcome.stopReason === "session"
+    )
       return store.put(job);
     const head = lingering
       ? `its shell exited with code ${outcome.exitCode} after ${duration((outcome.endedAt ?? Date.now()) - record.startedAt)}; processes remain in its process group. Stop it with bash_stop.`
@@ -307,7 +316,13 @@ export function createShellSession(o: {
     if (closed) return;
     // With the push: whoever sees the end in the store finds its delivery pending.
     store.put(job);
-    pending.push({ dir: record.dir, text, job, wantsTurn: true });
+    // The user who stopped it knows; the model reads of it on its next turn
+    pending.push({
+      dir: record.dir,
+      text,
+      job,
+      wantsTurn: outcome.stopReason !== "user",
+    });
     // Sent by the tick that found the end, once all of that tick's ends are in one batch.
     wake();
   }
@@ -538,6 +553,18 @@ export function createShellSession(o: {
       }
       await watcher.stop("all", "session").catch(complain);
       watcher.dispose();
+    },
+    async stopByUser(target) {
+      const running = store.jobs().filter(active);
+      const matches =
+        target === "all"
+          ? running
+          : running.filter((j) => target !== "" && j.id.startsWith(target));
+      const ids = matches.map((j) => j.id);
+      if (ids.length === 0 || (target !== "all" && ids.length > 1))
+        return `shells: ${ids.length === 0 ? "nothing matches" : "more than one id matches"} ${quoted(target, 40)}; running: ${running.map((j) => j.id).join(", ") || "none"}`;
+      await watcher.stop(ids, "user");
+      return `shells: stopped ${ids.join(", ")}`;
     },
     jobs: () => store.jobs(),
     subscribe: (listener) => store.subscribe(listener),

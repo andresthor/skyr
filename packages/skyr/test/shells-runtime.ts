@@ -61,6 +61,8 @@ export interface ShellRuntime {
   /** The current session; `/new` and `/resume` replace it. */
   session: AgentSession;
   notices: string[];
+  /** Every widget set, in order; `undefined` clears it. */
+  widgets: (string[] | undefined)[];
   /** Every request the model received. */
   requests: TranscriptContext[];
   /** `structuredContent` of each tool result, by tool-call id. */
@@ -183,8 +185,9 @@ export async function shellRuntime(
   };
 
   const notices: string[] = [];
+  const widgets: (string[] | undefined)[] = [];
   const ui = {
-    setWidget: () => {},
+    setWidget: (_key: string, lines?: string[]) => widgets.push(lines),
     notify: (message: string) => notices.push(message),
   } as unknown as ExtensionUIContext;
   const bind = (session: AgentSession) =>
@@ -236,6 +239,7 @@ export async function shellRuntime(
         });
       }),
     notices,
+    widgets,
     requests,
     structured,
     updates,

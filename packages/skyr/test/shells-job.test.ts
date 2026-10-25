@@ -3,9 +3,11 @@ import { spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -18,11 +20,17 @@ import {
   groupAlive,
   identify,
   lastLines,
+  listJobDirs,
   markEnded,
+  markHandover,
+  readJob,
   readOutcome,
+  readOwner,
+  reap,
   releaseDelivery,
   stopJobs,
   tailOf,
+  takeHandover,
   writeExit,
 } from "../src/shells/job.js";
 import { scratchDir } from "./session.js";
@@ -33,6 +41,9 @@ import {
   shellOver,
   spawnJob,
 } from "./shells-jobs.js";
+
+/** An identity check that always passes: these jobs are this test's own. */
+const same = async () => true;
 
 test("adoptMoved writes the owner and then the job record into a new dir, and gives the record back", () => {
   const root = scratchDir("shells");
@@ -145,7 +156,7 @@ test("stopJobs records the stop before its first signal and kills a job that ign
     `trap 'test -f "${stopFile}" && touch "${seen}"' TERM; while [ $SECONDS -lt 30 ]; do sleep 1; done`,
     { root },
   );
-  const stopping = stopJobs([job], "agent", 150);
+  const stopping = stopJobs([job], "agent", same, 150);
   await fileAppears(seen);
   expect(await stopping).toEqual([{ killed: true, survived: false }]);
   expect(groupAlive(job.pgid)).toBe(false);
@@ -160,7 +171,7 @@ test("stopJobs records the stop of a job whose shell had exited while its group 
   await finish(job);
   expect(groupAlive(job.pgid)).toBe(true);
   expect(await readOutcome(job.dir)).toMatchObject({ status: "failed" });
-  expect(await stopJobs([job], "session", 150)).toEqual([
+  expect(await stopJobs([job], "session", same, 150)).toEqual([
     { killed: false, survived: false },
   ]);
   expect(groupAlive(job.pgid)).toBe(false);
@@ -174,14 +185,14 @@ test("stopJobs records the stop of a job whose shell had exited while its group 
 test("stopJobs leaves alone a job that already ended, and a repeated stop keeps the first reason", async () => {
   const ended = await spawnJob("exit 0");
   await finish(ended);
-  expect(await stopJobs([ended], "agent", 150)).toEqual([
+  expect(await stopJobs([ended], "agent", same, 150)).toEqual([
     { killed: false, survived: false },
   ]);
   expect(existsSync(join(ended.dir, "stop.json"))).toBe(false);
 
   const running = await spawnJob("sleep 30", { id: "cd34ef56" });
-  await stopJobs([running], "agent", 150);
-  await stopJobs([running], "session", 150);
+  await stopJobs([running], "agent", same, 150);
+  await stopJobs([running], "session", same, 150);
   expect(await readOutcome(running.dir)).toMatchObject({ stopReason: "agent" });
 });
 
@@ -189,7 +200,7 @@ test("stopJobs still stops every other job when one job's stop.json cannot be wr
   const gone = await spawnJob("sleep 30", { id: "00000001" });
   const kept = await spawnJob("sleep 30", { id: "00000002" });
   rmSync(gone.dir, { recursive: true, force: true });
-  const results = await stopJobs([gone, kept], "session", 150);
+  const results = await stopJobs([gone, kept], "session", same, 150);
   expect(results).toEqual([
     { killed: false, survived: false },
     { killed: false, survived: false },
@@ -336,6 +347,85 @@ test("stopJobs stops every group even when a check on one of them throws, then r
   const good = await spawnJob("sleep 30", { id: "00000002" });
   // A pgid that is not a number makes the group check throw
   const broken = { ...bad, pgid: Number.NaN };
-  await expect(stopJobs([broken, good], "session", 150)).rejects.toThrow();
+  await expect(
+    stopJobs([broken, good], "session", same, 150),
+  ).rejects.toThrow();
   expect(groupAlive(good.pgid)).toBe(false);
+});
+
+test("listJobDirs gives job dirs and skips dot-names and files, and none for a root not made yet", async () => {
+  const root = scratchDir("shells");
+  mkdirSync(join(root, "ab12cd34"));
+  mkdirSync(join(root, ".pending"));
+  writeFileSync(join(root, "error.log"), "");
+  expect(await listJobDirs(root)).toEqual([join(root, "ab12cd34")]);
+  expect(await listJobDirs(join(root, "nope"))).toEqual([]);
+});
+
+test("readJob and readOwner give back what adoptMoved wrote, and nothing for a missing or torn file", async () => {
+  const root = scratchDir("shells");
+  const spec = {
+    root,
+    owner: "o",
+    id: "ab12cd34",
+    command: "make",
+    cwd: root,
+    sessionId: "s1",
+    pid: 4242,
+    pgid: 4242,
+    token: "t",
+    startedAt: 5,
+  };
+  const record = adoptMoved(spec);
+  expect(await readJob(record.dir)).toEqual(record);
+  expect(await readOwner(record.dir)).toEqual({ pid: process.pid, token: "o" });
+  writeFileSync(join(record.dir, "job.json"), "{torn");
+  writeFileSync(join(record.dir, "owner.json"), JSON.stringify({ pid: 1 }));
+  expect(await readJob(record.dir)).toBeUndefined();
+  expect(await readOwner(record.dir)).toBeUndefined();
+  expect(await readJob(join(root, "none"))).toBeUndefined();
+});
+
+test("a handover mark is taken once, by the process that made it", async () => {
+  const dir = scratchDir("job");
+  expect(await takeHandover(dir)).toBe(false);
+  await markHandover(dir);
+  expect(await takeHandover(dir)).toBe(true);
+  expect(await takeHandover(dir)).toBe(false);
+});
+
+test("reap removes job dirs that ended over seven days ago, never a running job's, a young one or a dot-dir", async () => {
+  const root = scratchDir("shells");
+  const day = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const make = (id: string, ageDays: number, file = "exit") => {
+    const dir = join(root, id);
+    mkdirSync(dir);
+    writeFileSync(join(dir, file), "");
+    const at = new Date(now - ageDays * day);
+    utimesSync(join(dir, file), at, at);
+    return dir;
+  };
+  const old = make("00000001", 8);
+  const young = make("00000002", 6);
+  const dot = join(root, ".pending");
+  mkdirSync(dot);
+  utimesSync(dot, new Date(now - 9 * day), new Date(now - 9 * day));
+  const running = await spawnJob("sleep 30", { root, id: "00000003" });
+  const at = new Date(now - 9 * day);
+  utimesSync(join(running.dir, "job.json"), at, at);
+  await reap(root, now);
+  expect(existsSync(old)).toBe(false);
+  expect(existsSync(young)).toBe(true);
+  expect(existsSync(dot)).toBe(true);
+  expect(existsSync(running.dir)).toBe(true);
+});
+
+test("stopJobs signals nothing for a job its identity check refuses, and says so", async () => {
+  const job = await spawnJob("sleep 30");
+  expect(await stopJobs([job], "pi", async () => false, 150)).toEqual([
+    { killed: false, survived: false, skipped: "unverified" },
+  ]);
+  expect(groupAlive(job.pgid)).toBe(true);
+  expect(existsSync(join(job.dir, "stop.json"))).toBe(false);
 });

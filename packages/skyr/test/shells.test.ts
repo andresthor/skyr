@@ -465,6 +465,47 @@ describe("a slow bash call in a session", () => {
     });
   });
 
+  test("a job moved before a /reload keeps running through it, and its end is told once, by the reloaded session", async () => {
+    const gate = gateFile();
+    const rt = await shellRuntime({
+      extensions: [shells],
+      respond: script(call(slow(gate), "c1")),
+    });
+    await rt.session.prompt("go");
+    const job = resultOf(rt.session, "c1").job as ShellSnapshot;
+    await rt.session.reload();
+    expect(groupAlive(pgidOf(job))).toBe(true);
+    const delivery = rt.nextDelivery();
+    writeFileSync(gate, "");
+    expect(await delivery).toContain(`(id ${job.id}): exited with code 4`);
+    await rt.session.waitForIdle();
+    const told = rt.session.messages.filter(
+      (m) => m.role === "custom" && m.customType === "skyr.shell",
+    );
+    expect(told).toHaveLength(1);
+  });
+
+  test("a /reload that steps aside stops the jobs it was handed, for the session's end", async () => {
+    const gate = gateFile();
+    const rt = await shellRuntime({
+      extensions: [shells],
+      respond: script(call(slow(gate), "c1")),
+    });
+    await rt.session.prompt("go");
+    const job = resultOf(rt.session, "c1").job as ShellSnapshot;
+    const pgid = pgidOf(job);
+    writeFileSync(
+      join(rt.agentDir, "settings.json"),
+      JSON.stringify({ shellPath: "/usr/local/bin/fish" }),
+    );
+    await rt.session.reload();
+    expect(rt.notices).toHaveLength(1);
+    expect(groupAlive(pgid)).toBe(false);
+    expect(await readOutcome(dirname(job.log))).toMatchObject({
+      stopReason: "session",
+    });
+  });
+
   test("a nested call (a script's, through executeTool) never moves, however long it runs", async () => {
     const nest = defineTool({
       name: "nest",

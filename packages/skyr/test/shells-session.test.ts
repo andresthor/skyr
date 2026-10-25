@@ -2,7 +2,8 @@
 // watcher's interval and the clock are fake and driven by hand; everything else runs on real
 // files and processes, and each job's shell is reported over by the test, as the owner's
 // continuation does in production.
-import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatSize, truncateTail } from "@earendil-works/pi-coding-agent";
 import {
@@ -14,7 +15,7 @@ import {
   vi,
 } from "vitest";
 import { groupAlive, type JobRecord, readOutcome } from "../src/shells/job.js";
-import { createShellSession } from "../src/shells/session.js";
+import { createShellSession, stopHandedOver } from "../src/shells/session.js";
 import type { ShellSnapshot } from "../src/shells/store.js";
 import { scratchDir } from "./session.js";
 import { fileAppears, finish, shellOver, spawnJob } from "./shells-jobs.js";
@@ -26,19 +27,33 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function harness(o: { graceMs?: number } = {}) {
-  const root = scratchDir("shells");
-  const sent: { text: string; jobs: ShellSnapshot[] }[] = [];
+async function harness(
+  o: {
+    graceMs?: number;
+    root?: string;
+    sessionId?: string;
+    reload?: boolean;
+    /** Leave the sweep to the test, once it has set its jobs up. */
+    hold?: boolean;
+  } = {},
+) {
+  const root = o.root ?? scratchDir("shells");
+  const sent: {
+    text: string;
+    jobs: ShellSnapshot[];
+    triggerTurn: boolean;
+  }[] = [];
   let idleWaiters: (() => void)[] = [];
   const state = { idle: true, strandOnce: undefined as string | undefined };
   const session = createShellSession({
     root,
-    sessionId: "s1",
+    sessionId: o.sessionId ?? "s1",
+    reload: o.reload ?? false,
     owner: "owner-token",
     graceMs: o.graceMs ?? 100,
     pi: { truncateTail, formatSize },
-    send: (text, jobs) => {
-      sent.push({ text, jobs });
+    send: (text, jobs, how) => {
+      sent.push({ text, jobs, ...how });
     },
     isIdle: () => {
       for (const done of idleWaiters) done();
@@ -52,7 +67,7 @@ function harness(o: { graceMs?: number } = {}) {
     },
   });
   onTestFinished(() => session.stop());
-  session.start();
+  if (!o.hold) await session.start();
   /** One watcher tick, with its I/O finished: the tick ends by asking whether the session is idle. */
   const tick = async () => {
     // No interval armed: whatever re-arms it is still on its way
@@ -79,14 +94,14 @@ function harness(o: { graceMs?: number } = {}) {
 }
 
 test("the session's owner is this Pi's token until it has stopped", async () => {
-  const h = harness();
+  const h = await harness();
   expect(h.session.owner()).toBe("owner-token");
   await h.session.stop();
   expect(h.session.owner()).toBeUndefined();
 });
 
 test("a job that ends is told once, to an idle session, with its code, command, last output and log", async () => {
-  const h = harness();
+  const h = await harness();
   const job = await spawnJob("echo hi; exit 3", { root: h.root });
   h.session.track(job);
   await h.over(job);
@@ -110,7 +125,7 @@ test("a job that ends is told once, to an idle session, with its code, command, 
 });
 
 test("an end is held while the session is busy, and told at the first tick after it goes idle", async () => {
-  const h = harness();
+  const h = await harness();
   h.state.idle = false;
   const job = await spawnJob("exit 0", { root: h.root });
   h.session.track(job);
@@ -124,7 +139,7 @@ test("an end is held while the session is busy, and told at the first tick after
 });
 
 test("a send that a prompt overtook during the claim is released and told on a later tick", async () => {
-  const h = harness();
+  const h = await harness();
   const job = await spawnJob("exit 0", { root: h.root });
   const marker = join(job.dir, "delivered.s1");
   h.state.strandOnce = marker;
@@ -138,7 +153,7 @@ test("a send that a prompt overtook during the claim is released and told on a l
 });
 
 test("two ends waiting for an idle session are told in one message", async () => {
-  const h = harness();
+  const h = await harness();
   h.state.idle = false;
   const a = await spawnJob("exit 0", { root: h.root, id: "aaaa0001" });
   const b = await spawnJob("exit 1", { root: h.root, id: "bbbb0002" });
@@ -156,7 +171,7 @@ test("two ends waiting for an idle session are told in one message", async () =>
 });
 
 test("an end names the jobs that still run", async () => {
-  const h = harness();
+  const h = await harness();
   const done = await spawnJob("exit 0", { root: h.root, id: "aaaa0001" });
   const live = await spawnJob("sleep 30", { root: h.root, id: "bbbb0002" });
   h.session.track(done);
@@ -169,7 +184,7 @@ test("an end names the jobs that still run", async () => {
 });
 
 test("a shell that exits and leaves processes running is told once as lingering, five seconds on", async () => {
-  const h = harness();
+  const h = await harness();
   const job = await spawnJob("sleep 30 & exit 3", { root: h.root });
   h.session.track(job);
   await h.over(job);
@@ -184,7 +199,7 @@ test("a shell that exits and leaves processes running is told once as lingering,
 });
 
 test("a job that exited 124 reads as timed out", async () => {
-  const h = harness();
+  const h = await harness();
   const job = await spawnJob("exit 124", { root: h.root });
   h.session.track(job);
   await h.over(job);
@@ -193,7 +208,7 @@ test("a job that exited 124 reads as timed out", async () => {
 });
 
 test("a job with no output says so", async () => {
-  const h = harness();
+  const h = await harness();
   const job = await spawnJob("exit 0", { root: h.root });
   h.session.track(job);
   await h.over(job);
@@ -202,7 +217,7 @@ test("a job with no output says so", async () => {
 });
 
 test("stop ends every running job, a job that ignores SIGTERM after the grace, and tells no one", async () => {
-  const h = harness({ graceMs: 100 });
+  const h = await harness({ graceMs: 100 });
   const calm = await spawnJob("sleep 30", { root: h.root, id: "aaaa0001" });
   const stubborn = await spawnJob(
     "trap '' TERM; while [ $SECONDS -lt 30 ]; do sleep 1; done",
@@ -223,7 +238,7 @@ test("stop ends every running job, a job that ignores SIGTERM after the grace, a
 }, 10_000);
 
 test("bash_stop's stop ends the job, words how, and the job is not told again", async () => {
-  const h = harness();
+  const h = await harness();
   const ready = join(scratchDir("ready"), "ready");
   const job = await spawnJob(`echo working; touch '${ready}'; sleep 30`, {
     root: h.root,
@@ -248,7 +263,7 @@ test("bash_stop's stop ends the job, words how, and the job is not told again", 
 });
 
 test("bash_stop says when a job ignored SIGTERM and needed SIGKILL", async () => {
-  const h = harness({ graceMs: 100 });
+  const h = await harness({ graceMs: 100 });
   const job = await spawnJob(
     "trap '' TERM; while [ $SECONDS -lt 30 ]; do sleep 1; done",
     { root: h.root },
@@ -264,7 +279,7 @@ test("bash_stop says when a job ignored SIGTERM and needed SIGKILL", async () =>
 }, 10_000);
 
 test("bash_stop ends a job whose shell has already exited and left processes running", async () => {
-  const h = harness();
+  const h = await harness();
   const job = await spawnJob("sleep 30 & exit 0", { root: h.root });
   h.session.track(job);
   await h.over(job);
@@ -275,7 +290,7 @@ test("bash_stop ends a job whose shell has already exited and left processes run
 });
 
 test("bash_stop on a job that already ended is a normal result, and claims its end so it is not told too", async () => {
-  const h = harness();
+  const h = await harness();
   h.state.idle = false;
   const job = await spawnJob("exit 3", { root: h.root });
   h.session.track(job);
@@ -291,7 +306,7 @@ test("bash_stop on a job that already ended is a normal result, and claims its e
 });
 
 test("bash_stop on an unknown id names what runs, and on an ambiguous prefix the ids it matches", async () => {
-  const h = harness();
+  const h = await harness();
   const a = await spawnJob("sleep 30", { root: h.root, id: "ab000001" });
   const b = await spawnJob("sleep 31", { root: h.root, id: "ab000002" });
   h.session.track(a);
@@ -307,8 +322,243 @@ test("bash_stop on an unknown id names what runs, and on an ambiguous prefix the
 });
 
 test("bash_stop with nothing running says so", async () => {
-  const h = harness();
+  const h = await harness();
   await expect(h.session.stopJob("abcd1234")).rejects.toThrow(
     'bash_stop: no job "abcd1234". Running: none.',
   );
+});
+
+// The sweep. It signals processes, so every job here lives in a temp root, a forged owner is a
+// pid that is certainly gone, and every real child is a test job whose group is killed afterwards.
+
+/** The pid of a child that has already been reaped. */
+async function deadPid(): Promise<number> {
+  const child = spawn("true", { stdio: "ignore" });
+  await new Promise((resolve) => child.on("close", resolve));
+  return child.pid as number;
+}
+
+const writeOwner = (job: JobRecord, owner: { pid: number; token: string }) =>
+  writeFileSync(join(job.dir, "owner.json"), JSON.stringify(owner));
+
+/** The owner this test's sessions have: this process and their token. */
+const ownedHere = (job: JobRecord) =>
+  writeOwner(job, { pid: process.pid, token: "owner-token" });
+
+async function goneOwner(job: JobRecord) {
+  writeOwner(job, { pid: await deadPid(), token: "no such token" });
+}
+
+test("a job whose owner is gone, with no exit, is told once as ended with Pi, by its own session", async () => {
+  const h = await harness({ hold: true });
+  const job = await spawnJob("exit 0", { root: h.root });
+  await shellOver(job);
+  await goneOwner(job);
+  await h.session.start();
+  await h.delivered(1);
+  expect(h.sent[0]?.text.split("\n")[0]).toMatch(
+    /^\[background job "exit 0" \(id ab12cd34\): ended with Pi after \d+s; its exit status was lost\]$/,
+  );
+  // Found in a resumed session, not in the one that asked for a reload
+  expect(h.sent[0]?.triggerTurn).toBe(false);
+  const again = await harness({ root: h.root });
+  await again.tick();
+  expect(again.sent).toEqual([]);
+  expect(h.sent).toHaveLength(1);
+});
+
+test("a quiet survivor of a gone Pi is stopped by another session's sweep and told by its own", async () => {
+  const root = scratchDir("shells");
+  const job = await spawnJob("sleep 30", { root });
+  await goneOwner(job);
+  const other = await harness({ root, sessionId: "other", hold: true });
+  await other.session.start();
+  await shellOver(job);
+  expect(groupAlive(job.pgid)).toBe(false);
+  expect(await readOutcome(job.dir)).toMatchObject({
+    status: "aborted",
+    stopReason: "pi",
+  });
+  expect(other.sent).toEqual([]);
+  const own = await harness({ root, hold: true });
+  await own.session.start();
+  await own.delivered(1);
+  expect(own.sent[0]?.text).toMatch(
+    /\): ended with Pi after \d+s; its exit status was lost\]\n/,
+  );
+}, 15_000);
+
+test("a dir with no owner record is never touched", async () => {
+  const root = scratchDir("shells");
+  const job = await spawnJob("sleep 30", { root });
+  rmSync(join(job.dir, "owner.json"));
+  const h = await harness({ root, hold: true });
+  await h.session.start();
+  await h.tick();
+  expect(groupAlive(job.pgid)).toBe(true);
+  expect(existsSync(join(job.dir, "stop.json"))).toBe(false);
+  expect(h.sent).toEqual([]);
+});
+
+test("a job whose pid no longer carries its token is never signalled", async () => {
+  const root = scratchDir("shells");
+  const job = await spawnJob("sleep 30", { root });
+  await goneOwner(job);
+  const forged = { ...job, token: "someone else's start time" };
+  writeFileSync(
+    join(job.dir, "job.json"),
+    JSON.stringify({ ...forged, dir: undefined }),
+  );
+  const h = await harness({ root, hold: true });
+  await h.session.start();
+  expect(groupAlive(job.pgid)).toBe(true);
+  expect(existsSync(join(job.dir, "stop.json"))).toBe(false);
+});
+
+test.each([
+  ["a recorded exit", true],
+  ["no exit at all, as when it lost the race with process.exit", false],
+])("a stop at the session's end beats %s", async (_name, withExit) => {
+  const h = await harness({ hold: true });
+  const job = await spawnJob("exit 0", { root: h.root });
+  await shellOver(job);
+  await goneOwner(job);
+  if (withExit) await finish(job);
+  writeFileSync(
+    join(job.dir, "stop.json"),
+    JSON.stringify({ reason: "session", at: Date.now() }),
+  );
+  await h.session.start();
+  await h.delivered(1);
+  expect(h.sent[0]?.text.split("\n")[0]).toMatch(
+    /^\[background job "exit 0" \(id ab12cd34\): stopped when the session that started it ended\]$/,
+  );
+});
+
+test("a job that ended during a busy turn, then quit, is told once when the session is resumed", async () => {
+  const first = await harness();
+  first.state.idle = false;
+  const job = await spawnJob("exit 3", { root: first.root });
+  ownedHere(job);
+  first.session.track(job);
+  await first.over(job);
+  await first.tick();
+  await first.session.stop();
+  expect(first.sent).toEqual([]);
+  const resumed = await harness({ root: first.root });
+  await resumed.delivered(1);
+  expect(resumed.sent[0]?.text).toContain("exited with code 3");
+  const later = await harness({ root: first.root });
+  await later.tick();
+  expect(later.sent).toEqual([]);
+});
+
+test("a job handed over by a reload is taken by the next session, and its end is told once, by that session only", async () => {
+  const first = await harness();
+  const job = await spawnJob("sleep 30", { root: first.root });
+  ownedHere(job);
+  first.session.track(job);
+  await first.session.stop({ handOver: true });
+  expect(groupAlive(job.pgid)).toBe(true);
+  const next = await harness({ root: first.root, reload: true });
+  process.kill(-job.pgid, "SIGTERM");
+  await finish(job);
+  await next.delivered(1);
+  expect(next.sent[0]?.text).toMatch(/\): exited with code 143 after \d+s\]\n/);
+  expect(next.sent[0]?.triggerTurn).toBe(true);
+  expect(first.sent).toEqual([]);
+});
+
+test("a job ended in the gap of a reload is told once", async () => {
+  const first = await harness();
+  const job = await spawnJob("exit 5", { root: first.root });
+  ownedHere(job);
+  first.session.track(job);
+  await first.session.stop({ handOver: true });
+  await finish(job);
+  const next = await harness({ root: first.root, reload: true });
+  await next.delivered(1);
+  expect(next.sent[0]?.text).toContain("exited with code 5");
+  expect(next.sent).toHaveLength(1);
+});
+
+test("a new session never takes a stopped session's handed-over job", async () => {
+  const first = await harness();
+  const job = await spawnJob("sleep 30", { root: first.root });
+  ownedHere(job);
+  first.session.track(job);
+  await first.session.stop({ handOver: true });
+  const fresh = await harness({ root: first.root, sessionId: "new" });
+  await fresh.tick();
+  expect(fresh.sent).toEqual([]);
+  expect(groupAlive(job.pgid)).toBe(true);
+});
+
+test("after a compaction the model is told which jobs still run, and no turn starts", async () => {
+  const h = await harness();
+  h.session.rollCall();
+  expect(h.sent).toEqual([]);
+  const job = await spawnJob("sleep 30", { root: h.root });
+  h.session.track(job);
+  h.session.rollCall();
+  expect(h.sent).toHaveLength(1);
+  expect(h.sent[0]?.triggerTurn).toBe(false);
+  expect(h.sent[0]?.text).toMatch(
+    new RegExp(
+      `^\\[background jobs still running: ab12cd34 "sleep 30" \\(\\d+s\\), log ${join(job.dir, "out.log")}\\. You will be told when each ends; do not poll\\.\\]$`,
+    ),
+  );
+});
+
+test("a handed-over job is held by whatever session of this Pi starts next, reload or not", async () => {
+  const first = await harness();
+  const job = await spawnJob("sleep 30", { root: first.root });
+  ownedHere(job);
+  first.session.track(job);
+  await first.session.stop({ handOver: true });
+  const next = await harness({ root: first.root });
+  process.kill(-job.pgid, "SIGTERM");
+  await finish(job);
+  await next.delivered(1);
+  expect(next.sent[0]?.text).toContain("exited with code 143");
+});
+
+test("jobs handed over to a Pi where no session will serve them are stopped for the session's end, and told later", async () => {
+  const first = await harness();
+  const job = await spawnJob("sleep 30", { root: first.root });
+  ownedHere(job);
+  first.session.track(job);
+  await first.session.stop({ handOver: true });
+  await stopHandedOver(first.root, "owner-token", 100);
+  await shellOver(job);
+  expect(groupAlive(job.pgid)).toBe(false);
+  expect(await readOutcome(job.dir)).toMatchObject({
+    status: "aborted",
+    stopReason: "session",
+  });
+  expect(existsSync(join(job.dir, `handover.${process.pid}`))).toBe(false);
+  const resumed = await harness({ root: first.root });
+  await resumed.delivered(1);
+  expect(resumed.sent[0]?.text).toContain(
+    "stopped when the session that started it ended",
+  );
+});
+
+test("survivors whose identity cannot be confirmed are not marked ended, and are told once as left running", async () => {
+  const root = scratchDir("shells");
+  const job = await spawnJob("sleep 30 & exit 0", { root });
+  await shellOver(job);
+  await goneOwner(job);
+  const h = await harness({ root, hold: true });
+  await h.session.start();
+  await h.delivered(1);
+  expect(h.sent[0]?.text.split("\n")[0]).toContain(
+    `processes remain in its process group ${job.pgid}`,
+  );
+  expect(groupAlive(job.pgid)).toBe(true);
+  expect(existsSync(join(job.dir, "ended"))).toBe(false);
+  expect(existsSync(join(job.dir, "stop.json"))).toBe(false);
+  const again = await harness({ root });
+  await again.tick();
+  expect(again.sent).toEqual([]);
 });

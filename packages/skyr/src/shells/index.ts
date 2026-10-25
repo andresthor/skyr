@@ -21,7 +21,7 @@ import type { PiModule } from "../pi.js";
 import { registerTextMessageRenderer } from "../tools/render.js";
 import { Moved, movingOperations } from "./exec.js";
 import { identify } from "./job.js";
-import { createShellSession, snapshotOf } from "./session.js";
+import { createShellSession, snapshotOf, stopHandedOver } from "./session.js";
 import type { ShellSnapshot } from "./store.js";
 
 const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
@@ -167,15 +167,20 @@ export function wireShells(
 
   let session: ReturnType<typeof createShellSession> | undefined;
 
-  pi.on("session_start", (_event, ctx: ExtensionContext) => {
+  pi.on("session_start", async (event, ctx: ExtensionContext) => {
     generation += 1;
     const born = generation;
+    const root = join(piModule.getAgentDir(), "skyr", "shells");
+    // Jobs a /reload handed to this Pi must not outlive the shells that own them
+    const releaseHandedOver = async () => {
+      if (self !== undefined) await stopHandedOver(root, self, graceMs);
+    };
     if (
       ctx.mode === "print" ||
       ctx.mode === "json" ||
       process.platform === "win32"
     )
-      return;
+      return releaseHandedOver();
 
     const settings = pi.getSettings();
     const shellPath = settings.shellPath
@@ -184,7 +189,6 @@ export function wireShells(
     const options = { commandPrefix: settings.shellCommandPrefix, shellPath };
     const base = piModule.createBashToolDefinition(ctx.cwd, options);
 
-    const root = join(piModule.getAgentDir(), "skyr", "shells");
     let cause = stepAsideCause(
       pi,
       Object.keys(base.parameters.properties),
@@ -206,7 +210,7 @@ export function wireShells(
         `skyr: background shells are off because ${cause ?? "ps cannot identify this Pi process"}; bash is left as it is.`,
         "warning",
       );
-      return;
+      return releaseHandedOver();
     }
 
     const sessionId = ctx.sessionManager.getSessionId();
@@ -214,9 +218,10 @@ export function wireShells(
       root,
       owner: self,
       sessionId,
+      reload: event.reason === "reload",
       graceMs,
       pi: piModule,
-      send: (text, jobs) =>
+      send: (text, jobs, how) =>
         pi.sendMessage(
           {
             customType: MESSAGE_TYPE,
@@ -224,7 +229,7 @@ export function wireShells(
             display: true,
             details: jobs,
           },
-          { triggerTurn: true },
+          how,
         ),
       isIdle: () => ctx.isIdle(),
     });
@@ -314,19 +319,22 @@ export function wireShells(
       },
     });
     activateBashStop();
-    own.start();
+    await own.start();
   });
+
+  // A /compact drops what the model knew of the jobs that still run
+  pi.on("session_compact", () => session?.rollCall());
 
   // /tree restores the active tools from the branch's transcript, which may lack bash_stop.
   pi.on("session_tree", () => {
     if (serving) activateBashStop();
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (event) => {
     generation += 1;
     serving = false;
     const ending = session;
     session = undefined;
-    await ending?.stop();
+    await ending?.stop({ handOver: event.reason === "reload" });
   });
 }

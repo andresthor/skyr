@@ -10,6 +10,7 @@ import {
   appendFile,
   type FileHandle,
   open,
+  readdir,
   readFile,
   rename,
   rm,
@@ -23,6 +24,7 @@ import { errnoOf } from "../tools/render.js";
 import type { StopReason } from "./store.js";
 
 const KILL_WAIT_MS = 1_000;
+const REAP_MS = 7 * 24 * 60 * 60 * 1000;
 const POLL_MS = 50;
 /** The size past which a log's writer cuts it with `capLog`. */
 export const LOG_CAP = 8 * 1024 * 1024;
@@ -65,6 +67,8 @@ export interface Outcome {
 export interface StopResult {
   killed: boolean;
   survived: boolean;
+  /** `isSame` said the group may no longer be the job's, so it was not signalled. */
+  skipped?: "unverified";
 }
 
 export type TruncateTail = (
@@ -156,21 +160,27 @@ export async function readOutcome(dir: string): Promise<Outcome> {
 
 /**
  * Stops the jobs' process groups: SIGTERM, one shared `graceMs` for all of them, then SIGKILL
- * for the survivors. A job whose group is gone gets no signal and no `stop.json`. Every other
- * job's `stop.json` is written before its first signal, unless one exists, so repeating a stop
- * keeps the first reason. Results are in the order of `jobs`. One job's failure never spares
- * the others: a `stop.json` that cannot be written does not spare its group (the caller then
- * takes the reason from the stop itself), and any other failure is rethrown only after every
- * group has been stopped.
+ * for the survivors. A job whose group is gone, or for which `isSame` says false, gets no
+ * signal and no `stop.json`. Every other job's `stop.json` is written before its first signal,
+ * unless one exists, so repeating a stop keeps the first reason. Results are in the order of
+ * `jobs`. One job's failure never spares the others: a `stop.json` that cannot be written does
+ * not spare its group (the caller then takes the reason from the stop itself), and any other
+ * failure is rethrown only after every group has been stopped.
  */
 export async function stopJobs(
   jobs: readonly JobRecord[],
   reason: StopReason,
+  isSame: (job: JobRecord) => Promise<boolean>,
   graceMs: number,
 ): Promise<StopResult[]> {
+  const unverified = new Set<JobRecord>();
   const checks = await Promise.allSettled(
     jobs.map(async (job): Promise<JobRecord[]> => {
       if (!groupAlive(job.pgid)) return [];
+      if (!(await isSame(job))) {
+        unverified.add(job);
+        return [];
+      }
       try {
         // A shell that already exited still gets one: the stop is why its group ended.
         if ((await readOutcome(job.dir)).status !== "aborted")
@@ -194,7 +204,11 @@ export async function stopJobs(
   if (failed) throw failed.reason;
   return jobs.map((job) => {
     const killed = stubborn.includes(job);
-    return { killed, survived: killed && groupAlive(job.pgid) };
+    return {
+      killed,
+      survived: killed && groupAlive(job.pgid),
+      ...(unverified.has(job) && { skipped: "unverified" as const }),
+    };
   });
 }
 
@@ -290,6 +304,125 @@ export async function markEnded(dir: string): Promise<void> {
   });
 }
 
+/** Absolute paths of the job dirs under `root`, none when it does not exist yet; dot-names are not jobs. */
+export async function listJobDirs(root: string): Promise<string[]> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(
+    (error: unknown) => {
+      // Not made yet, or not makeable: either way no jobs
+      if (errnoOf(error) === "ENOENT" || errnoOf(error) === "ENOTDIR")
+        return [];
+      throw error;
+    },
+  );
+  return entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+    .map((e) => join(root, e.name));
+}
+
+/**
+ * The job's `job.json`, with `dir` taken from where it was read; undefined when the file is
+ * missing, torn or not a job record. Throws for any other read error.
+ */
+export async function readJob(dir: string): Promise<JobRecord | undefined> {
+  const raw = parseJson(await readText(join(dir, "job.json")));
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const fields: Record<string, unknown> = { ...raw };
+  const { id, command, cwd, sessionId, pid, pgid, token, startedAt } = fields;
+  return typeof id === "string" &&
+    typeof command === "string" &&
+    typeof cwd === "string" &&
+    typeof sessionId === "string" &&
+    isProcess(pid) &&
+    isProcess(pgid) &&
+    typeof token === "string" &&
+    typeof startedAt === "number"
+    ? { id, dir, command, cwd, sessionId, pid, pgid, token, startedAt }
+    : undefined;
+}
+
+/** The Pi recorded by `adoptMoved`; undefined when there is none or it is not readable as one. */
+export async function readOwner(
+  dir: string,
+): Promise<{ pid: number; token: string } | undefined> {
+  const raw = parseJson(await readText(join(dir, "owner.json")));
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const fields: Record<string, unknown> = { ...raw };
+  const { pid, token } = fields;
+  return isProcess(pid) && typeof token === "string"
+    ? { pid, token }
+    : undefined;
+}
+
+// 0 and 1 would signal this process's own group, or every process.
+const isProcess = (n: unknown): n is number =>
+  typeof n === "number" && Number.isInteger(n) && n > 1;
+
+/** Whether `sessionId` has already been told this job's end. */
+export async function wasDelivered(
+  dir: string,
+  sessionId: string,
+): Promise<boolean> {
+  return (await mtimeOf(join(dir, `delivered.${sessionId}`))) !== undefined;
+}
+
+export async function hasEnded(dir: string): Promise<boolean> {
+  return (await mtimeOf(join(dir, "ended"))) !== undefined;
+}
+
+/**
+ * Marks a job this process's watcher holds at a `/reload`, so the reloaded instance takes it on
+ * without an identity check; it goes unwatched only during the reload. Consumed by `takeHandover`.
+ */
+export async function markHandover(dir: string): Promise<void> {
+  await writeFile(join(dir, `handover.${process.pid}`), "");
+}
+
+/** Removes this process's handover mark; true when there was one. */
+export async function takeHandover(dir: string): Promise<boolean> {
+  const mark = join(dir, `handover.${process.pid}`);
+  const found = (await mtimeOf(mark)) !== undefined;
+  await rm(mark, { force: true });
+  return found;
+}
+
+/**
+ * Removes job dirs that ended more than 7 days before `now` (epoch ms), aged by `stop.json`,
+ * then `exit`, then `job.json`, then the dir itself. A dir whose group is alive is kept.
+ */
+export async function reap(root: string, now: number): Promise<void> {
+  for (const dir of await listJobDirs(root)) {
+    const record = await readJob(dir);
+    if (record !== undefined && groupAlive(record.pgid)) continue;
+    let stamp: number | undefined;
+    for (const name of ["stop.json", "exit", "job.json", "."]) {
+      stamp = await mtimeOf(join(dir, name));
+      if (stamp !== undefined) break;
+    }
+    if (stamp !== undefined && now - stamp > REAP_MS)
+      await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function mtimeOf(path: string): Promise<number | undefined> {
+  return stat(path).then(
+    (s) => s.mtimeMs,
+    (error: unknown) => {
+      if (errnoOf(error) === "ENOENT") return undefined;
+      throw error;
+    },
+  );
+}
+
+function parseJson(text: string | undefined): unknown {
+  if (text === undefined) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Torn or foreign: the file says nothing.
+    return undefined;
+  }
+}
+
 function signalGroup(pgid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pgid, signal);
@@ -342,13 +475,7 @@ function writeJsonSync(target: string, data: unknown): void {
 function parseStop(
   text: string | undefined,
 ): { reason: StopReason; at: number } | undefined {
-  let raw: unknown;
-  try {
-    raw = text === undefined ? undefined : JSON.parse(text);
-  } catch {
-    // Torn or foreign: the file says nothing.
-    return undefined;
-  }
+  const raw = parseJson(text);
   if (
     typeof raw !== "object" ||
     raw === null ||

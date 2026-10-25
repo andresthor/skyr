@@ -49,8 +49,11 @@ interface WatcherOptions {
 }
 
 interface Watcher {
-  /** Holds `record`; it is polled once `exited` says its shell is over. */
-  add(record: JobRecord): void;
+  /**
+   * Holds `record`; it is polled once `exited` says its shell is over, or from the next tick when
+   * `handedOver`: the old owner's continuation reports to no one, so only polling finds its end.
+   */
+  add(record: JobRecord, handedOver?: true): void;
   /**
    * The shell of `id` has exited and its `exit` is written (or could not be): polls it now,
    * and on every tick until it ends. An unknown id does nothing.
@@ -233,10 +236,10 @@ export function createWatcher(o: WatcherOptions): Watcher {
   const view = (e: Entry) => ({ record: e.record, ended: e.ended });
 
   return {
-    add(record) {
+    add(record, handedOver) {
       entries.set(record.id, {
         record,
-        polled: false,
+        polled: handedOver === true,
         polling: false,
         emptySeen: false,
         lingered: false,
@@ -285,6 +288,7 @@ export function createWatcher(o: WatcherOptions): Watcher {
         results = await stopJobs(
           live.map((e) => e.record),
           reason,
+          async () => true,
           o.graceMs,
         );
         for (const e of live) {

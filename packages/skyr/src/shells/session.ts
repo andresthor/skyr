@@ -11,11 +11,23 @@ import { logError } from "./exec.js";
 import {
   claimDelivery,
   groupAlive,
+  hasEnded,
+  identify,
   type JobRecord,
+  listJobDirs,
+  markEnded,
+  markHandover,
   type Outcome,
+  readJob,
   readOutcome,
+  readOwner,
+  reap,
   releaseDelivery,
+  type StopResult,
+  stopJobs,
   tailOf,
+  takeHandover,
+  wasDelivered,
 } from "./job.js";
 import {
   active,
@@ -31,13 +43,20 @@ const COMMAND_CHARS = 200;
 const EXIT_WAIT_MS = 1_000;
 
 export interface ShellSession {
-  /** Arms the watcher. */
-  start(): void;
+  /**
+   * Sweeps the job root, then arms the watcher. The sweep takes on this Pi's jobs handed over by
+   * a `/reload`, stops the survivors of a Pi that is gone, and queues the ends of this session's
+   * jobs that were never told. A dir with no owner record is skipped.
+   */
+  start(): Promise<void>;
   /**
    * Stops every running job (SIGTERM, then SIGKILL after `graceMs`) and everything that polls
-   * or retries. Awaited by the caller; nothing is told to the model afterwards.
+   * or retries. With `handOver`, for a `/reload`, the jobs are marked for the next session of
+   * this Pi and left running. Awaited by the caller; nothing is told to the model afterwards.
    */
-  stop(): Promise<void>;
+  stop(o?: { handOver?: boolean }): Promise<void>;
+  /** Tells the model which jobs still run, after a `/compact` dropped what it knew; starts no turn. */
+  rollCall(): void;
   /** This Pi's identity token; undefined after `stop`. */
   owner(): string | undefined;
   /** Takes on a job that has just been recorded on disk. */
@@ -51,7 +70,7 @@ export interface ShellSession {
   stopJob(idOrPrefix: string): Promise<{ text: string; job: ShellSnapshot }>;
 }
 
-/** How a job ended, for the model: `exited with code 2 after 41s`. */
+/** How a job ended, for the model: `exited with code 2 after 41s`. A stop reason wins over the exit. */
 function ending(outcome: Outcome, startedAt: number, now: number): string {
   const after = duration((outcome.endedAt ?? now) - startedAt);
   switch (outcome.status) {
@@ -62,7 +81,16 @@ function ending(outcome: Outcome, startedAt: number, now: number): string {
         ? `timed out after ${after}`
         : `exited with code ${outcome.exitCode} after ${after}`;
     case "aborted":
-      return `stopped after ${after}`;
+      switch (outcome.stopReason) {
+        case "session":
+          return "stopped when the session that started it ended";
+        case "pi":
+          return `ended with Pi after ${after}; its exit status was lost`;
+        case "user":
+          return `stopped by the user after ${after}`;
+        default:
+          return `stopped at your request after ${after}`;
+      }
     case "unknown":
       return `ended after ${after}; its exit status was lost`;
   }
@@ -98,6 +126,40 @@ interface Pending {
   dir: string;
   text: string;
   job: ShellSnapshot;
+  /** Whether telling it starts a turn: not for what a sweep finds when a session is resumed. */
+  wantsTurn: boolean;
+}
+
+/** A job's pid still carries the start time recorded for it: the pid was not reused. */
+const sameStart = async (job: JobRecord) =>
+  (await identify(job.pid))?.token === job.token;
+
+/**
+ * Stops the jobs a `/reload` handed to this Pi when no session will serve them (the new
+ * `session_start` returns early or steps aside), so nothing outlives skyr's ownership. `owner`
+ * is this Pi's token; one stop for all, reason `session`.
+ */
+export async function stopHandedOver(
+  root: string,
+  owner: string,
+  graceMs: number,
+): Promise<void> {
+  const handed: JobRecord[] = [];
+  for (const dir of await listJobDirs(root)) {
+    const [record, recorded] = await Promise.all([
+      readJob(dir),
+      readOwner(dir),
+    ]);
+    if (
+      record &&
+      recorded?.pid === process.pid &&
+      recorded.token === owner &&
+      (await takeHandover(dir))
+    )
+      handed.push(record);
+  }
+  if (handed.length > 0)
+    await stopJobs(handed, "session", async () => true, graceMs);
 }
 
 export function createShellSession(o: {
@@ -108,8 +170,14 @@ export function createShellSession(o: {
   /** Milliseconds between SIGTERM and SIGKILL when a job is stopped. */
   graceMs: number;
   pi: Pick<PiModule, "truncateTail" | "formatSize">;
-  /** Delivers `text` to the model as a message that starts a turn. May throw on a stale session. */
-  send(text: string, jobs: ShellSnapshot[]): void;
+  /** The `session_start` reason was `reload`: jobs handed over by the last session are taken on. */
+  reload: boolean;
+  /** Delivers `text` to the model as a message. May throw on a stale session. */
+  send(
+    text: string,
+    jobs: ShellSnapshot[],
+    how: { triggerTurn: boolean },
+  ): void;
   isIdle(): boolean;
 }): ShellSession {
   const store = createShellStore();
@@ -142,7 +210,7 @@ export function createShellSession(o: {
     try {
       return !closed && o.isIdle();
     } catch {
-      // A stale session: its next one delivers nothing for this, so there is no one to tell.
+      // A stale session: an end still undelivered is told when the job's session next starts.
       return false;
     }
   }
@@ -186,6 +254,7 @@ export function createShellSession(o: {
       o.send(
         sent.map((i) => i.text).join("\n\n---\n\n"),
         sent.map((i) => i.job),
+        { triggerTurn: sent.some((i) => i.wantsTurn) },
       );
     } catch (error: unknown) {
       await release();
@@ -234,7 +303,7 @@ export function createShellSession(o: {
     if (closed) return;
     // With the push: whoever sees the end in the store finds its delivery pending.
     store.put(job);
-    pending.push({ dir: record.dir, text, job });
+    pending.push({ dir: record.dir, text, job, wantsTurn: true });
     // Sent by the tick that found the end, once all of that tick's ends are in one batch.
     wake();
   }
@@ -319,26 +388,155 @@ export function createShellSession(o: {
     };
   }
 
+  /** Holds a job this Pi started, whose shell is not over yet or whose end only polling finds. */
+  function hold(job: JobRecord, handedOver?: true): void {
+    store.put(snapshotOf(job));
+    watcher.add(job, handedOver);
+    let resolve = () => {};
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    shellsOver.set(job.id, { promise, resolve });
+    // Nothing reports a handed-over job's shell over; its exit is read from the file
+    if (handedOver) resolve();
+  }
+
+  /**
+   * Queues the end of one of this session's jobs that was never told. `head` replaces the words
+   * for how it ended; `ownerAlive` is asked only when the exit status alone cannot say.
+   */
+  async function tellUndelivered(
+    record: JobRecord,
+    how: { head?: string; ownerAlive?: () => Promise<boolean> } = {},
+  ): Promise<void> {
+    if (await wasDelivered(record.dir, o.sessionId)) return;
+    let outcome = await readOutcome(record.dir);
+    // Killed with Pi, or no exit at all: only a gone owner makes that the end of the job
+    const silent =
+      outcome.stopReason === undefined &&
+      (outcome.status === "unknown" ||
+        outcome.exitCode === 137 ||
+        outcome.exitCode === 143);
+    if (silent && !(await how.ownerAlive?.()))
+      outcome = { ...outcome, status: "aborted", stopReason: "pi" };
+    const tail = await tailOf(record.dir, o.pi.truncateTail).catch(() => "");
+    pending.push({
+      dir: record.dir,
+      text: await report(
+        record,
+        how.head ?? ending(outcome, record.startedAt, Date.now()),
+        tail,
+      ),
+      job: snapshotOf(record, { outcome, lingering: false }),
+      wantsTurn: o.reload,
+    });
+  }
+
+  /** Looks at one job dir; gives the job back when its owner is gone and it still runs. */
+  async function inspect(dir: string): Promise<JobRecord | undefined> {
+    const record = await readJob(dir);
+    const owner = await readOwner(dir);
+    // No owner record is no evidence that the owner is gone
+    if (!record || !owner) return;
+    const mine = record.sessionId === o.sessionId;
+    const here = owner.pid === process.pid && owner.token === o.owner;
+    // A mark for this pid and token was left by this process, whatever session starts now:
+    // hold the job, so it never runs unowned. Consumed whatever happens.
+    const handedOver = mine && here && (await takeHandover(dir));
+    const ended = await hasEnded(dir);
+    if (handedOver && !ended) return void hold(record, true);
+    const ownerAlive = async () =>
+      here || (await identify(owner.pid))?.token === owner.token;
+    if (!ended && groupAlive(record.pgid)) {
+      // Another live Pi's job, or this Pi's under another session
+      return (await ownerAlive()) ? undefined : record;
+    }
+    if (!ended && here && (await readOutcome(dir)).status === "unknown")
+      // This Pi's continuation may still be writing the exit
+      return;
+    await markEnded(dir).catch(complain);
+    if (mine) await tellUndelivered(record, { ownerAlive });
+  }
+
+  /** What follows the stop of a survivor whose owner is gone. */
+  async function afterStop(
+    record: JobRecord,
+    result: StopResult | undefined,
+  ): Promise<void> {
+    const mine = record.sessionId === o.sessionId;
+    if (result?.skipped && groupAlive(record.pgid)) {
+      // Not marked ended: the group is not known to be the job's, so it may still be running
+      if (mine)
+        await tellUndelivered(record, {
+          head: `its owner is gone and processes remain in its process group ${record.pgid}, which could not be confirmed as the job's, so they were not signalled; tell the user, and do not signal them yourself (they can check ps -g ${record.pgid})`,
+        });
+      return;
+    }
+    await markEnded(record.dir).catch(complain);
+    if (mine) await tellUndelivered(record);
+  }
+
+  async function sweep(): Promise<void> {
+    await reap(o.root, Date.now()).catch(complain);
+    const survivors: JobRecord[] = [];
+    for (const dir of await listJobDirs(o.root).catch(() => [])) {
+      try {
+        const survivor = await inspect(dir);
+        if (survivor) survivors.push(survivor);
+      } catch (error: unknown) {
+        complain(error);
+      }
+    }
+    if (survivors.length === 0) return;
+    // One call, so the grace periods of several survivors do not add up
+    const results = await stopJobs(survivors, "pi", sameStart, o.graceMs).catch(
+      (error: unknown) => {
+        complain(error);
+        return [];
+      },
+    );
+    for (const [i, record] of survivors.entries())
+      await afterStop(record, results[i]).catch(complain);
+  }
+
   return {
-    start() {
-      if (!closed) watcher.start();
+    async start() {
+      await sweep();
+      if (closed) return;
+      watcher.start();
+      if (pending.length > 0) {
+        wake();
+        flushIfIdle();
+      }
     },
-    async stop() {
+    rollCall() {
+      const running = store.jobs().filter(active);
+      if (closed || running.length === 0) return;
+      const lines = running.map((j) => `${jobLine(j)}, log ${j.log}`);
+      try {
+        o.send(
+          `[background jobs still running: ${lines.join("; ")}. You will be told when each ends; do not poll.]`,
+          running,
+          { triggerTurn: false },
+        );
+      } catch (error: unknown) {
+        complain(error);
+      }
+    },
+    async stop(how) {
       closed = true;
       pending = [];
+      if (how?.handOver) {
+        for (const { record, ended } of watcher.records())
+          if (!ended) await markHandover(record.dir).catch(complain);
+        watcher.dispose();
+        return;
+      }
       await watcher.stop("all", "session").catch(complain);
       watcher.dispose();
     },
     owner: () => (closed ? undefined : o.owner),
-    track(job) {
-      store.put(snapshotOf(job));
-      watcher.add(job);
-      let resolve = () => {};
-      const promise = new Promise<void>((r) => {
-        resolve = r;
-      });
-      shellsOver.set(job.id, { promise, resolve });
-    },
+    track: (job) => hold(job),
     exited(job) {
       shellsOver.get(job.id)?.resolve();
       return watcher.exited(job.id);

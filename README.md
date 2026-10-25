@@ -27,6 +27,11 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
 - `subagent` — hands a task to an agent defined in a markdown file. The agent runs as a fresh
   session with its own context and returns only its final answer. Several calls in one turn run
   in parallel, and Esc stops them.
+- `bash` — skyr serves Pi's own `bash`, with the same parameters, output and limits, in the TUI and
+  in RPC mode; print and json runs and Windows keep Pi's, silently. skyr steps aside, with a
+  warning, and leaves `bash` alone when another extension or the host provides one, when Pi's
+  `bash` takes other parameters than `command` and `timeout`, when `shellPath` is not bash, sh,
+  zsh, dash or ksh, or when `ps` is missing.
 - `ask_user` — asks you a question in place of the input editor and waits for your answer; see
   [Ask user](#ask-user).
 - `advisor` — asks a stronger model to review the session so far; off until `skyr.json` names a
@@ -202,8 +207,10 @@ part misses the cache.
 
 ## Embedding it
 
-A host that builds its own Pi distribution can call `registerSkyr(pi)` instead of
-loading the default export — see `packages/skyr/src/index.ts`.
+A host that builds its own Pi distribution can call `await registerSkyr(pi)` instead of
+loading the default export — see `packages/skyr/src/index.ts`. The promise settles once
+skyr's shells `session_start` handler is in place; a session that starts before then keeps Pi's
+own `bash`, and skyr serves it from the next session start.
 
 ## Developing
 

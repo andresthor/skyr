@@ -6,12 +6,19 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAdvisor } from "./advisor/index.js";
 import { registerAskUser } from "./ask-user/index.js";
 import { reportSkyrFile } from "./config.js";
+import { loadPi } from "./pi.js";
+import { registerShells } from "./shells/index.js";
 import { registerSubagent } from "./subagent/index.js";
 import { registerWebFetch } from "./tools/web-fetch.js";
 import { registerWebSearch } from "./tools/web-search.js";
 import { registerVoice } from "./voice/index.js";
 
-export function registerSkyr(pi: ExtensionAPI): void {
+/**
+ * Registers every skyr tool. The synchronous registrations come first. The promise settles once
+ * the shells' `session_start` handler is in place; a session that starts before then keeps Pi's
+ * own `bash`, and skyr serves it from the next session start.
+ */
+export async function registerSkyr(pi: ExtensionAPI): Promise<void> {
   reportSkyrFile(pi);
   registerWebFetch(pi);
   registerWebSearch(pi);
@@ -19,8 +26,9 @@ export function registerSkyr(pi: ExtensionAPI): void {
   registerSubagent(pi);
   registerAskUser(pi);
   registerAdvisor(pi);
+  registerShells(pi, await loadPi());
 }
 
-export default function skyr(pi: ExtensionAPI): void {
-  registerSkyr(pi);
+export default async function skyr(pi: ExtensionAPI): Promise<void> {
+  await registerSkyr(pi);
 }

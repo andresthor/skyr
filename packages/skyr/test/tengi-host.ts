@@ -71,8 +71,8 @@ export interface Tengi {
   formsAsked(): number;
   /** Resolves once the agent has said `text`. */
   agentSaid(text: string): Promise<void>;
-  /** The content of every completed tool call, as JSON. */
-  toolResults(): string[];
+  /** Every completed tool call: its content as JSON, and its `_meta`. */
+  toolResults(): { text: string; meta: Record<string, unknown> }[];
   /** The task list of the first update after the previous match whose items satisfy `pred`. */
   nextTasks(pred: (items: unknown[]) => boolean): Promise<unknown[]>;
   /**
@@ -340,7 +340,10 @@ export function startTengi(): Tengi {
           (u) =>
             u.sessionUpdate === "tool_call_update" && u.status === "completed",
         )
-        .map((u) => JSON.stringify(u.content)),
+        .map((u) => ({
+          text: JSON.stringify(u.content),
+          meta: isRecord(u._meta) ? u._meta : {},
+        })),
     nextTasks: (pred) =>
       until(() => {
         const all = updates();

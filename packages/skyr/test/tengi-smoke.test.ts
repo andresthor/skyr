@@ -21,7 +21,7 @@ describe.skipIf(TENGI_DIR === undefined)("inside tengi", () => {
       await tengi.prompt(ASK);
       expect(tengi.formsAsked()).toBe(1);
       expect(
-        tengi.toolResults().filter((text) => text.includes("Postgres")),
+        tengi.toolResults().filter(({ text }) => text.includes("Postgres")),
       ).toHaveLength(1);
 
       const loads = tengi.loads();
@@ -87,6 +87,12 @@ describe.skipIf(TENGI_DIR === undefined)("inside tengi", () => {
         id: expect.stringMatching(/^skyr\/shells\//),
         status: "running",
       });
+      // The call's card points at that task, so the client shows it handed off, not exited
+      const [moved] = tengi.toolResults();
+      expect(moved?.meta["agentui/task"]).toEqual({
+        id: (job as { id: unknown }).id,
+      });
+      expect(moved?.meta).not.toHaveProperty(["agentui/exit"]);
 
       gate.release();
       await tengi.nextTasks((items) => items.length === 0);

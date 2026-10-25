@@ -19,7 +19,7 @@ import type {
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import type { PiModule } from "../pi.js";
-import { publishTasks } from "../tengi.js";
+import { publishTasks, type TaskRef } from "../tengi.js";
 import { registerTextMessageRenderer } from "../tools/render.js";
 import { Moved, movingOperations } from "./exec.js";
 import { identify } from "./job.js";
@@ -367,8 +367,12 @@ export function wireShells(
           // No structuredContent although outputSchema is inherited: codemode's calls come through
           // ctx.executeTool with nested ids, which never move, so it never sees this result.
           // Pi's bash details keys are all optional, so this still reads as a bash result's details.
-          const details: BashToolDetails & { job: ShellSnapshot } = {
+          const details: BashToolDetails & {
+            job: ShellSnapshot;
+            "tengi:task": TaskRef;
+          } = {
             job: snapshotOf(job),
+            "tengi:task": { source: TASK_SOURCE, id: job.id },
           };
           return {
             content: [

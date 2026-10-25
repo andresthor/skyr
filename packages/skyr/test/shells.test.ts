@@ -265,6 +265,10 @@ describe("a slow bash call in a session", () => {
     const { rt, gate, command, moved, job } = await runningJob();
     expect(moved.isError).toBe(false);
     expect(job).toMatchObject({ command, status: "running" });
+    // An ACP host reads this to show the call as handed to the job's task, not as finished
+    expect(moved.details).toMatchObject({
+      "tengi:task": { source: SHELLS, id: job.id },
+    });
     expect(moved.text).toBe(
       `working\n\nStill running after 0.1 s; moved to the background as job ${job.id} in ${job.cwd}. Full log: ${job.log}. You will be told automatically when it ends: do not sleep, poll or re-read the log to wait. Keep working on anything that does not depend on it; if nothing does, end your turn. Stop it with bash_stop {"id":"${job.id}"}.`,
     );

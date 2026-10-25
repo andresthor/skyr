@@ -188,7 +188,8 @@ is not lost to a timeout or a wait: it can keep running, and the model is told w
   `docker run -d`, `tmux`) are neither tracked nor stopped.
 - **`/shells`** lists this session's jobs, running first, with their state and log. `/shells stop
   <id|all>` stops them; the model is told, without a new turn. Running jobs also show in a
-  widget above the editor, and in an ACP client's task list.
+  widget above the editor, and in an ACP client's task list, where a moved call's card points
+  to its job's task instead of showing an exit code.
 - **Messages.** A job's end arrives when the session is idle and starts a turn: its exit code or
   how it was stopped, the last lines of output and the log path. After a `/compact` the model is
   reminded of the jobs still running. A shell that exits and leaves processes in its group is

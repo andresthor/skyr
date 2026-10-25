@@ -56,6 +56,15 @@ export interface TaskItem {
 }
 
 /**
+ * What a tool result carries as `details["tengi:task"]` when its work goes on as a task: the
+ * source and item id it publishes, so the host shows the call as handed to it, with no exit.
+ */
+export interface TaskRef {
+  source: string;
+  id: string;
+}
+
+/**
  * Publishes `items` as `source`'s ACP task list, when the host forwards one; plain Pi answers
  * nothing. The host replaces the source's whole list, so an empty one clears it.
  */

@@ -14,7 +14,7 @@ import type {
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { loadPi } from "../pi.js";
-import { hostCapabilities } from "../tengi.js";
+import { publishTasks, type TaskItem } from "../tengi.js";
 import {
   clip,
   errnoOf,
@@ -195,6 +195,17 @@ function progressOf(run: RunSnapshot): string {
     .join(" · ");
 }
 
+function taskOf(run: RunSnapshot): TaskItem {
+  const detail = progressOf(run);
+  return {
+    id: run.id,
+    title: labelOf(run),
+    status: run.status,
+    ...(detail ? { detail } : {}),
+    startedAt: run.startedAt,
+  };
+}
+
 const labelOf = (run: { agent?: string; description: string }) =>
   run.agent ?? `"${clip(run.description)}"`;
 
@@ -278,7 +289,9 @@ function delivery(outcome: Outcome): string {
 
 export function registerSubagent(pi: ExtensionAPI): void {
   const store = createRunStore();
-  store.subscribe(publishTasks);
+  store.subscribe(() =>
+    publishTasks(pi.events, TASK_SOURCE, store.running().map(taskOf)),
+  );
   // One writer per directory: a key's chain resolves once every earlier writer has released.
   const writers = new Map<string, Slot>();
   // Per-child abort, for `/subagents stop`; everything a UI reads stays in the store.
@@ -582,27 +595,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
       const line = `${mark} ${labelOf(run)}${progress ? ` · ${progress}` : ""} · ${Math.round((now - run.startedAt) / 1000)}s · ${run.id.slice(0, 8)}`;
       return truncateToWidth(sanitize(line), WIDGET_WIDTH);
     });
-  }
-
-  /** The live runs as an ACP task list, when the host forwards one; plain Pi answers nothing. */
-  function publishTasks(): void {
-    if (!hostCapabilities(pi.events)?.taskLists) return;
-    const items = store.running().map((run) => {
-      const detail = progressOf(run);
-      return {
-        id: run.id,
-        title: labelOf(run),
-        status: run.status,
-        ...(detail ? { detail } : {}),
-        startedAt: run.startedAt,
-      };
-    });
-    try {
-      pi.events.emit("tengi:tasks", { source: TASK_SOURCE, items });
-    } catch {
-      // A stale extension API after a reload throws here, outside any handler; the next
-      // session's store publishes afresh
-    }
   }
 
   function stopTick(): void {

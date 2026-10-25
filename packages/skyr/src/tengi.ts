@@ -45,3 +45,30 @@ export function hostCapabilities(
   }
   return caps;
 }
+
+/** One entry of a host's task list. */
+export interface TaskItem {
+  id: string;
+  title: string;
+  status: string;
+  detail?: string;
+  startedAt?: number;
+}
+
+/**
+ * Publishes `items` as `source`'s ACP task list, when the host forwards one; plain Pi answers
+ * nothing. The host replaces the source's whole list, so an empty one clears it.
+ */
+export function publishTasks(
+  events: ExtensionAPI["events"],
+  source: string,
+  items: TaskItem[],
+): void {
+  if (!hostCapabilities(events)?.taskLists) return;
+  try {
+    events.emit("tengi:tasks", { source, items });
+  } catch {
+    // A stale extension API after a reload throws here, outside any handler; the next
+    // session's store publishes afresh
+  }
+}

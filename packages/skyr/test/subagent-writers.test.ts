@@ -6,7 +6,6 @@ import {
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { expect, test, vi } from "vitest";
-import type { RunSnapshot } from "../src/subagent/store.js";
 import {
   agentFile,
   call,
@@ -20,20 +19,19 @@ import {
   textOf,
 } from "./session.js";
 
-/** The latest `details` Pi received for each call, by task. */
-function updatesOf(
-  session: Awaited<ReturnType<typeof parentSession>>["session"],
-) {
-  const latest = new Map<string, RunSnapshot>();
-  session.subscribe((event) => {
-    if (event.type === "tool_execution_update")
-      latest.set(event.toolCallId, event.partialResult.details as RunSnapshot);
-  });
-  return latest;
-}
-
-const queued = (latest: Map<string, RunSnapshot>, task: string) => () =>
-  expect(latest.get(task)?.status).toBe("queued");
+/** Passes once the latest widget frame shows `task`'s ad-hoc child queued, with what follows. */
+const queued =
+  (
+    parent: Awaited<ReturnType<typeof parentSession>>,
+    task: string,
+    rest = "",
+  ) =>
+  () =>
+    expect(
+      parent.widgets
+        .at(-1)
+        ?.some((l) => l.startsWith(`○ queued "run ${task}"${rest}`)),
+    ).toBe(true);
 
 test("writers in one cwd run one at a time in call order, from an agent file's tools or the tools param, and the status counts queued children", async () => {
   const holds = new Map(["w1", "w2", "w3"].map((task) => [task, hold()]));
@@ -56,12 +54,10 @@ test("writers in one cwd run one at a time in call order, from an agent file's t
     ),
     userAgents: { "editor.md": agentFile("Edits", "tools: Read, Edit\n") },
   });
-  const latest = updatesOf(parent.session);
 
   const run = parent.session.prompt("go");
   await holds.get("w1")!.entered;
-  await vi.waitFor(queued(latest, "w3"));
-  expect(latest.get("w3")?.behind).toBe('"run w2"');
+  await vi.waitFor(queued(parent, "w3", ' · behind "run w2" · '));
   expect(
     parent.widgets.some(
       (w) =>
@@ -229,11 +225,10 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
       },
     ),
   });
-  const latest = updatesOf(parent.session);
 
   const run = parent.session.prompt("go");
   await h1.entered;
-  await vi.waitFor(queued(latest, "w2"));
+  await vi.waitFor(queued(parent, "w2"));
   expect(parent.widgets.at(-1)).toHaveLength(2);
   expect(
     parent.widgets.at(-1)?.filter((l) => l.includes("queued")),
@@ -270,11 +265,10 @@ test("a reload aborts queued children, and their result says Pi reloaded", async
       },
     ),
   });
-  const latest = updatesOf(parent.session);
 
   const run = parent.session.prompt("go");
   await h1.entered;
-  await vi.waitFor(queued(latest, "w2"));
+  await vi.waitFor(queued(parent, "w2"));
   // The only emitter of session_shutdown reachable from a test.
   await parent.session.reload();
   await run;

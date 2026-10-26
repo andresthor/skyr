@@ -166,8 +166,8 @@ load (a jiti-backed TypeScript child, checked by a one shot smoke probe per sess
 call's model works from the agent dir's own `auth.json` + `models.json` — a model that only
 resolves in the parent's runtime (faux, registered providers, `--api-key` keys) stays in-process.
 Progress crosses back over a file protocol: a 500 ms heartbeat snapshot plus one final result.
-A stopped heart's row shows `· stalled`; nothing kills a stalled child, the user decides via
-`/subagents stop`. A crashed host's finished answers are collected and delivered on the next
+A stopped heart's widget line shows `· stalled`; nothing kills a stalled child, the user decides
+via `/subagents stop`. A crashed host's finished answers are collected and delivered on the next
 session start; nothing keeps a stale child crossing sessions.
 
 `packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.

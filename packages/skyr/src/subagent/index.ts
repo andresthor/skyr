@@ -48,9 +48,6 @@ import {
 } from "./worktree.js";
 
 const MAX_ANSWER_BYTES = 10_000;
-const PULSE_MS = 250;
-// An unchanged snapshot is resent at this rate so the row's clock moves between store changes.
-const PULSE_FLOOR_MS = 1000;
 const WIDGET_KEY = "skyr.subagents";
 const TASK_SOURCE = "skyr/subagents";
 const WIDGET_WIDTH = 100;
@@ -617,7 +614,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
     promptSnippet: "Delegate a self-contained task to a subagent",
     parameters: Params,
     prepareLoadout: () => ({ descriptions: { subagent: description } }),
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const call = resolveCall(params, ctx);
       const { label, background, key } = call;
       // A continued run reuses the child's id (via the record the resolve read).
@@ -645,7 +642,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       const id = call.id;
       // Before the first await: Pi starts a batch's calls in order only up to that point.
       const slot = call.writer ? takeSlot(key, label) : undefined;
-      let sent: RunSnapshot = {
+      let started: RunSnapshot = {
         id,
         toolCallId,
         agent: call.agent,
@@ -666,24 +663,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
             }
           : {}),
       };
-      let sentAt = 0;
-      const send = (run: RunSnapshot) => {
-        sent = run;
-        sentAt = Date.now();
-        onUpdate?.({ content: [], details: run });
-      };
       children.set(id, own);
-      store.apply(id, { type: "start", snapshot: sent });
-      // Pi renders a row's result only once one exists, so the first update cannot wait.
-      send(sent);
-      // A background row is static once the call returns; the widget shows its progress.
-      const pulse = background
-        ? undefined
-        : setInterval(() => {
-            const run = store.byToolCall(toolCallId);
-            if (run && (run !== sent || Date.now() - sentAt >= PULSE_FLOOR_MS))
-              send(run);
-          }, PULSE_MS);
+      store.apply(id, { type: "start", snapshot: started });
 
       // A continue's worktree may hold its earlier run's writes; only a fresh one is known empty.
       const fresh = resumed === undefined ? call.worktree : undefined;
@@ -696,16 +677,17 @@ export function registerSubagent(pi: ExtensionAPI): void {
             errorText(error),
           error,
         );
-      // The store's snapshot while the child is live, else the last one this call sent (the store
-      // is empty once the child has ended, or when a reload cleared it mid-run); either way
-      // without the live-only `activity`.
+      // The store's snapshot while the child is live, else the one this call last started it with
+      // (the store is empty once the child has ended, or when a reload cleared it mid-run);
+      // either way without the live-only `activity`.
       const ended = (
         status: RunStatus,
         text: string,
         isError = true,
         extra: Partial<RunSnapshot> = {},
       ): Outcome => {
-        const { activity: _, ...last } = store.byToolCall(toolCallId) ?? sent;
+        const { activity: _, ...last } =
+          store.byToolCall(toolCallId) ?? started;
         return {
           text,
           isError,
@@ -723,10 +705,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
           if (slot?.behind) {
             await slot.wait(childSignal);
             if (childSignal.aborted) return stoppedBeforeStart();
-            const { behind: _, ...rest } = sent;
-            sent = { ...rest, status: "running" };
-            store.apply(id, { type: "start", snapshot: sent });
-            send(sent);
+            const { behind: _, ...rest } = started;
+            started = { ...rest, status: "running" };
+            store.apply(id, { type: "start", snapshot: started });
           }
           if (call.worktree !== undefined && resumed === undefined)
             // A fresh bare writer creates its reserved worktree; a continue of an older
@@ -799,7 +780,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
             usage: result.usage,
           };
         } finally {
-          if (pulse) clearInterval(pulse);
           slot?.release();
           children.delete(id);
           runningContinues.delete(id);
@@ -850,7 +830,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
             text: `subagent: started ${label} in the background (id ${id.slice(0, 8)}); its answer arrives as a message when it finishes`,
           },
         ],
-        details: sent,
+        details: started,
       };
     },
     renderCall(args, theme) {
@@ -862,9 +842,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
       ]);
     },
     renderResult(result, _options, theme, context) {
-      // The store while the child runs; once it ends, and after a resume, the saved details.
-      const live = store.byToolCall(context.toolCallId);
-      const run = live ?? (isRun(result.details) ? result.details : undefined);
+      // Saved details only: Pi draws a running call from renderCall alone.
+      const run = isRun(result.details) ? result.details : undefined;
       if (!run || context.isError)
         return errorRow(
           theme,
@@ -875,21 +854,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
         return toolRow(theme, [
           ["accent", "↗ background"],
           ["muted", ` · ${labelOf(run)} · ${run.id.slice(0, 8)}`],
-        ]);
-      if (run.status === "queued")
-        return toolRow(theme, [
-          ["warning", "● queued"],
-          ["muted", run.behind ? ` · behind ${run.behind}` : ""],
-          ...runTime(run),
-        ]);
-      if (run.status === "running")
-        return toolRow(theme, [
-          ["accent", "● running"],
-          ...summary(run),
-          ["muted", run.tool ? ` · ${run.tool}` : ""],
-          ...runTime(run),
-          ["muted", run.worktree ? " · worktree" : ""],
-          ["muted", run.activity === "unknown" ? " · stalled" : ""],
         ]);
       return toolRow(theme, [
         ["success", "✓ done"],

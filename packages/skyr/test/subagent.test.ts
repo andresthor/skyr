@@ -94,12 +94,9 @@ function registered(): ToolDefinition & { message: MessageRenderer } {
 function resultRow(
   tool: ToolDefinition,
   details: unknown,
-  o: { text?: string; isError?: boolean; width?: number; id?: string } = {},
+  o: { text?: string; isError?: boolean; width?: number } = {},
 ): string[] {
-  const context = {
-    toolCallId: o.id ?? "t",
-    isError: o.isError ?? false,
-  } as RenderContext;
+  const context = { isError: o.isError ?? false } as RenderContext;
   const content = o.text ? [{ type: "text" as const, text: o.text }] : [];
   return (
     tool
@@ -113,26 +110,20 @@ function resultRow(
   );
 }
 
-test("a row renders from the store and saved details alone: stalled only while activity is unknown, and a background child under its own marker", () => {
-  const tool = registered();
-  const running = {
+test("a background call's row renders from its saved details under its own marker", () => {
+  const started = {
     id: "abcdef0123",
     toolCallId: "t",
     agent: "scout",
     description: "look",
     status: "running",
     startedAt: Date.now(),
-    turns: 1,
-    toolCalls: 1,
+    turns: 0,
+    toolCalls: 0,
     tokens: 0,
-    tool: "grep",
+    background: true,
   };
-  const row = (details: object) => resultRow(tool, details)[0];
-  expect(row({ ...running, activity: "unknown" })).toMatch(
-    /^● running · 1 turn · 1 tool · grep · .* · stalled\s*$/,
-  );
-  expect(row({ ...running, activity: "working" })).not.toContain("stalled");
-  expect(row({ ...running, background: true })?.trimEnd()).toBe(
+  expect(resultRow(registered(), started)[0]?.trimEnd()).toBe(
     "↗ background · scout · abcdef01",
   );
 });
@@ -174,12 +165,12 @@ test("a child's text and description cannot reach the terminal as escapes, the r
     toolCallId: "t",
     agent: "scout",
     description: HOSTILE,
-    status: "running",
+    status: "done",
     startedAt: Date.now(),
+    endedAt: Date.now(),
     turns: 1,
     toolCalls: 2,
     tokens: 0,
-    tool: HOSTILE,
   };
   const callRow = (args: Record<string, string>) =>
     tool.renderCall?.(args, plain, {} as RenderContext).render(20) ?? [];
@@ -189,7 +180,7 @@ test("a child's text and description cannot reach the terminal as escapes, the r
     ...callRow({ agent: "scout", description: HOSTILE, task: "x" }),
     ...callRow({ description: HOSTILE, task: "x", cwd: HOSTILE }),
     ...row({}),
-    ...row({ agent: undefined, status: "queued", behind: HOSTILE }),
+    ...row({ agent: undefined, background: true }),
     ...row(
       { status: "failed", endedAt: Date.now() },
       { text: `subagent: scout failed: ${HOSTILE}`, isError: true },
@@ -613,27 +604,28 @@ test("output past the cap ends with a pointer to a file holding the full answer,
   );
 });
 
-test("the row and status count follow the store while a child runs, and a resumed session renders the row from saved details alone", async () => {
+test("a running call's row is its call line alone, and the widget lists the run; a resumed session renders the row from saved details alone", async () => {
   const held = hold();
   const parent = await parentSession({
     respond: router([call({ agent: "scout", task: "s" })], held.step),
     userAgents: SCOUT,
   });
-  const updates: unknown[] = [];
+  let updates = 0;
   parent.session.subscribe((event) => {
-    if (event.type === "tool_execution_update")
-      updates.push(event.partialResult.details);
+    if (event.type === "tool_execution_update") updates += 1;
   });
-  const tool = parent.session.getToolDefinition("subagent");
-  if (!tool) throw new Error("no subagent tool");
 
   const run = parent.session.prompt("go");
   await held.entered;
-  // Empty details: a running row reads the store.
-  expect(resultRow(tool, {}, { id: "s" })[0]).toMatch(
-    /^● running · 0 turns · 0 tools · \d+\.\ds/,
-  );
-  expect(parent.widgets.at(-1)).toHaveLength(1);
+  // No partial result, so Pi has nothing to draw but the call line.
+  expect(updates).toBe(0);
+  const lines = parent.widgets.at(-1);
+  expect(lines).toHaveLength(1);
+  const id8 =
+    /^● running scout · 0 turns · 0 tools · \d+s · ([0-9a-f]{8})$/.exec(
+      lines?.[0] ?? "",
+    )?.[1];
+  expect(id8).toBeDefined();
   held.release();
   await run;
   expect(parent.widgets.at(-1)).toBeUndefined();
@@ -647,11 +639,11 @@ test("the row and status count follow the store while a child runs, and a resume
         : [],
     )[0];
   expect(saved?.details).toMatchObject({
-    id: (updates[0] as { id: string }).id,
+    id: expect.stringMatching(`^${id8}`),
     status: "done",
   });
   expect(saved?.details).not.toHaveProperty("activity");
-  expect(resultRow(registered(), saved?.details, { id: "s" })[0]).toMatch(
+  expect(resultRow(registered(), saved?.details)[0]).toMatch(
     /^✓ done · 1 turn · 0 tools · \d+k? tok · \d+\.\ds/,
   );
 });

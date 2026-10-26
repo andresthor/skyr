@@ -1,5 +1,5 @@
-// The in-process runner never reports stall: a stalled row can only come from the subprocess
-// runner's heartbeat poll, however long a quiet faux turn keeps the child running.
+// The in-process runner never reports stall: a stalled widget line can only come from the
+// subprocess runner's heartbeat poll, however long a quiet faux turn keeps the child running.
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { expect, test } from "vitest";
 import {
@@ -27,7 +27,7 @@ test("a quiet in-process child is never shown as stalled, and finishes once rele
 
   const run = parent.session.prompt("go");
   await held.entered;
-  // Longer than a pulse (250 ms) and a store tick, so a mis-wired stall flag would surface.
+  // Past the widget's 1 s tick, so a mis-wired stall flag would surface.
   await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
   expect(parent.widgets.at(-1)).toHaveLength(1);
   expect(parent.widgets.flat().join("\n")).not.toContain("stalled");

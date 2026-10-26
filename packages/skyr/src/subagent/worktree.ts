@@ -144,14 +144,17 @@ export async function addWorktree(
 /**
  * The result-text lines a worktree child carries, in the tool result and in a delivery.
  * Pi's edit/write never commit, so the work's files are untracked (or uncommitted edits);
- * a bare "git merge" without a commit first is a no-op. `wrote` separates a run that answered
- * from one that was stopped or failed, where merge recipes would advertise nothing.
+ * a bare "git merge" without a commit first is a no-op. Without `mayHoldWrites` (a fresh run
+ * that was stopped or failed) a merge recipe would advertise nothing.
  */
-export function worktreeNote(plan: WorktreePlan, wrote: boolean): string {
+export function worktreeNote(
+  plan: WorktreePlan,
+  mayHoldWrites: boolean,
+): string {
   const head =
-    `${wrote ? "Wrote" : "Ran"} in worktree ${plan.path} on branch ${plan.branch} (from ${plan.sha.slice(0, 8)}; ` +
+    `${mayHoldWrites ? "Wrote" : "Ran"} in worktree ${plan.path} on branch ${plan.branch} (from ${plan.sha.slice(0, 8)}; ` +
     "the parent's own uncommitted files are absent)\n";
-  return wrote
+  return mayHoldWrites
     ? head +
         `The new writes are uncommitted in that directory: list them with ` +
         `git -C ${plan.path} status --porcelain (tracked edits only: git -C ${plan.path} diff ${plan.sha.slice(0, 8)})\n` +

@@ -408,3 +408,78 @@ test("a continue whose child's cwd vanished, or stopped being a directory, fails
   expect(textOf(swapped!)).toContain("is not a directory anymore");
   expect(textOf(swapped!)).toContain(workdir);
 });
+
+/** A bare writer's first run, in its own worktree, then `turns` for the parent's later turns. */
+const worktreeChild = async (
+  child: FauxResponseFactory,
+  ...turns: FauxResponseFactory[]
+) =>
+  parentSession({
+    git: true,
+    respond: script(
+      child,
+      () => fauxAssistantMessage([call({ task: "w", tools: ["edit"] })]),
+      ...turns,
+    ),
+  });
+
+/** The worktree path a bare writer's result names. */
+const worktreeOf = (parent: Parent) =>
+  /in worktree (\S+) on branch/.exec(
+    textOf(results(parent.session).get("w")!),
+  )?.[1];
+
+test("a continued worktree child states its worktree again", async () => {
+  const { child } = childLog();
+  const parent = await worktreeChild(child, (context) =>
+    fauxAssistantMessage([cont("two", tagsOf(context)[0]!)]),
+  );
+
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  const path = worktreeOf(parent);
+  expect(path).toBeDefined();
+  expect(textOf(results(parent.session).get("two")!)).toContain(
+    `in worktree ${path} on branch`,
+  );
+});
+
+test("a stopped continue of a worktree child still gives the merge recipe", async () => {
+  const contHold = hold();
+  const { child } = childLog();
+  const parent = await worktreeChild(
+    resumedGate("again two", contHold, child),
+    (context) => fauxAssistantMessage([cont("two", tagsOf(context)[0]!)]),
+  );
+
+  const run = parent.session.prompt("go");
+  await contHold.entered;
+  await parent.session.abort();
+  await run;
+
+  const res = await vi.waitFor(() => results(parent.session).get("two")!);
+  expect(textOf(res)).toContain("was stopped by the user before it answered");
+  // Run 1's writes may still sit in the worktree, uncommitted.
+  expect(textOf(res)).toContain(`To merge them: git -C ${worktreeOf(parent)}`);
+});
+
+test("a continued worktree child whose run throws never calls the worktree empty", async () => {
+  const { child } = childLog();
+  const parent = await worktreeChild(
+    child,
+    () => fauxAssistantMessage("idling"),
+    (context) => fauxAssistantMessage([cont("gone", tagsOf(context)[0]!)]),
+  );
+
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+  rmSync(savedFileOf("w", parent)!, { force: true });
+
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+  const res = results(parent.session).get("gone")!;
+  expect(res.isError).toBe(true);
+  expect(textOf(res)).toContain("the saved session");
+  expect(textOf(res)).not.toContain("it is empty");
+});

@@ -677,11 +677,13 @@ export function registerSubagent(pi: ExtensionAPI): void {
               send(run);
           }, PULSE_MS);
 
-      const failed = (error: unknown, worktree?: WorktreePlan) =>
+      // A continue's worktree may hold its earlier run's writes; only a fresh one is known empty.
+      const fresh = resumed === undefined ? call.worktree : undefined;
+      const failed = (error: unknown) =>
         fail(
           `${label}: ` +
-            (worktree
-              ? `created worktree ${worktree.path} on branch ${worktree.branch}; it is empty — `
+            (fresh
+              ? `created worktree ${fresh.path} on branch ${fresh.branch}; it is empty — `
               : "") +
             errorText(error),
           error,
@@ -758,7 +760,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
             stoppedBy: stoppedBy(),
           });
           const noted = call.worktree
-            ? worktreeNote(call.worktree, result.status === "done")
+            ? worktreeNote(
+                call.worktree,
+                result.status === "done" || resumed !== undefined,
+              )
             : call.worktreeWhy === undefined
               ? ""
               : `${call.worktreeWhy}; writing in-tree: NOT isolated from your uncommitted files.\n`;
@@ -774,6 +779,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
               trusted,
               systemPrompt: call.systemPrompt,
               sessionFile: result.sessionFile,
+              worktree: call.worktree,
             });
           return {
             ...ended(
@@ -800,7 +806,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         } catch (error: unknown) {
           // Pi's own cancellation (Esc) is Pi's to report.
           if (signal?.aborted) throw error;
-          if (!childSignal.aborted) throw failed(error, call.worktree);
+          if (!childSignal.aborted) throw failed(error);
           outcome = stoppedBeforeStart();
         }
         // Only a foreground result needs the id tag: a background one's delivered header carries it.
@@ -817,7 +823,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         .catch((error: unknown) =>
           childSignal.aborted
             ? stoppedBeforeStart()
-            : ended("failed", failed(error, call.worktree).message),
+            : ended("failed", failed(error).message),
         )
         .then((outcome) => {
           if (born !== generation) return;

@@ -332,17 +332,17 @@ export function registerSubagent(pi: ExtensionAPI): void {
     params: Static<typeof Params>,
     ctx: Pick<ExtensionContext, "cwd" | "model" | "sessionManager">,
   ): Call {
-    const agent =
-      params.agent === undefined ? undefined : agents.get(params.agent);
-    if (params.agent !== undefined && !agent) throw unknownAgent(params.agent);
-    if (params.continue !== undefined)
-      return resolveContinue(params, params.continue.trim());
-    const childId = randomUUID();
     const description = params.description.trim();
     if (description === "")
       throw fail(
         "give a short description: 3-5 words for the user, in description",
       );
+    if (params.continue !== undefined)
+      return resolveContinue(params, params.continue.trim(), description);
+    const agent =
+      params.agent === undefined ? undefined : agents.get(params.agent);
+    if (params.agent !== undefined && !agent) throw unknownAgent(params.agent);
+    const childId = randomUUID();
     const label = labelOf({
       agent: agent?.name,
       description,
@@ -403,12 +403,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
               realpathSync(dirname(parentFile)),
               basename(parentFile, ".jsonl"),
             );
-      const planned = planWorktree(
-        cwd,
-        sessionDir,
-        childId,
-        params.description,
-      );
+      const planned = planWorktree(cwd, sessionDir, childId, description);
       if ("why" in planned) worktreeWhy = planned.why;
       else worktree = planned;
     }
@@ -431,7 +426,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
   }
 
   /** The `continue` branch of `resolveCall`: synchronous, and takes the same-turn guard. */
-  function resolveContinue(params: Static<typeof Params>, raw: string): Call {
+  function resolveContinue(
+    params: Static<typeof Params>,
+    raw: string,
+    description: string,
+  ): Call {
     const prefix = raw;
     if (
       params.agent !== undefined ||
@@ -477,9 +476,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
     runningContinues.add(record.id);
     return {
       agent: record.agent,
-      description: params.description.trim(),
+      description,
       worktree: record.worktree,
-      label: labelOf({ agent: record.agent, description: params.description }),
+      label: labelOf({ agent: record.agent, description }),
       model: record.model,
       tools: record.tools,
       writer: record.tools.includes("edit") || record.tools.includes("write"),
@@ -641,7 +640,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         id,
         toolCallId,
         agent: call.agent,
-        description: params.description,
+        description: call.description,
         status: slot?.behind ? "queued" : "running",
         startedAt: Date.now(),
         turns: 0,
@@ -742,7 +741,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
               systemPrompt: call.systemPrompt,
               task: params.task,
               trusted,
-              description: params.description,
+              description: call.description,
               agent: call.agent,
               session: resumed
                 ? { resume: resumed.sessionFile }
@@ -771,7 +770,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
             records.set(id, {
               id,
               agent: call.agent,
-              description: params.description,
+              description: call.description,
               model: call.model,
               tools: call.tools,
               cwd: call.cwd,

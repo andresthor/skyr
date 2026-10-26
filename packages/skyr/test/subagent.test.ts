@@ -460,6 +460,50 @@ test("a missing cwd, or a file as cwd, fails before any child starts and names t
   expect(parent.widgets).toEqual([]);
 });
 
+test("a blank description is refused before any other check", async () => {
+  const parent = await parentSession({
+    respond: router(
+      [
+        call({
+          task: "fresh",
+          description: " ",
+          agent: "nope",
+          tools: ["nope"],
+          cwd: "nope",
+        }),
+        call({ task: "cont", description: " ", agent: "nope", continue: "x" }),
+      ],
+      () => {
+        throw new Error("a child started");
+      },
+    ),
+  });
+
+  await parent.session.prompt("go");
+
+  for (const task of ["fresh", "cont"]) {
+    const res = results(parent.session).get(task)!;
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toBe(
+      "subagent: give a short description: 3-5 words for the user, in description",
+    );
+  }
+});
+
+test("a fresh run's details carry the trimmed description", async () => {
+  const parent = await parentSession({
+    respond: router([call({ task: "pad", description: "  padded  " })], () =>
+      fauxAssistantMessage("ok"),
+    ),
+  });
+
+  await parent.session.prompt("go");
+
+  expect(results(parent.session).get("pad")?.details).toMatchObject({
+    description: "padded",
+  });
+});
+
 test("a foreign cwd takes its trust from Pi's trust store, then the parent's verdict, and agent files still come from the parent's cwd", async () => {
   const B = scratchDir("cwd-b");
   const C = scratchDir("cwd-c");

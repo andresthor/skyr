@@ -483,3 +483,93 @@ test("a continued worktree child whose run throws never calls the worktree empty
   expect(textOf(res)).toContain("the saved session");
   expect(textOf(res)).not.toContain("it is empty");
 });
+
+test("a continue with a blank description is refused, and the child can still be continued", async () => {
+  const { seen, child } = childLog();
+  const parent = await parentSession({
+    respond: script(
+      child,
+      () => fauxAssistantMessage([call({ task: "look" })]),
+      (context) =>
+        fauxAssistantMessage([
+          fauxToolCall(
+            "subagent",
+            {
+              description: "  ",
+              continue: tagsOf(context)[0]!,
+              task: "again blank",
+            },
+            { id: "blank" },
+          ),
+        ]),
+      (context) => fauxAssistantMessage([cont("after", tagsOf(context)[0]!)]),
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  const blank = results(parent.session).get("blank")!;
+  expect(blank.isError).toBe(true);
+  expect(textOf(blank)).toContain("give a short description");
+  expect(results(parent.session).get("after")?.isError).toBe(false);
+  expect(seen.get("look")).toHaveLength(2);
+});
+
+test("a continued run's description is trimmed in its label and its details", async () => {
+  const { child } = childLog();
+  const parent = await parentSession({
+    respond: script(
+      child,
+      () => fauxAssistantMessage([call({ task: "look" })]),
+      (context) =>
+        fauxAssistantMessage([
+          fauxToolCall(
+            "subagent",
+            {
+              description: "  padded  ",
+              continue: tagsOf(context)[0]!,
+              task: "again padded",
+              background: true,
+            },
+            { id: "padded" },
+          ),
+        ]),
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  const started = results(parent.session).get("padded")!;
+  expect(textOf(started)).toContain('started "padded" in the background');
+  expect(started.details).toMatchObject({ description: "padded" });
+});
+
+test("a continue naming an agent is told to omit it, even an agent that does not exist", async () => {
+  const { seen, child } = childLog();
+  const parent = await parentSession({
+    respond: script(child, () =>
+      fauxAssistantMessage([
+        fauxToolCall(
+          "subagent",
+          {
+            description: "continue named",
+            continue: "ffffffff",
+            agent: "nope",
+            task: "again named",
+          },
+          { id: "named" },
+        ),
+      ]),
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  const res = results(parent.session).get("named")!;
+  expect(res.isError).toBe(true);
+  expect(textOf(res)).toContain("omit agent, prompt, tools, model and cwd");
+  expect(seen.size).toBe(0);
+});

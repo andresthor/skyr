@@ -299,7 +299,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
   let pending: Outcome[] = [];
   // Finished children (this session only), for `continue`; cleared with the store.
   const records = new Map<string, ChildRecord>();
-  // Child ids whose continued run is live: set synchronously in resolveCall, so two same-turn
+  // Child ids whose continued run is live: set synchronously in claim, so two same-turn
   // continues on one child cannot both resolve (and both append one session file).
   const runningContinues = new Set<string>();
   // Bumped at every session start and shutdown, so a child that outlives its session touches
@@ -323,7 +323,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
   /**
    * Resolves a call against its agent file and the defaults, throwing for anything the model
-   * must fix. Synchronous, so nothing is spent and no await precedes the writer slot.
+   * must fix. Synchronous, and claims nothing: a throw leaves no trace.
    */
   function resolveCall(
     params: Static<typeof Params>,
@@ -422,7 +422,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
     };
   }
 
-  /** The `continue` branch of `resolveCall`: synchronous, and takes the same-turn guard. */
+  /** The `continue` branch of `resolveCall`: refuses a child whose continued run is live. */
   function resolveContinue(
     params: Static<typeof Params>,
     raw: string,
@@ -470,7 +470,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
       throw fail(
         `subagent ${record.id.slice(0, 8)} already has a run in progress; wait for it to finish`,
       );
-    runningContinues.add(record.id);
     return {
       agent: record.agent,
       description,
@@ -487,6 +486,40 @@ export function registerSubagent(pi: ExtensionAPI): void {
       id: record.id,
       continueOf: record,
     };
+  }
+
+  /**
+   * Claims a resolved call: the continue guard, the writer slot, the stop handle and the store
+   * entry. The caller releases each once the run ends.
+   */
+  function claim(call: Call, toolCallId: string) {
+    if (call.continueOf !== undefined) runningContinues.add(call.id);
+    const slot = call.writer ? takeSlot(call.key, call.label) : undefined;
+    const snapshot: RunSnapshot = {
+      id: call.id,
+      toolCallId,
+      agent: call.agent,
+      description: call.description,
+      status: slot?.behind ? "queued" : "running",
+      startedAt: Date.now(),
+      turns: 0,
+      toolCalls: 0,
+      tokens: 0,
+      ...(slot?.behind ? { behind: slot.behind } : {}),
+      ...(call.background ? { background: true as const } : {}),
+      ...(call.worktree
+        ? {
+            worktree: {
+              path: call.worktree.path,
+              branch: call.worktree.branch,
+            },
+          }
+        : {}),
+    };
+    const own = new AbortController();
+    children.set(call.id, own);
+    store.apply(call.id, { type: "start", snapshot });
+    return { slot, own, snapshot };
   }
 
   /**
@@ -616,11 +649,14 @@ export function registerSubagent(pi: ExtensionAPI): void {
     prepareLoadout: () => ({ descriptions: { subagent: description } }),
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
       const call = resolveCall(params, ctx);
+      // Read before the claim: nothing that can throw sits between it and the release below.
+      const parentFile = ctx.sessionManager.getSessionFile();
+      // Before the first await: Pi starts a batch's calls in order only up to that point.
+      const { slot, own, snapshot } = claim(call, toolCallId);
+      let started = snapshot;
       const { label, background, key } = call;
       // A continued run reuses the child's id (via the record the resolve read).
       const resumed = call.continueOf;
-      const parentFile = ctx.sessionManager.getSessionFile();
-      const own = new AbortController();
       const sessionSignal = sessionAbort.signal;
       // A background child outlives the call, so the call's signal (Esc) is not part of its own.
       const childSignal = AbortSignal.any([
@@ -640,31 +676,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
               : " because the session ended";
       const born = generation;
       const id = call.id;
-      // Before the first await: Pi starts a batch's calls in order only up to that point.
-      const slot = call.writer ? takeSlot(key, label) : undefined;
-      let started: RunSnapshot = {
-        id,
-        toolCallId,
-        agent: call.agent,
-        description: call.description,
-        status: slot?.behind ? "queued" : "running",
-        startedAt: Date.now(),
-        turns: 0,
-        toolCalls: 0,
-        tokens: 0,
-        ...(slot?.behind ? { behind: slot.behind } : {}),
-        ...(background ? { background: true as const } : {}),
-        ...(call.worktree
-          ? {
-              worktree: {
-                path: call.worktree.path,
-                branch: call.worktree.branch,
-              },
-            }
-          : {}),
-      };
-      children.set(id, own);
-      store.apply(id, { type: "start", snapshot: started });
 
       // A continue's worktree may hold its earlier run's writes; only a fresh one is known empty.
       const fresh = resumed === undefined ? call.worktree : undefined;
@@ -686,8 +697,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         isError = true,
         extra: Partial<RunSnapshot> = {},
       ): Outcome => {
-        const { activity: _, ...last } =
-          store.byToolCall(toolCallId) ?? started;
+        const { activity: _, ...last } = store.get(id) ?? started;
         return {
           text,
           isError,

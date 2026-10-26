@@ -46,7 +46,7 @@ export interface RunStore {
    */
   apply(id: string, event: RunEvent): void;
   /** Undefined once the child has ended. */
-  byToolCall(toolCallId: string): RunSnapshot | undefined;
+  get(id: string): RunSnapshot | undefined;
   running(): readonly RunSnapshot[];
   /** Calls `listener` synchronously after every change. Returns the unsubscribe function. */
   subscribe(listener: () => void): () => void;
@@ -94,11 +94,7 @@ export function createRunStore(): RunStore {
         });
       changed();
     },
-    byToolCall(toolCallId) {
-      for (const run of runs.values())
-        if (run.toolCallId === toolCallId) return run;
-      return undefined;
-    },
+    get: (id) => runs.get(id),
     running: () => [...runs.values()],
     subscribe(listener) {
       listeners.add(listener);

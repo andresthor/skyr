@@ -26,7 +26,7 @@ test("a turn's token count is everything the child has used so far, cached input
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
   });
-  expect(store.byToolCall("t1")?.tokens).toBe(120);
+  expect(store.get("c1")?.tokens).toBe(120);
 });
 
 test("a running child counts as working, a queued one has no activity yet", () => {
@@ -35,9 +35,9 @@ test("a running child counts as working, a queued one has no activity yet", () =
     type: "start",
     snapshot: { ...running, status: "queued" },
   });
-  expect(store.byToolCall("t1")?.activity).toBeUndefined();
+  expect(store.get("c1")?.activity).toBeUndefined();
   store.apply("c1", { type: "start", snapshot: running });
-  expect(store.byToolCall("t1")?.activity).toBe("working");
+  expect(store.get("c1")?.activity).toBe("working");
 });
 
 test("a stale heartbeat makes a running child's activity unknown, and a fresh one working again", () => {
@@ -45,9 +45,9 @@ test("a stale heartbeat makes a running child's activity unknown, and a fresh on
   store.apply("c1", { type: "start", snapshot: running });
 
   store.apply("c1", { type: "stalled", stalled: true });
-  expect(store.byToolCall("t1")?.activity).toBe("unknown");
+  expect(store.get("c1")?.activity).toBe("unknown");
   store.apply("c1", { type: "stalled", stalled: false });
-  expect(store.byToolCall("t1")?.activity).toBe("working");
+  expect(store.get("c1")?.activity).toBe("working");
 });
 
 test("a tool call names the tool and counts it, leaving activity alone", () => {
@@ -56,7 +56,7 @@ test("a tool call names the tool and counts it, leaving activity alone", () => {
   store.apply("c1", { type: "stalled", stalled: true });
 
   store.apply("c1", { type: "tool", name: "grep" });
-  expect(store.byToolCall("t1")).toMatchObject({
+  expect(store.get("c1")).toMatchObject({
     tool: "grep",
     toolCalls: 1,
     activity: "unknown",

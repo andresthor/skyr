@@ -151,8 +151,10 @@ and the result says so.
 With `background: true` the call returns at once and the answer arrives later as a message that
 starts a new turn, once the parent is idle. Esc does not stop a background subagent; `/subagents`
 lists the live ones and `/subagents stop <id|all>` stops them. A widget above the editor shows
-every live subagent, running, queued or in the background. Its token usage is in the delivered
-message, not in the footer.
+every live subagent, running, queued or in the background; past ten, it shows nine and a count
+of the rest. Plain `pi --mode rpc` clients don't get the widget: Pi's RPC mode passes on widgets
+made of lines only, and this one is a component. A background subagent's token usage is in the
+delivered message, not in the footer.
 
 Every foreground result ends with an `(id ab12cd34)` tag and every background message names the
 same tag in its header. With `continue: <tag prefix>` the next call starts a second run on a

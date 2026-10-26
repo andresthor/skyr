@@ -23,7 +23,7 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, onTestFinished } from "vitest";
 import { registerSkyr } from "../src/index.js";
 
@@ -35,10 +35,22 @@ export interface Parent {
   agentDir: string;
   /** Every request faux received, from the parent and from any child on its provider. */
   requests: TranscriptContext[];
-  /** Every widget skyr set, in order; `undefined` clears it. */
+  /**
+   * Every widget frame skyr drew, in order: a string widget's lines, or a mounted component's
+   * `render(100)` with its 1-column pad stripped, at mount and at each repaint it asks for;
+   * `undefined` clears a widget.
+   */
   widgets: (string[] | undefined)[];
+  /** The key of every `setWidget` call, in order. */
+  widgetSets: string[];
+  /** The component mounted under `key`, as Pi holds it. */
+  mounted(key: string): Component | undefined;
+  /** Disposes every mounted component, as Pi's `resetExtensionUI` does. */
+  resetWidgets(): void;
   notices: string[];
 }
+
+type Widget = Component & { dispose?(): void };
 
 /**
  * A parent session on a faux model with skyr loaded and nothing ambient; disposed when the
@@ -147,11 +159,33 @@ export async function parentSession(o: {
     customTools: o.customTools,
   });
   const widgets: (string[] | undefined)[] = [];
+  const widgetSets: string[] = [];
+  // By key, as Pi holds them: a set replaces and disposes only its own key's component.
+  const mounted = new Map<string, Widget>();
   const notices: string[] = [];
   // Own keys only: Pi spreads the UI object. Pi itself calls none of the other methods.
   const uiContext = {
-    setWidget: (_key: string, content: string[] | undefined) =>
-      widgets.push(content),
+    setWidget: (
+      key: string,
+      content:
+        | string[]
+        | ((tui: { requestRender(): void }) => Widget)
+        | undefined,
+    ) => {
+      widgetSets.push(key);
+      mounted.get(key)?.dispose?.();
+      mounted.delete(key);
+      if (typeof content !== "function") return widgets.push(content);
+      let component: Widget | undefined;
+      // Pad stripped, so a frame reads like a string widget's lines, which Pi pads itself.
+      const frame = () => {
+        if (component)
+          widgets.push(component.render(100).map((line) => line.slice(1)));
+      };
+      component = content({ requestRender: frame });
+      mounted.set(key, component);
+      frame();
+    },
     notify: (message: string) => notices.push(message),
     ...o.ui,
   } as unknown as ExtensionUIContext;
@@ -163,7 +197,20 @@ export async function parentSession(o: {
     for (const dir of [cwd, sessionDir, agentDir])
       rmSync(dir, { recursive: true, force: true });
   });
-  return { session, cwd, agentDir, requests, widgets, notices };
+  return {
+    session,
+    cwd,
+    agentDir,
+    requests,
+    widgets,
+    widgetSets,
+    mounted: (key) => mounted.get(key),
+    resetWidgets() {
+      for (const component of mounted.values()) component.dispose?.();
+      mounted.clear();
+    },
+    notices,
+  };
 }
 
 /** A temp directory, removed when the test ends. */

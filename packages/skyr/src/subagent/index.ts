@@ -54,6 +54,7 @@ const PULSE_FLOOR_MS = 1000;
 const WIDGET_KEY = "skyr.subagents";
 const TASK_SOURCE = "skyr/subagents";
 const WIDGET_WIDTH = 100;
+const MAX_WIDGET_LINES = 10;
 const MESSAGE_TYPE = "skyr.subagent";
 const PREVIEW_LINES = 12;
 
@@ -313,7 +314,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
   let sessionAbort = new AbortController();
   let canSpawn = spawnCheck();
   let unsubscribe: (() => void) | undefined;
-  let widgetTick: ReturnType<typeof setInterval> | undefined;
 
   function unknownAgent(name: string): Error {
     const names = [...agents.keys()].sort().join(", ") || "none";
@@ -596,9 +596,18 @@ export function registerSubagent(pi: ExtensionAPI): void {
     });
   }
 
-  function stopTick(): void {
-    if (widgetTick) clearInterval(widgetTick);
-    widgetTick = undefined;
+  function widgetRows(width: number): string[] {
+    const lines = widgetLines() ?? [];
+    // Past the cap, the last row counts what it leaves out.
+    const rows =
+      lines.length > MAX_WIDGET_LINES
+        ? [
+            ...lines.slice(0, MAX_WIDGET_LINES - 1),
+            `… +${lines.length - MAX_WIDGET_LINES + 1} more · /subagents lists all`,
+          ]
+        : lines;
+    // Pi stops the TUI on a row wider than the pane; the pad matches Pi's own string widgets.
+    return rows.map((row) => ` ${truncateToWidth(row, width - 2)}`);
   }
 
   pi.registerTool({
@@ -1048,23 +1057,43 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
     unsubscribe?.();
     unsubscribe = undefined;
-    stopTick();
     if (!ctx.hasUI) return;
-    const draw = () => {
-      const lines = widgetLines();
-      // A reload or session replacement between ticks leaves ctx stale; pi reports a throw
-      // from a handler, but a timer callback is not one, so the draw dead-stops instead.
-      try {
-        ctx.ui.setWidget(WIDGET_KEY, lines);
-      } catch {
-        stopTick();
-        return;
-      }
-      // The clock in each line moves only while something is live.
-      if (lines && !widgetTick) widgetTick = setInterval(draw, 1000);
-      if (!lines) stopTick();
+    // Set only as the widget appears and goes: Pi re-inserts a key on every set, which would
+    // swap it with other widgets. A host that never mounts it (tengi, RPC) ticks nothing.
+    let shown = false;
+    let repaint: (() => void) | undefined;
+    const widget = (tui: { requestRender(): void }) => {
+      repaint = () => tui.requestRender();
+      // The clock in each line moves between store changes.
+      const tick = setInterval(repaint, 1000);
+      tick.unref();
+      return {
+        render: widgetRows,
+        invalidate() {},
+        dispose() {
+          clearInterval(tick);
+          repaint = undefined;
+          shown = false;
+        },
+      };
     };
-    unsubscribe = store.subscribe(draw);
+    const off = store.subscribe(() => {
+      // A reload or session replacement leaves ctx stale; Pi reports a throw from a handler,
+      // but a child's progress arrives outside any, so the widget dead-stops instead.
+      try {
+        const live = store.running().length > 0;
+        if (live && !shown) {
+          ctx.ui.setWidget(WIDGET_KEY, widget);
+          shown = true;
+        } else if (!live && shown) {
+          shown = false;
+          ctx.ui.setWidget(WIDGET_KEY, undefined);
+        } else repaint?.();
+      } catch {
+        off();
+      }
+    });
+    unsubscribe = off;
   });
 
   pi.on("session_shutdown", (event, ctx) => {
@@ -1073,7 +1102,6 @@ export function registerSubagent(pi: ExtensionAPI): void {
     sessionAbort.abort(event.reason);
     unsubscribe?.();
     unsubscribe = undefined;
-    stopTick();
     ctx.ui.setWidget(WIDGET_KEY, undefined);
     store.clear();
     pending = [];

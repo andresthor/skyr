@@ -29,7 +29,7 @@ import { loadPi } from "../src/pi.js";
 import { type ShellsDeps, wireShells } from "../src/shells/index.js";
 import { identify } from "../src/shells/job.js";
 import { registerWebFetch } from "../src/tools/web-fetch.js";
-import { textOf } from "./session.js";
+import { textOf, widgetHost } from "./session.js";
 
 /**
  * skyr's shells alone, with their test seams. `web_fetch` is registered because skyr's reload
@@ -62,12 +62,11 @@ export function shellsWith(
   };
 }
 
-export interface ShellRuntime {
+export interface ShellRuntime
+  extends Omit<ReturnType<typeof widgetHost>, "setWidget"> {
   /** The current session; `/new` and `/resume` replace it. */
   session: AgentSession;
   notices: string[];
-  /** Every widget set, in order; `undefined` clears it. */
-  widgets: (string[] | undefined)[];
   requests: TranscriptContext[];
   /** `structuredContent` of each tool result, by tool-call id. */
   structured: Map<string, unknown>;
@@ -179,9 +178,9 @@ export async function shellRuntime(
   };
 
   const notices: string[] = [];
-  const widgets: (string[] | undefined)[] = [];
+  const { setWidget, ...widgets } = widgetHost();
   const ui = {
-    setWidget: (_key: string, lines?: string[]) => widgets.push(lines),
+    setWidget,
     notify: (message: string) => notices.push(message),
   } as unknown as ExtensionUIContext;
   const bind = (session: AgentSession) =>
@@ -227,7 +226,7 @@ export async function shellRuntime(
         onTestFinished(off);
       }),
     notices,
-    widgets,
+    ...widgets,
     requests,
     structured,
     updates,

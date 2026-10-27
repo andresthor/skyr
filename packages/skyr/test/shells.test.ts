@@ -12,7 +12,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { describe, expect, onTestFinished, test } from "vitest";
+import { describe, expect, onTestFinished, test, vi } from "vitest";
 import { registerSkyr } from "../src/index.js";
 import { loadPi } from "../src/pi.js";
 import { registerShells, wireShells } from "../src/shells/index.js";
@@ -415,6 +415,49 @@ describe("a slow bash call in a session", () => {
     await rt.session.waitForIdle();
     expect(rt.requests.length).toBe(requests);
     expect(rt.widgets.at(-1)).toBeUndefined();
+  });
+
+  test("the widget is set once per appearance, its clock moving by repaint", async () => {
+    // Date too, so a tick that re-set the widget would draw new lines; setTimeout stays real.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { rt, job } = await runningJob();
+    const frames = rt.widgets.length;
+    vi.advanceTimersByTime(3_000);
+    expect(rt.widgets.length).toBe(frames + 3);
+    expect(rt.widgets.at(-1)?.[0]).toMatch(new RegExp(`· 3s · ${job.id}$`));
+
+    // The end's message waits for a watcher tick, which is faked; the widget goes with the stop.
+    await rt.session.prompt("/shells stop all");
+    expect(rt.widgets.at(-1)).toBeUndefined();
+    expect(rt.widgetSets.filter((key) => key === "skyr.shells")).toHaveLength(
+      2,
+    );
+  });
+
+  test("past ten running jobs, the widget shows nine and a count of the rest", async () => {
+    const gate = gateFile();
+    const rt = await shellRuntime({
+      extensions: [shells],
+      respond: script(
+        fauxAssistantMessage(
+          Array.from({ length: 11 }, (_, i) =>
+            fauxToolCall(
+              "bash",
+              { command: slow(gate), background: true },
+              { id: `bg${i}` },
+            ),
+          ),
+        ),
+      ),
+    });
+    await rt.session.prompt("go");
+
+    const lines = rt.widgets.at(-1) ?? [];
+    expect(lines).toHaveLength(10);
+    expect(lines[9]).toBe("… +2 more · /shells lists all");
   });
 
   test("quit stops a running job and records why", async () => {

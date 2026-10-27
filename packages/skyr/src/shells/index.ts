@@ -16,19 +16,14 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import type { PiModule } from "../pi.js";
 import { publishTasks, type TaskRef } from "../tengi.js";
 import { textMessageRenderer } from "../tools/render.js";
+import { liveWidget } from "../tools/widget.js";
 import { Moved, movingOperations } from "./exec.js";
 import { identify } from "./job.js";
-import {
-  createShellSession,
-  type ShellSession,
-  snapshotOf,
-  stopHandedOver,
-} from "./session.js";
+import { createShellSession, snapshotOf, stopHandedOver } from "./session.js";
 import { type ShellSnapshot, taskItems } from "./store.js";
 import { listingLines, widgetLines } from "./view.js";
 
@@ -83,7 +78,6 @@ function stepAsideCause(
 const MESSAGE_TYPE = "skyr.shell";
 const TASK_SOURCE = "skyr/shells";
 const WIDGET_KEY = "skyr.shells";
-const WIDGET_WIDTH = 100;
 const PREVIEW_LINES = 12;
 const DEFAULT_LIMIT_MS = 120_000;
 const DEFAULT_GRACE_MS = 5_000;
@@ -177,55 +171,7 @@ export function wireShells(
   pi.registerMessageRenderer(MESSAGE_TYPE, textMessageRenderer(PREVIEW_LINES));
 
   let session: ReturnType<typeof createShellSession> | undefined;
-  let stopDrawing: (() => void) | undefined;
-
-  /** Keeps the widget current: on every change, and each second while a job runs. */
-  function drawWidget(own: ShellSession, ctx: ExtensionContext): void {
-    stopDrawing?.();
-    let drawn: string | undefined;
-    let tick: ReturnType<typeof setInterval> | undefined;
-    const stop = () => {
-      if (tick) clearInterval(tick);
-      tick = undefined;
-      off();
-    };
-    const draw = () => {
-      const lines = widgetLines(own.jobs(), Date.now());
-      const key = lines?.join("\n");
-      if (key !== drawn) {
-        drawn = key;
-        // A reload or session replacement between ticks leaves ctx stale; Pi reports a throw
-        // from a handler, but a timer callback is not one, so the draw dead-stops instead.
-        try {
-          ctx.ui.setWidget(
-            WIDGET_KEY,
-            lines?.map((line) => truncateToWidth(line, WIDGET_WIDTH)),
-          );
-        } catch {
-          stop();
-          return;
-        }
-      }
-      // The clock in each line moves only while something is live
-      if (lines && !tick) {
-        tick = setInterval(draw, 1000);
-        tick.unref();
-      }
-      if (!lines && tick) {
-        clearInterval(tick);
-        tick = undefined;
-      }
-    };
-    const off = own.subscribe(draw);
-    stopDrawing = () => {
-      stop();
-      try {
-        ctx.ui.setWidget(WIDGET_KEY, undefined);
-      } catch {
-        // A stale ctx: its widget went with the session
-      }
-    };
-  }
+  let stopWidget: (() => void) | undefined;
 
   pi.registerCommand("shells", {
     description:
@@ -318,7 +264,14 @@ export function wireShells(
     const publish = () =>
       publishTasks(pi.events, TASK_SOURCE, taskItems(own.jobs()));
     own.subscribe(publish);
-    if (ctx.hasUI) drawWidget(own, ctx);
+    stopWidget?.();
+    stopWidget = undefined;
+    if (ctx.hasUI)
+      stopWidget = liveWidget(ctx, WIDGET_KEY, {
+        subscribe: own.subscribe,
+        lines: () => widgetLines(own.jobs(), Date.now()),
+        lists: "/shells",
+      });
 
     pi.registerTool({
       ...base,
@@ -425,8 +378,8 @@ export function wireShells(
     serving = false;
     const ending = session;
     session = undefined;
-    stopDrawing?.();
-    stopDrawing = undefined;
+    stopWidget?.();
+    stopWidget = undefined;
     await ending?.stop({ handOver: event.reason === "reload" });
   });
 }

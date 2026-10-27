@@ -1,7 +1,7 @@
 /**
  * Subagents as lines. Running ones for the widget above the editor and the `/subagents` listing,
- * sanitized and cut to a hundred columns, which the widget fits to its pane; an ended one for a
- * delivered answer, sanitized and left for its row to cut.
+ * sanitized and cut to a hundred columns, which the widget fits to its pane; ended ones for a
+ * delivered answer and a call's row, sanitized and left for their rows to cut.
  */
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
@@ -33,13 +33,22 @@ export function widgetLines(
   });
 }
 
-/** An ended run's mark: ■ stopped, ✓ answered, ✗ anything else that gave no answer. */
-function markOf(run: RunSnapshot): Segment {
-  if (run.status === "aborted") return ["muted", "■"];
-  return run.status === "done" && run.error === undefined
-    ? ["success", "✓"]
-    : ["error", "✗"];
+/** An ended run's mark, by the status the model reads, in the order a call's header counts them. */
+const MARKS: Record<"done" | "empty" | "failed" | "stopped", Segment> = {
+  done: ["success", "✓"],
+  empty: ["error", "✗"],
+  failed: ["error", "✗"],
+  stopped: ["muted", "■"],
+};
+
+/** Stopped, answered, ended without an answer, or failed. */
+function outcomeOf(run: RunSnapshot): keyof typeof MARKS {
+  if (run.status === "aborted") return "stopped";
+  if (run.status !== "done") return "failed";
+  return run.error === undefined ? "done" : "empty";
 }
+
+const markOf = (run: RunSnapshot): Segment => MARKS[outcomeOf(run)];
 
 /**
  * One ended run, `<mark> <label> · <error> · <turns> · <tools> · <tokens> · <time> · <id>`. A
@@ -62,5 +71,53 @@ export function laneLine(run: RunSnapshot): Segment[] {
   return [
     markOf(run),
     ["text", ` ${sanitize(cells.filter(Boolean).join(" · "))}`],
+  ];
+}
+
+/**
+ * A call's ended runs as rows: a header, then one line per run in call order, each a `laneLine`.
+ * The header's mark is the runs' shared one, or ◐ for a mix. A background call's runs had only
+ * started, so they show as such, with their ids.
+ */
+export function laneTree(runs: readonly RunSnapshot[]): Segment[][] {
+  const branch = (i: number): Segment => [
+    "muted",
+    i === runs.length - 1 ? "└ " : "├ ",
+  ];
+  if (runs.some((run) => run.background))
+    return [
+      [
+        ["accent", `↗ ${count(runs.length, "task")} in the background`],
+        ["muted", " · answers arrive as messages"],
+      ],
+      ...runs.map((run, i): Segment[] => [
+        branch(i),
+        ["accent", "↗"],
+        ["text", ` ${sanitize(`${labelOf(run)} · ${run.id.slice(0, 8)}`)}`],
+      ]),
+    ];
+  const outcomes = runs.map(outcomeOf);
+  const counts = Object.keys(MARKS).flatMap((outcome) => {
+    const n = outcomes.filter((o) => o === outcome).length;
+    return n > 0 ? [`${n} ${outcome}`] : [];
+  });
+  const [first, ...rest] = runs.map(markOf);
+  const mark: Segment =
+    first !== undefined && rest.every(([, glyph]) => glyph === first[1])
+      ? first
+      : ["warning", "◐"];
+  const total = runs.reduce((sum, run) => sum + run.tokens, 0);
+  const wall =
+    Math.max(...runs.map((run) => run.endedAt ?? run.startedAt)) -
+    Math.min(...runs.map((run) => run.startedAt));
+  return [
+    [
+      mark,
+      [
+        "muted",
+        ` ${counts.join(", ")} · ${tokens(total)} · ${secondsText(wall)}`,
+      ],
+    ],
+    ...runs.map((run, i): Segment[] => [branch(i), ...laneLine(run)]),
   ];
 }

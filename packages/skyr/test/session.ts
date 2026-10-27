@@ -289,8 +289,8 @@ export function sections(
   return first?.role === "system" ? (first.sections ?? {}) : {};
 }
 
-/** A `subagent` call whose id is its task, so results can be looked up by task. */
-export function call(params: {
+/** One task of a `subagent` call; its description defaults to `run <agent or task>`. */
+interface Lane {
   task: string;
   agent?: string;
   description?: string;
@@ -298,17 +298,36 @@ export function call(params: {
   tools?: string[];
   model?: string;
   cwd?: string;
-  background?: boolean;
   continue?: string;
-}) {
-  const args = Object.fromEntries(
-    Object.entries({
-      description: `run ${params.agent ?? params.task}`,
-      ...params,
-    }).filter(([, value]) => value !== undefined),
-  );
-  return fauxToolCall("subagent", args, { id: params.task });
 }
+
+/** A `subagent` call running `tasks` as its lanes, under the tool-call id `id`. */
+export function lanes(
+  id: string,
+  tasks: Lane[],
+  o: { background?: boolean } = {},
+) {
+  const defined = (fields: object) =>
+    Object.fromEntries(
+      Object.entries(fields).filter(([, value]) => value !== undefined),
+    );
+  return fauxToolCall(
+    "subagent",
+    defined({
+      tasks: tasks.map((lane) =>
+        defined({ description: `run ${lane.agent ?? lane.task}`, ...lane }),
+      ),
+      background: o.background,
+    }),
+    { id },
+  );
+}
+
+/** A one-task `subagent` call whose id is its task, so results can be looked up by task. */
+export const call = ({
+  background,
+  ...lane
+}: Lane & { background?: boolean }) => lanes(lane.task, [lane], { background });
 
 /** The parent makes `calls` on its first turn and then answers "done"; children get `child`. */
 export function router(
@@ -329,6 +348,34 @@ export function script(
 ): FauxResponseFactory {
   let next = 0;
   return () => turns[next++] ?? fauxAssistantMessage("done");
+}
+
+/**
+ * The parent's turns in order, each built from its request, then "done"; children get `child`.
+ * Re-prompting the parent consumes the next turn.
+ */
+export function scriptTurns(
+  child: FauxResponseFactory,
+  ...turns: FauxResponseFactory[]
+): FauxResponseFactory {
+  let n = 0;
+  return (context, ...rest) => {
+    if (taskOf(context) !== "go") return child(context, ...rest);
+    const own = turns[n];
+    n += 1;
+    return own ? own(context, ...rest) : fauxAssistantMessage("done");
+  };
+}
+
+/** A child id in a text: an answer's `id` attribute, or the `(id …)` of a background start. */
+export const CHILD_ID = /(?:\bid="|\(id )([0-9a-f]{8})/;
+
+/** The first child id in each of a request's messages: results and delivered answers. */
+export function childIds(context: TranscriptContext): string[] {
+  return context.messages.flatMap((m) => {
+    const id = CHILD_ID.exec(textOf(m));
+    return id ? [id[1]!] : [];
+  });
 }
 
 /** The parent's tool results by tool-call id, which `call` sets to the task. */

@@ -55,13 +55,17 @@ export interface RunStore {
   /**
    * `start` creates or replaces an entry, marking a running one `working`, and `end` removes it;
    * events for an unknown id, such as a child's late progress after `clear`, are ignored.
-   * Snapshots already handed out never change.
+   * Snapshots already handed out never change. A `start` for an existing id keeps its place, so
+   * the runs of one call, started together, stay next to each other.
    */
   apply(id: string, event: RunEvent): void;
   /** Undefined once the child has ended. */
   get(id: string): RunSnapshot | undefined;
   running(): readonly RunSnapshot[];
-  /** Calls `listener` synchronously after every change. Returns the unsubscribe function. */
+  /**
+   * Calls `listener` synchronously after every change, so it must not throw: a throw would skip
+   * the listeners after it and reach the caller of `apply`. Returns the unsubscribe function.
+   */
   subscribe(listener: () => void): () => void;
   clear(): void;
 }

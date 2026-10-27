@@ -11,9 +11,11 @@ import {
   agentFile,
   call,
   hold,
+  lanes,
   parentSession,
   router,
   taskHost,
+  taskOf,
 } from "./session.js";
 import { gated, gateFile } from "./shells-jobs.js";
 
@@ -171,4 +173,39 @@ test("shells and subagents publish their own lists, each under its own source", 
   writeFileSync(shell.gate, "");
   await host.until(SHELLS, (items) => items.length === 0);
   await session.waitForIdle();
+});
+
+test("a 2-lane call publishes two task items with distinct titles; each leaves as its lane ends", async () => {
+  const bus = createEventBus();
+  const host = taskHost(bus, true);
+  const holds = new Map(["look", "seek"].map((task) => [task, hold()]));
+  const { session } = await parentSession({
+    mode: "tui",
+    eventBus: bus,
+    respond: router(
+      [
+        lanes("call", [
+          { agent: "scout", task: "look", description: "look around" },
+          { agent: "scout", task: "seek", description: "seek elsewhere" },
+        ]),
+      ],
+      (context, ...rest) => holds.get(taskOf(context))!.step(context, ...rest),
+    ),
+    userAgents: { "scout.md": agentFile("Finds things") },
+  });
+  const run = session.prompt("go");
+  await host.until(SUBAGENTS, (items) => items.length === 2);
+  expect(host.last(SUBAGENTS)).toMatchObject([
+    { title: 'scout "look around"' },
+    { title: 'scout "seek elsewhere"' },
+  ]);
+
+  holds.get("look")!.release();
+  await host.until(SUBAGENTS, (items) => items.length === 1);
+  expect(host.last(SUBAGENTS)).toMatchObject([
+    { title: 'scout "seek elsewhere"' },
+  ]);
+  holds.get("seek")!.release();
+  await run;
+  await host.until(SUBAGENTS, (items) => items.length === 0);
 });

@@ -7,7 +7,7 @@ import { loadPi } from "../pi.js";
 import { clip, oneLine, stripInvisible, tokens } from "../tools/render.js";
 import { spill } from "../tools/spill.js";
 import type { ChildResult } from "./runner.js";
-import { labelOf, type RunSnapshot } from "./store.js";
+import { count, labelOf, type RunSnapshot } from "./store.js";
 
 const MAX_ANSWER_BYTES = 10_000;
 
@@ -24,6 +24,8 @@ type Note = Spill | { kind: "line"; text: string };
  * present exactly when it gave no answer.
  */
 export interface LaneOutcome {
+  /** The task's place in its call; absent for a run recovered after a restart, whose call is gone. */
+  lane?: { n: number; of: number };
   run: RunSnapshot;
   /** The answer, cut to the cap, or the sentence saying why there is none. */
   body: string;
@@ -98,12 +100,14 @@ export async function answer(
   }
 }
 
+/** The statuses the model reads for an ended run, in the order a header counts them. */
+const ENDED = ["done", "empty", "failed", "stopped"] as const;
+
 /** The status the model reads: `empty` for a run that ended without an answer. */
-function statusOf(run: RunSnapshot): string {
+function statusOf(run: RunSnapshot): (typeof ENDED)[number] {
   if (run.status === "aborted") return "stopped";
-  return run.status === "done" && run.error !== undefined
-    ? "empty"
-    : run.status;
+  if (run.status === "done") return run.error === undefined ? "done" : "empty";
+  return "failed";
 }
 
 // The parent's and the harness's values, so only what would end the value or the tag is swapped.
@@ -121,14 +125,13 @@ const TAG = new RegExp(
  * One child's answer in its frame, then its notes. Only the child writes the body, and any tag
  * it writes, opening or closing, arrives escaped, so nothing it writes leaves or forges a frame.
  */
-function block({ run, body, notes }: LaneOutcome): string {
-  // A recovered run's job dir knows nothing of the call it came from.
-  const whose = run.recovered ? "the" : "task 1's";
+function block({ lane, run, body, notes }: LaneOutcome): string {
+  const whose = lane ? `task ${lane.n}'s` : "the";
   const open =
     "<subagent-answer" +
-    (run.recovered
-      ? attribute("recovered", "after a restart")
-      : attribute("task", "1 of 1")) +
+    (lane
+      ? attribute("task", `${lane.n} of ${lane.of}`)
+      : attribute("recovered", "after a restart")) +
     (run.agent !== undefined ? attribute("agent", run.agent) : "") +
     attribute("description", run.description) +
     attribute("status", statusOf(run)) +
@@ -147,9 +150,25 @@ function block({ run, body, notes }: LaneOutcome): string {
   return [open, text, "</subagent-answer>", ...after].join("\n");
 }
 
-/** A foreground call's result: a header for the call, then the framed answer. */
-export const resultText = (outcome: LaneOutcome) =>
-  `subagent: 1 task · ${statusOf(outcome.run)} · ${tokens(outcome.run.tokens)}\n${FRAMING}\n\n${block(outcome)}`;
+/**
+ * A foreground call's result: a header counting the outcomes, then each framed answer in task
+ * order. One task's header names its status alone.
+ */
+export function resultText(outcomes: readonly LaneOutcome[]): string {
+  const statuses = outcomes.map(({ run }) => statusOf(run));
+  const counts =
+    statuses.length === 1
+      ? statuses
+      : ENDED.flatMap((status) => {
+          const n = statuses.filter((s) => s === status).length;
+          return n > 0 ? [`${n} ${status}`] : [];
+        });
+  const total = outcomes.reduce((sum, { run }) => sum + run.tokens, 0);
+  return [
+    `subagent: ${count(outcomes.length, "task")} · ${counts.join(", ")} · ${tokens(total)}\n${FRAMING}`,
+    ...outcomes.map(block),
+  ].join("\n\n");
+}
 
 /** One message for every answer that ended while the parent was busy, in the order they ended. */
 export const delivery = (outcomes: readonly LaneOutcome[]) =>
@@ -157,5 +176,17 @@ export const delivery = (outcomes: readonly LaneOutcome[]) =>
     "\n\n",
   );
 
-export const startedText = (run: RunSnapshot) =>
-  `subagent: started 1 task in the background:\n- task 1: ${labelOf(run)} (id ${run.id.slice(0, 8)})\nIts answer arrives as a message when the task finishes. Keep working and never poll; do not start the same work again.`;
+export function startedText(runs: readonly RunSnapshot[]): string {
+  const lines = runs.map(
+    (run, i) => `- task ${i + 1}: ${labelOf(run)} (id ${run.id.slice(0, 8)})`,
+  );
+  const arrives =
+    runs.length === 1
+      ? "Its answer arrives as a message when the task finishes."
+      : "Each answer arrives in a message when its task finishes.";
+  return [
+    `subagent: started ${count(runs.length, "task")} in the background:`,
+    ...lines,
+    `${arrives} Keep working and never poll; do not start the same work again.`,
+  ].join("\n");
+}

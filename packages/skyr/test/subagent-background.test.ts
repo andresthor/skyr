@@ -10,6 +10,7 @@ import {
   expectInert,
   HOSTILE,
   hold,
+  lanes,
   type Parent,
   parentSession,
   results,
@@ -334,4 +335,121 @@ test("a description's terminal escapes never reach the model: a hostile one star
   await delivered(parent);
 
   expectInert(textOf(results(parent.session).get("bg")!).split("\n"), 400);
+});
+
+/** Children that hold until released and record whether their request was aborted. */
+function heldLanes(...tasks: string[]) {
+  const holds = new Map(tasks.map((task) => [task, hold()]));
+  const aborted = new Set<string>();
+  const child: FauxResponseFactory = (context, options, ...rest) => {
+    const task = taskOf(context);
+    options?.signal?.addEventListener("abort", () => aborted.add(task));
+    return holds.get(task)!.step(context, options, ...rest);
+  };
+  return { holds, aborted, child };
+}
+
+test("Esc leaves every lane of a background call running; `/subagents stop <lane id>` stops that lane alone, and its answer arrives while its siblings still run", async () => {
+  const { holds, aborted, child } = heldLanes("a", "b");
+  const parentHold = hold();
+  const parent = await parentSession({
+    respond: bgRouter(
+      [lanes("bg", [{ task: "a" }, { task: "b" }], { background: true })],
+      child,
+      parentHold.step,
+    ),
+  });
+
+  const run = parent.session.prompt("go");
+  await Promise.all([
+    parentHold.entered,
+    ...[...holds.values()].map((h) => h.entered),
+  ]);
+  await parent.session.abort();
+  await run;
+  expect([...aborted]).toEqual([]);
+
+  const started = textOf(results(parent.session).get("bg")!);
+  const [, a, b] =
+    /^subagent: started 2 tasks in the background:\n- task 1: "run a" \(id ([0-9a-f]{8})\)\n- task 2: "run b" \(id ([0-9a-f]{8})\)\nEach answer arrives in a message when its task finishes\./.exec(
+      started,
+    ) ?? [];
+  expect(a).toBeDefined();
+
+  await parent.session.prompt(`/subagents stop ${a}`);
+  const message = await delivered(parent);
+  expect([...aborted]).toEqual(["a"]);
+  expect(textOf(message)).toMatch(
+    new RegExp(
+      `\\n<subagent-answer task="1 of 2" description="run a" status="stopped" [^\\n]* id="${a}">\\nsubagent: "run a" was stopped by the user before it answered\\n</subagent-answer>$`,
+    ),
+  );
+  expect(parent.widgets.at(-1)).toEqual([expect.stringContaining(`· ${b}`)]);
+
+  holds.get("b")!.release();
+  await vi.waitFor(() => expect(parentTurns(parent)).toHaveLength(4));
+  await parent.session.waitForIdle();
+  expect(textOf(parentTurns(parent)[3]!.messages.at(-1)!)).toMatch(
+    /\n<subagent-answer task="2 of 2" description="run b" status="done" [^\n]*>\nreleased\n<\/subagent-answer>$/,
+  );
+});
+
+test("lanes of a background call that end while the parent is busy arrive as one message when it settles", async () => {
+  const parentHold = hold();
+  let shown = false;
+  let landed!: () => void;
+  const answered = new Promise<void>((resolve) => {
+    landed = resolve;
+  });
+  const parent = await parentSession({
+    respond: bgRouter(
+      [lanes("bg", [{ task: "a" }, { task: "b" }], { background: true })],
+      (context) => fauxAssistantMessage(`ANSWER-${taskOf(context)}`),
+      parentHold.step,
+    ),
+    // The widget clears once both answers are pending
+    ui: {
+      setWidget: (_key: string, content: unknown) => {
+        if (content) shown = true;
+        else if (shown) landed();
+      },
+    },
+  });
+
+  const run = parent.session.prompt("go");
+  await Promise.all([parentHold.entered, answered]);
+  parentHold.release();
+  await run;
+  const message = await delivered(parent);
+
+  expect(parentTurns(parent)).toHaveLength(3);
+  const blocks = textOf(message).split("\n\n").slice(1);
+  expect(blocks.sort()).toEqual([
+    expect.stringMatching(
+      /^<subagent-answer task="1 of 2" description="run a" [^\n]*>\nANSWER-a\n/,
+    ),
+    expect.stringMatching(
+      /^<subagent-answer task="2 of 2" description="run b" [^\n]*>\nANSWER-b\n/,
+    ),
+  ]);
+});
+
+test("a reload stops every background lane and nothing reaches the next session", async () => {
+  const { holds, aborted, child } = heldLanes("a", "b");
+  const parent = await parentSession({
+    respond: bgRouter(
+      [lanes("bg", [{ task: "a" }, { task: "b" }], { background: true })],
+      child,
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await Promise.all([...holds.values()].map((h) => h.entered));
+  expect(parent.widgets.at(-1)).toHaveLength(2);
+  await parent.session.reload();
+
+  await vi.waitFor(() => expect([...aborted].sort()).toEqual(["a", "b"]));
+  expect(parent.widgets.at(-1)).toBeUndefined();
+  await parent.session.waitForIdle();
+  expect(parentTurns(parent)).toHaveLength(2);
 });

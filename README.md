@@ -24,9 +24,9 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
   before fails; no key needed. `TAVILY_API_KEY`, `EXA_API_KEY` or `PARALLEL_API_KEY` moves that
   service off its rate-limited free tier. Queries go to those services and may carry
   conversation content.
-- `subagent` — hands a task to an agent defined in a markdown file. The agent runs as a fresh
-  session with its own context and returns only its final answer. Several calls in one turn run
-  in parallel, and Esc stops them.
+- `subagent` — hands tasks to agents defined in markdown files. Each agent runs as a fresh
+  session with its own context and returns only its final answer. The tasks of one call run in
+  parallel; Esc stops them unless the call runs in the background.
 - `bash` — Pi's own `bash` with the same parameters, output and limits, plus `background`; a slow
   call keeps running as a background job. See [Background shells](#background-shells).
 - `bash_stop` — stops a background job by its id; see [Background shells](#background-shells).
@@ -133,24 +133,28 @@ Edits apply after `/reload`. An agent with a field skyr does not act on, such as
 `tools`, an agent gets `read`, `grep`, `find`, `ls`, `bash`, `web_search` and `web_fetch`. Pi
 lists the agents to the model.
 
-A call needs no agent file: without `agent` the model gets a general-purpose subagent with Pi's
-own prompt, the default tools, the parent's model and working directory. On any call, `prompt`
-(added to the system prompt), `tools`, `model` and `cwd` (an existing directory) override what the
-agent file or the default gives.
+A call runs one to eight tasks, each in its own subagent: they run in parallel and can't see each
+other's answers, and a foreground call returns once the last of them ends, with every answer in
+task order. A call with a bad task runs none of them, and its error names every bad task. A task
+needs no agent file: without `agent` it gets a general-purpose subagent with Pi's own prompt, the
+default tools, the parent's model and working directory. On any task, `prompt` (added to the
+system prompt), `tools`, `model` and `cwd` (an existing directory) override what the agent file or
+the default gives. A call fails only when no task gave an answer.
 
 A subagent whose tools include `edit` or `write` is a writer, and one writer runs per directory at
-a time: a second one for the same directory waits until the first ends. Writers in different
-directories, such as worktrees you made, run in parallel. A directory other than the parent's
-takes its project trust from Pi's own record for it, then from the parent's verdict. A writer call
-with no `cwd` runs in its own fresh git worktree (cut from HEAD, under the session's directory)
-instead of queueing: the result states the path and branch, its writes are uncommitted there
-(usually untracked), and the note carries the inspect and commit-then-merge recipes. Nothing
-deletes a worktree automatically; in a non-git directory a bare writer falls back in-tree
-and the result says so.
+a time: a second one for the same directory, from the same call or another, waits until the first
+ends. Writers in different directories, such as worktrees you made, run in parallel. A directory
+other than the parent's takes its project trust from Pi's own record for it, then from the parent's
+verdict. A writer task with no `cwd` runs in its own fresh git worktree (cut from HEAD, under the
+session's directory) instead of queueing: its answer states the path and branch, its writes are
+uncommitted there (usually untracked), and the note carries the inspect and commit-then-merge
+recipes. Nothing deletes a worktree automatically; in a non-git directory a bare writer falls back
+in-tree and its answer says so.
 
-With `background: true` the call returns at once and the answer arrives later as a message that
-starts a new turn, once the parent is idle. Esc does not stop a background subagent; `/subagents`
-lists the live ones and `/subagents stop <id|all>` stops them. A widget above the editor shows
+With `background: true` on the call, it returns at once and each task's answer arrives later as a
+message that starts a new turn, once the parent is idle; answers that end while the parent is busy
+arrive together. Esc does not stop a background subagent; `/subagents` lists the live ones and
+`/subagents stop <id|all>` stops them, one task at a time or all. A widget above the editor shows
 every live subagent, running, queued or in the background; past ten, it shows nine and a count
 of the rest. Plain `pi --mode rpc` clients don't get the widget: Pi's RPC mode passes on widgets
 made of lines only, and this one is a component. A delivered message shows one line per
@@ -160,7 +164,7 @@ subagent's token usage is in the delivered message, not in the footer.
 The model reads each answer inside a `<subagent-answer>` block, foreground or delivered, whose
 attributes carry the run's status, tokens and 8-char `id`; the subagent's own text can't open or
 close a block, and harness notes (a spill file, a worktree) follow it. A background start names
-the same id. With `continue: <id>` the next call starts a second run on a finished subagent's
+the same id. A task with `continue: <id>` starts a second run on a finished subagent's
 saved session — same agent, tools, model and directory, a fresh task. The ids are valid in the
 current session only; ongoing and other sessions can't continue from them.
 
@@ -170,8 +174,11 @@ call's model works from the agent dir's own `auth.json` + `models.json` — a mo
 resolves in the parent's runtime (faux, registered providers, `--api-key` keys) stays in-process.
 Progress crosses back over a file protocol: a 500 ms heartbeat snapshot plus one final result.
 A stopped heart's widget line shows `· stalled`; nothing kills a stalled child, the user decides
-via `/subagents stop`. A crashed host's finished answers are collected and delivered on the next
-session start; nothing keeps a stale child crossing sessions.
+via `/subagents stop`. A child process that is killed reports no token usage. A crashed host's
+finished answers are collected and delivered on the next session start; nothing keeps a stale
+child crossing sessions. Pi saves a turn's tool results only once its slowest call ends, so a
+hard kill before then loses answers that had already ended; their child session files stay on
+disk.
 
 `packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.
 

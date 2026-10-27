@@ -54,8 +54,12 @@ describe.skipIf(TENGI_DIR === undefined)("inside tengi", () => {
       const gate = tengi.gate("release");
       const turn = tengi.prompt(
         tool("subagent", {
-          description: "hold for the test",
-          task: tool("bash", { command: gate.command }),
+          tasks: [
+            {
+              description: "hold for the test",
+              task: tool("bash", { command: gate.command }),
+            },
+          ],
         }),
       );
 
@@ -68,6 +72,36 @@ describe.skipIf(TENGI_DIR === undefined)("inside tengi", () => {
       gate.release();
       await turn;
       await tengi.nextTasks((items) => items.length === 0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a background subagent card carries no `agentui/exit`",
+    async () => {
+      const tengi = startTengi();
+      await tengi.session({ tasks: true });
+      const gate = tengi.gate("release");
+      await tengi.prompt(
+        tool("subagent", {
+          tasks: [
+            {
+              description: "hold for the test",
+              task: tool("bash", { command: gate.command }),
+            },
+          ],
+          background: true,
+        }),
+      );
+
+      await tengi.nextTasks((items) => items.length === 1);
+      const [card] = tengi.toolResults();
+      expect(card?.text).toContain("started 1 task in the background");
+      expect(card?.meta).not.toHaveProperty(["agentui/exit"]);
+
+      gate.release();
+      await tengi.nextTasks((items) => items.length === 0);
+      await tengi.agentSaid("quick reply");
     },
     TIMEOUT,
   );

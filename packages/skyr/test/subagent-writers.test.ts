@@ -10,6 +10,7 @@ import {
   agentFile,
   call,
   hold,
+  lanes,
   parentSession,
   results,
   router,
@@ -245,8 +246,10 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
     'subagent: "run w2" was stopped by the user before it started',
   );
   expect(textOf(w2!)).toMatch(/ id="[0-9a-f]{8}">\n/);
-  expect(w2?.details).toMatchObject({ status: "aborted", turns: 0, tokens: 0 });
-  expect(w2?.details).not.toHaveProperty("sessionFile");
+  expect(w2?.details).toMatchObject([
+    { status: "aborted", turns: 0, tokens: 0 },
+  ]);
+  expect(w2?.details).not.toHaveProperty([0, "sessionFile"]);
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
   expect(parent.widgets.at(-1)).toBeUndefined();
 });
@@ -281,4 +284,92 @@ test("a reload aborts queued children, and their result says Pi reloaded", async
   expect(textOf(byTask.get("w2")!)).toMatch(/ id="[0-9a-f]{8}">\n/);
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
   expect(parent.widgets.at(-1)).toBeUndefined();
+});
+
+test("writer lanes in one directory run one at a time: call order, then lane order, across two calls in one message", async () => {
+  const order = ["w1", "w2", "w3", "w4"];
+  const holds = new Map(order.map((task) => [task, hold()]));
+  const released = new Set<string>();
+  const writer = (task: string) => ({ task, tools: ["write"], cwd: "." });
+  const parent = await parentSession({
+    respond: router(
+      [
+        lanes("A", [writer("w1"), writer("w2")]),
+        lanes("B", [writer("w3"), writer("w4")]),
+      ],
+      (context, ...rest) => {
+        const task = taskOf(context);
+        const ahead = order.slice(0, order.indexOf(task));
+        if (ahead.some((t) => !released.has(t)))
+          throw new Error(
+            `${task} started before ${ahead.join(", ")} released`,
+          );
+        return holds.get(task)!.step(context, ...rest);
+      },
+    ),
+  });
+
+  const run = parent.session.prompt("go");
+  for (const task of order) {
+    await holds.get(task)!.entered;
+    released.add(task);
+    holds.get(task)!.release();
+  }
+  await run;
+
+  expect(parent.requests.map(taskOf).filter((t) => t !== "go")).toEqual(order);
+  for (const id of ["A", "B"])
+    expect(textOf(results(parent.session).get(id)!)).toMatch(
+      /^subagent: 2 tasks · 2 done · /,
+    );
+});
+
+test("two writer lanes of one call in one directory both finish", async () => {
+  const parent = await parentSession({
+    respond: router(
+      [
+        lanes("A", [
+          { task: "w1", tools: ["write"], cwd: "." },
+          { task: "w2", tools: ["write"], cwd: "." },
+        ]),
+      ],
+      () => fauxAssistantMessage("ok"),
+    ),
+  });
+
+  await parent.session.prompt("go");
+
+  const result = results(parent.session).get("A")!;
+  expect(result.isError).toBe(false);
+  expect(textOf(result)).toMatch(/^subagent: 2 tasks · 2 done · /);
+});
+
+test("a lane whose model does not resolve releases its writer slot", async () => {
+  const parent = await parentSession({
+    respond: router(
+      [
+        lanes("A", [
+          { task: "w1", tools: ["write"], cwd: ".", model: "nowhere/none" },
+          { task: "w2", tools: ["write"], cwd: "." },
+        ]),
+      ],
+      (context) => {
+        if (taskOf(context) !== "w2") throw new Error("w1 started");
+        return fauxAssistantMessage("ok");
+      },
+    ),
+  });
+
+  await parent.session.prompt("go");
+
+  const result = results(parent.session).get("A")!;
+  expect(result.isError).toBe(false);
+  expect(textOf(result)).toMatch(/^subagent: 2 tasks · 1 done, 1 failed · /);
+  expect(result.details).toMatchObject([
+    {
+      status: "failed",
+      error: expect.stringMatching(/^model "nowhere\/none"/),
+    },
+    { status: "done" },
+  ]);
 });

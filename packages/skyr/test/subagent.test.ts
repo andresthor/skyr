@@ -94,9 +94,12 @@ function registered(): ToolDefinition & { message: MessageRenderer } {
 function resultRow(
   tool: ToolDefinition,
   details: unknown,
-  o: { text?: string; isError?: boolean; width?: number } = {},
+  o: { text?: string; isError?: boolean; width?: number; args?: unknown } = {},
 ): string[] {
-  const context = { isError: o.isError ?? false } as RenderContext;
+  const context = {
+    isError: o.isError ?? false,
+    args: o.args,
+  } as RenderContext;
   const content = o.text ? [{ type: "text" as const, text: o.text }] : [];
   return (
     tool
@@ -204,6 +207,95 @@ test("a delivered message holding one unreadable run draws its sanitized text in
   expectInert(rows, 40);
 });
 
+test("a finished call of several tasks leads with their outcomes, then draws a line per task", () => {
+  const tool = registered();
+  const rows = (details: unknown, o: Parameters<typeof resultRow>[2] = {}) =>
+    resultRow(tool, details, o).map((line) => line.trimEnd());
+  expect(
+    rows([
+      ended,
+      { ...ended, status: "failed", error: "boom" },
+      { ...ended, error: "ended without an answer" },
+      {
+        ...ended,
+        agent: "scout",
+        status: "aborted",
+        error: "stopped by the user",
+      },
+    ]),
+  ).toEqual([
+    "◐ 1 done, 1 empty, 1 failed, 1 stopped · 6k tok · 3.0s",
+    '├ ✓ "look" · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
+    '├ ✗ "look" · boom · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
+    '├ ✗ "look" · ended without an answer · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
+    '└ ■ scout "look" · stopped by the user · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
+  ]);
+  const failed = { ...ended, status: "failed", error: "boom" };
+  const empty = { ...ended, error: "ended without an answer" };
+  expect(rows([failed, empty], { isError: true })[0]).toBe(
+    "✗ 1 empty, 1 failed · 3k tok · 3.0s",
+  );
+  const started = { ...ended, status: "running", background: true };
+  expect(rows([started, { ...started, agent: "scout" }])).toEqual([
+    "↗ 2 tasks in the background · answers arrive as messages",
+    '├ ↗ "look" · abcdef01',
+    '└ ↗ scout "look" · abcdef01',
+  ]);
+});
+
+test("a refused call's row names its cause and each problem, but not the arguments Pi echoes", () => {
+  const row = (text: string) =>
+    resultRow(registered(), undefined, { text, isError: true }).map((line) =>
+      line.trimEnd(),
+    );
+  expect(
+    row(
+      'subagent: nothing ran; fix these and call again:\n- task 2 ("b"): no agent "x"; available: scout\nAgent files that failed to load: a.md: no description',
+    ),
+  ).toEqual([
+    "subagent: nothing ran; fix these and call again:",
+    '- task 2 ("b"): no agent "x"; available: scout',
+  ]);
+  expect(
+    row(
+      'Validation failed for tool "subagent":\n  - tasks.0.background: schema is false\n  - tasks.0: must not have additional properties\n\nReceived arguments:\n{\n  "tasks": [\n    - not a problem\n  ]\n}',
+    ),
+  ).toEqual([
+    'Validation failed for tool "subagent":',
+    "- tasks.0.background: schema is false",
+    "- tasks.0: must not have additional properties",
+  ]);
+});
+
+test("a call's line names one task by its agent, description and cwd, and several by their agents, or by every label while it runs", () => {
+  const tool = registered();
+  const line = (args: unknown, isPartial = false) =>
+    tool
+      .renderCall?.(args, plain, { isPartial } as RenderContext)
+      .render(200)[0]
+      ?.trimEnd();
+  const three = {
+    tasks: [
+      { agent: "scout", description: "a", task: "x" },
+      { description: "b", task: "y" },
+      { agent: "scout", description: "c", task: "z" },
+    ],
+  };
+  expect(line(three)).toBe("subagent 3 tasks · scout");
+  expect(line(three, true)).toBe(
+    'subagent 3 tasks · scout "a", "b", scout "c"',
+  );
+  // A session saved before tasks existed holds one flat task.
+  expect(
+    line({ agent: "scout", description: "a", task: "x", cwd: "pkg" }),
+  ).toBe('subagent scout "a" in pkg');
+  // Half-streamed arguments.
+  expect(line({ tasks: [{}] }, true)).toBe("subagent");
+  expect(line({ tasks: [{ agent: "scout" }, {}] }, true)).toBe(
+    "subagent 2 tasks",
+  );
+});
+
 test("a background call's row renders from its saved details under its own marker", () => {
   const started = {
     id: "abcdef0123",
@@ -264,21 +356,44 @@ test("a child's text and description cannot reach the terminal as escapes, the r
     toolCalls: 2,
     tokens: 0,
   };
-  const callRow = (args: Record<string, string>) =>
-    tool.renderCall?.(args, plain, {} as RenderContext).render(20) ?? [];
+  const callRow = (args: object, isPartial = false) =>
+    tool.renderCall?.(args, plain, { isPartial } as RenderContext).render(20) ??
+    [];
   const row = (over: object, o: Parameters<typeof resultRow>[2] = {}) =>
-    resultRow(tool, { ...run, ...over }, { width: 20, ...o });
+    resultRow(tool, [{ ...run, ...over }], { width: 20, ...o });
+  const lanes = [
+    { agent: HOSTILE, description: HOSTILE, task: "x" },
+    { description: HOSTILE, task: "y" },
+  ];
   const lines = [
-    ...callRow({ agent: "scout", description: HOSTILE, task: "x" }),
-    ...callRow({ description: HOSTILE, task: "x", cwd: HOSTILE }),
+    ...callRow({
+      tasks: [{ agent: "scout", description: HOSTILE, task: "x" }],
+    }),
+    ...callRow({ tasks: [{ description: HOSTILE, task: "x", cwd: HOSTILE }] }),
+    ...callRow({ tasks: lanes }),
+    ...callRow({ tasks: lanes }, true),
     ...row({}),
     ...row({ agent: undefined, background: true }),
     ...row(
       { status: "failed", endedAt: Date.now() },
       { text: `subagent: scout failed: ${HOSTILE}`, isError: true },
     ),
+    ...resultRow(tool, [run, { ...run, error: HOSTILE }], { width: 20 }),
+    ...resultRow(
+      tool,
+      [
+        { ...run, background: true },
+        { ...run, background: true },
+      ],
+      { width: 20 },
+    ),
+    ...resultRow(tool, undefined, {
+      text: `subagent: nothing ran; fix these and call again:\n- task 1 ("x"): no agent "${HOSTILE}"; available: none`,
+      isError: true,
+      width: 20,
+    }),
   ];
-  expect(lines).toHaveLength(5);
+  expect(lines).toHaveLength(15);
   expectInert(lines, 20);
   for (const line of lines) expect(line).not.toContain("undefined");
 });
@@ -463,7 +578,7 @@ test("tools and model on a call override the agent file's and the parent's, tool
   expect(seen.get("m2")?.model).toBe("faux-1");
   const text = (task: string) => textOf(results(parent.session).get(task)!);
   expect(text("bad-tool")).toMatch(
-    /^subagent: tools: unknown tools TodoWrite; valid tools are /,
+    /^subagent: nothing ran; fix these and call again:\n- task 1 \("run bad-tool"\): tools: unknown tools TodoWrite; valid tools are /,
   );
   expect(text("bad-model")).toMatch(
     /status="failed" [^\n]*>\nsubagent: "run bad-model" failed: model "nowhere\/none" is not available/,
@@ -508,14 +623,10 @@ test("cwd runs the child there, absolute or relative to the parent's cwd, and it
     `<cwd>\n${join(parent.cwd, "sub")}\n</cwd>`,
   );
   const parentFile = parent.session.sessionFile!;
-  const details = results(parent.session).get("abs")?.details as {
-    sessionFile?: string;
-  };
-  expect(
-    details.sessionFile?.startsWith(
-      join(dirname(parentFile), basename(parentFile, ".jsonl")),
-    ),
-  ).toBe(true);
+  const childDir = join(dirname(parentFile), basename(parentFile, ".jsonl"));
+  expect(results(parent.session).get("abs")?.details).toMatchObject([
+    { sessionFile: expect.stringContaining(`${childDir}/`) },
+  ]);
 });
 
 test("a missing cwd, or a file as cwd, fails before any child starts and names the path", async () => {
@@ -570,7 +681,7 @@ test("a blank description is refused before any other check", async () => {
     const res = results(parent.session).get(task)!;
     expect(res.isError).toBe(true);
     expect(textOf(res)).toBe(
-      "subagent: give a short description: 3-5 words for the user, in description",
+      "subagent: nothing ran; fix these and call again:\n- task 1: give a short description: 3-5 words for the user, in description",
     );
   }
 });
@@ -584,9 +695,9 @@ test("a fresh run's details carry the trimmed description", async () => {
 
   await parent.session.prompt("go");
 
-  expect(results(parent.session).get("pad")?.details).toMatchObject({
-    description: "padded",
-  });
+  expect(results(parent.session).get("pad")?.details).toMatchObject([
+    { description: "padded" },
+  ]);
 });
 
 test("a foreign cwd takes its trust from Pi's trust store, then the parent's verdict, and agent files still come from the parent's cwd", async () => {
@@ -621,7 +732,9 @@ test("a foreign cwd takes its trust from Pi's trust store, then the parent's ver
   expect(seen.get("tb")?.sections.addendum).toBeUndefined();
   expect(seen.get("tc")?.sections.addendum).toContain("FROM-C");
   const ta = results(parent.session).get("ta");
-  expect(ta && textOf(ta)).toMatch(/^subagent: no agent "local"/);
+  expect(ta && textOf(ta)).toMatch(
+    /^subagent: nothing ran; fix these and call again:\n- task 1 \("run local"\): no agent "local"/,
+  );
 });
 
 test("a child that ends aborted with nobody stopping it names no stopper, and a broken or unknown agent, an unresolvable model, or a child that errors fails the call and tells the model what to try", async () => {
@@ -658,7 +771,7 @@ test("a child that ends aborted with nobody stopping it names no stopper, and a 
     return result ? textOf(result) : "";
   };
   expect(text("b")).toMatch(
-    /^subagent: no agent "broken"; available: faraway, scout\. Agent files that failed to load: .*broken\.md: .*description/,
+    /^subagent: nothing ran; fix these and call again:\n- task 1 \("run broken"\): no agent "broken"; available: faraway, scout\nAgent files that failed to load: .*broken\.md: .*description/,
   );
   expect(text("f")).toMatch(
     /status="failed" [^\n]*>\nsubagent: faraway "run faraway" failed: model "nowhere\/none" is not available .* set `model:` on the call or in the agent file/,
@@ -710,10 +823,12 @@ test("a run whose model does not resolve fails as a framed answer whose row name
   expect(result && textOf(result)).toMatch(
     /^subagent: 1 task · failed · 0 tok\n[\s\S]*\n<subagent-answer task="1 of 1" description="run m" status="failed" [^\n]*>\nsubagent: "run m" failed: model "nowhere\/none" is not available[\s\S]*\n<\/subagent-answer>$/,
   );
-  expect(result?.details).toMatchObject({
-    status: "failed",
-    error: expect.stringMatching(/^model "nowhere\/none" is not available/),
-  });
+  expect(result?.details).toMatchObject([
+    {
+      status: "failed",
+      error: expect.stringMatching(/^model "nowhere\/none" is not available/),
+    },
+  ]);
   const row = resultRow(registered(), result?.details, {
     text: result && textOf(result),
     isError: true,
@@ -752,11 +867,9 @@ test("Esc on a single call keeps its details and names the stop", async () => {
   expect(result && textOf(result)).toMatch(
     /status="stopped" [^\n]*>\nsubagent: "run w" was stopped by the user before it started\n<\/subagent-answer>\nRan in worktree \S+ on branch skyr\/[^\n]*\nNothing is there to merge; nothing deletes the worktree$/,
   );
-  expect(result?.details).toMatchObject({
-    description: "run w",
-    status: "aborted",
-    error: "stopped by the user",
-  });
+  expect(result?.details).toMatchObject([
+    { description: "run w", status: "aborted", error: "stopped by the user" },
+  ]);
   const row = resultRow(registered(), result?.details, {
     text: result && textOf(result),
     isError: true,
@@ -869,11 +982,10 @@ test("a running call's row is its call line alone, and the widget lists the run;
         ? [e.message]
         : [],
     )[0];
-  expect(saved?.details).toMatchObject({
-    id: expect.stringMatching(`^${id8}`),
-    status: "done",
-  });
-  expect(saved?.details).not.toHaveProperty("activity");
+  expect(saved?.details).toMatchObject([
+    { id: expect.stringMatching(`^${id8}`), status: "done" },
+  ]);
+  expect(saved?.details).not.toHaveProperty([0, "activity"]);
   expect(resultRow(registered(), saved?.details)[0]).toMatch(
     /^✓ done · 1 turn · 0 tools · \d+k? tok · \d+\.\ds/,
   );

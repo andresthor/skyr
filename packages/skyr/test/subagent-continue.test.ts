@@ -3,18 +3,20 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
   type FauxResponseFactory,
   fauxAssistantMessage,
-  fauxToolCall,
-  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { expect, test, vi } from "vitest";
 import {
   agentFile,
+  CHILD_ID,
   call,
+  childIds,
   hold,
+  lanes,
   type Parent,
   parentSession,
   results,
   scratchDir,
+  scriptTurns,
   sections,
   taskOf,
   textOf,
@@ -25,47 +27,15 @@ const SCOUT = {
   "scout.md": agentFile("Finds things", "model: faux-2\n"),
 };
 
-/**
- * One parent prompt per test. The parent's request factories run in order: the first turn
- * creates run 1, later turns read its id out of earlier messages and issue continues.
- * Turns past the list answer "done"; re-prompting consumes the next factory. A resumed child's
- * context starts with run 1's messages, so a child side sees `taskOf` = run 1's task again.
- */
-function script(
-  child: FauxResponseFactory,
-  ...turns: FauxResponseFactory[]
-): FauxResponseFactory {
-  let n = 0;
-  return (context, ...rest) => {
-    if (taskOf(context) !== "go") return child(context, ...rest);
-    const own = turns[n];
-    n += 1;
-    return own ? own(context, ...rest) : fauxAssistantMessage("done");
-  };
-}
-
-/** A child id in a text: an answer's `id` attribute, or the `(id …)` of a background start. */
-const ID = /(?:\bid="|\(id )([0-9a-f]{8})/;
-
-/** The first child id in each of a request's messages: results and delivered answers. */
-function tagsOf(context: TranscriptContext): string[] {
-  return context.messages.flatMap((m) => {
-    const id = ID.exec(textOf(m));
-    return id ? [id[1]!] : [];
-  });
-}
-
 /** A continue call: tool-call id = its task, so results are looked up by task. */
 const cont = (task: string, prefix: string) =>
-  fauxToolCall(
-    "subagent",
+  lanes(task, [
     {
       description: `continue ${task}`,
       continue: prefix,
       task: `again ${task}`,
     },
-    { id: task },
-  );
+  ]);
 
 /** One child request's view: tools, model, full transcript text, sections. */
 interface Observed {
@@ -112,18 +82,13 @@ function childLog(answers: Record<string, string> = {}) {
 const parentTurns = (parent: Parent) =>
   parent.requests.filter((r) => taskOf(r) === "go");
 
-/** The child's saved `sessionFile` from a foreground result's details, shape-checked. */
+/** The first child's saved `sessionFile` from a foreground result's details, shape-checked. */
 function savedFileOf(toolCallId: string, parent: Parent): string | undefined {
-  const message = results(parent.session).get(toolCallId) as unknown as {
-    details?: { sessionFile?: unknown };
-  };
-  const details = message?.details;
+  const details: unknown = results(parent.session).get(toolCallId)?.details;
+  const [run] = Array.isArray(details) ? details : [];
   const file =
-    details !== undefined &&
-    typeof details === "object" &&
-    details !== null &&
-    "sessionFile" in details
-      ? details.sessionFile
+    typeof run === "object" && run !== null && "sessionFile" in run
+      ? run.sessionFile
       : undefined;
   return typeof file === "string" ? file : undefined;
 }
@@ -132,10 +97,10 @@ test("a continue runs the child's saved session with a fresh task and its old fa
   const { seen, child } = childLog({ look: "RUN1-ANSWER" });
   const parent = await parentSession({
     userAgents: SCOUT,
-    respond: script(
+    respond: scriptTurns(
       child,
       () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
-      (context) => fauxAssistantMessage([cont("one", tagsOf(context)[0]!)]),
+      (context) => fauxAssistantMessage([cont("one", childIds(context)[0]!)]),
     ),
   });
 
@@ -155,7 +120,7 @@ test("a continue runs the child's saved session with a fresh task and its old fa
   expect(run2?.sections).toEqual(run1?.sections);
   // The second run shares the child id: both foreground results carry the same 8-char prefix.
   const ids = [...results(parent.session).values()]
-    .map((m) => ID.exec(textOf(m))?.[1])
+    .map((m) => CHILD_ID.exec(textOf(m))?.[1])
     .filter(Boolean) as string[];
   expect(ids).toHaveLength(2);
   expect(new Set(ids).size).toBe(1);
@@ -166,24 +131,22 @@ test("a continue with overrides is refused before it spends anything", async () 
   const { seen, child } = childLog();
   const parent = await parentSession({
     userAgents: SCOUT,
-    respond: script(
+    respond: scriptTurns(
       child,
       () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
       (context) =>
         fauxAssistantMessage([
-          fauxToolCall(
-            "subagent",
+          lanes("meddle", [
             {
               description: "continue meddled",
-              continue: tagsOf(context)[0]!,
+              continue: childIds(context)[0]!,
               task: "meddle",
               model: "faux-1",
               cwd: "/tmp",
               prompt: "overridden",
               tools: ["read"],
             },
-            { id: "meddle" },
-          ),
+          ]),
         ]),
     ),
   });
@@ -200,13 +163,13 @@ test("continuing a still-running child is refused until it finishes", async () =
   const held = hold();
   const { seen, child } = childLog();
   const parent = await parentSession({
-    respond: script(
+    respond: scriptTurns(
       (context, ...rest) =>
         taskOf(context) === "bg"
           ? held.step(context, ...rest)
           : child(context, ...rest),
       () => fauxAssistantMessage([call({ task: "bg", background: true })]),
-      (context) => fauxAssistantMessage([cont("live", tagsOf(context)[0]!)]),
+      (context) => fauxAssistantMessage([cont("live", childIds(context)[0]!)]),
     ),
   });
 
@@ -231,7 +194,7 @@ test("an unknown or blank id is refused with the rule spelled out", async () => 
   const { seen, child } = childLog();
   const parent = await parentSession({
     userAgents: SCOUT,
-    respond: script(
+    respond: scriptTurns(
       child,
       () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
       () =>
@@ -250,18 +213,18 @@ test("an unknown or blank id is refused with the rule spelled out", async () => 
   expect([...seen.keys()]).toEqual(["look"]);
 });
 
-test("two same-turn continues on one child: the first runs, the second is refused", async () => {
+test("the same continue id in two calls of one message: the first runs it, the second is refused", async () => {
   const contHold = hold();
   const { child } = childLog();
   const parent = await parentSession({
     userAgents: SCOUT,
-    respond: script(
+    respond: scriptTurns(
       resumedGate("again a", contHold, child),
       () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
       (context) =>
         fauxAssistantMessage([
-          cont("a", tagsOf(context)[0]!),
-          cont("b", tagsOf(context)[0]!),
+          cont("a", childIds(context)[0]!),
+          cont("b", childIds(context)[0]!),
         ]),
     ),
   });
@@ -284,10 +247,10 @@ test("Esc on a running foreground continue aborts it inline and delivers nothing
   const { child } = childLog({ look: "RUN1-ANSWER" });
   const parent = await parentSession({
     userAgents: SCOUT,
-    respond: script(
+    respond: scriptTurns(
       resumedGate("again two", contHold, child),
       () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
-      (context) => fauxAssistantMessage([cont("two", tagsOf(context)[0]!)]),
+      (context) => fauxAssistantMessage([cont("two", childIds(context)[0]!)]),
     ),
   });
 
@@ -312,11 +275,11 @@ test("a new session clears the records: ids from before it are refused", async (
   let tag = "";
   const parent = await parentSession({
     userAgents: SCOUT,
-    respond: script(
+    respond: scriptTurns(
       child,
       () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
       (context) => {
-        tag = tagsOf(context)[0]!;
+        tag = childIds(context)[0]!;
         return fauxAssistantMessage([cont("ok", tag)]);
       },
       // pi re-requests after every tool result: a filler "done" turn closes prompt 1, so the
@@ -348,11 +311,11 @@ test("a continue whose saved session file is gone fails with the honest error", 
   const { child } = childLog({ look: "RUN1-ANSWER" });
   const parent = await parentSession({
     userAgents: SCOUT,
-    respond: script(
+    respond: scriptTurns(
       child,
       () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
       () => fauxAssistantMessage("idling"),
-      (context) => fauxAssistantMessage([cont("gone", tagsOf(context)[0]!)]),
+      (context) => fauxAssistantMessage([cont("gone", childIds(context)[0]!)]),
     ),
   });
 
@@ -375,16 +338,17 @@ test("a continue whose child's cwd vanished, or stopped being a directory, fails
   const workdir = scratchDir("cont-cwd");
   const parent = await parentSession({
     userAgents: SCOUT,
-    respond: script(
+    respond: scriptTurns(
       child,
       () =>
         fauxAssistantMessage([
           call({ agent: "scout", task: "look", cwd: workdir }),
         ]),
       () => fauxAssistantMessage("round one"),
-      (context) => fauxAssistantMessage([cont("gone", tagsOf(context)[0]!)]),
+      (context) => fauxAssistantMessage([cont("gone", childIds(context)[0]!)]),
       () => fauxAssistantMessage("round two"),
-      (context) => fauxAssistantMessage([cont("swapped", tagsOf(context)[0]!)]),
+      (context) =>
+        fauxAssistantMessage([cont("swapped", childIds(context)[0]!)]),
     ),
   });
 
@@ -419,7 +383,7 @@ const worktreeChild = async (
 ) =>
   parentSession({
     git: true,
-    respond: script(
+    respond: scriptTurns(
       child,
       () => fauxAssistantMessage([call({ task: "w", tools: ["edit"] })]),
       ...turns,
@@ -435,7 +399,7 @@ const worktreeOf = (parent: Parent) =>
 test("a continued worktree child states its worktree again", async () => {
   const { child } = childLog();
   const parent = await worktreeChild(child, (context) =>
-    fauxAssistantMessage([cont("two", tagsOf(context)[0]!)]),
+    fauxAssistantMessage([cont("two", childIds(context)[0]!)]),
   );
 
   await parent.session.prompt("go");
@@ -453,7 +417,7 @@ test("a stopped continue of a worktree child still gives the merge recipe", asyn
   const { child } = childLog();
   const parent = await worktreeChild(
     resumedGate("again two", contHold, child),
-    (context) => fauxAssistantMessage([cont("two", tagsOf(context)[0]!)]),
+    (context) => fauxAssistantMessage([cont("two", childIds(context)[0]!)]),
   );
 
   const run = parent.session.prompt("go");
@@ -472,7 +436,7 @@ test("a continued worktree child whose run throws never calls the worktree empty
   const parent = await worktreeChild(
     child,
     () => fauxAssistantMessage("idling"),
-    (context) => fauxAssistantMessage([cont("gone", tagsOf(context)[0]!)]),
+    (context) => fauxAssistantMessage([cont("gone", childIds(context)[0]!)]),
   );
 
   await parent.session.prompt("go");
@@ -490,22 +454,20 @@ test("a continued worktree child whose run throws never calls the worktree empty
 test("a continue with a blank description is refused, and the child can still be continued", async () => {
   const { seen, child } = childLog();
   const parent = await parentSession({
-    respond: script(
+    respond: scriptTurns(
       child,
       () => fauxAssistantMessage([call({ task: "look" })]),
       (context) =>
         fauxAssistantMessage([
-          fauxToolCall(
-            "subagent",
+          lanes("blank", [
             {
               description: "  ",
-              continue: tagsOf(context)[0]!,
+              continue: childIds(context)[0]!,
               task: "again blank",
             },
-            { id: "blank" },
-          ),
+          ]),
         ]),
-      (context) => fauxAssistantMessage([cont("after", tagsOf(context)[0]!)]),
+      (context) => fauxAssistantMessage([cont("after", childIds(context)[0]!)]),
     ),
   });
 
@@ -522,20 +484,21 @@ test("a continue with a blank description is refused, and the child can still be
 test("a continued run's description is trimmed in its label and its details", async () => {
   const { child } = childLog();
   const parent = await parentSession({
-    respond: script(
+    respond: scriptTurns(
       child,
       () => fauxAssistantMessage([call({ task: "look" })]),
       (context) =>
         fauxAssistantMessage([
-          fauxToolCall(
-            "subagent",
-            {
-              description: "  padded  ",
-              continue: tagsOf(context)[0]!,
-              task: "again padded",
-              background: true,
-            },
-            { id: "padded" },
+          lanes(
+            "padded",
+            [
+              {
+                description: "  padded  ",
+                continue: childIds(context)[0]!,
+                task: "again padded",
+              },
+            ],
+            { background: true },
           ),
         ]),
     ),
@@ -546,24 +509,22 @@ test("a continued run's description is trimmed in its label and its details", as
 
   const started = results(parent.session).get("padded")!;
   expect(textOf(started)).toContain('- task 1: "padded" (id ');
-  expect(started.details).toMatchObject({ description: "padded" });
+  expect(started.details).toMatchObject([{ description: "padded" }]);
 });
 
 test("a continue naming an agent is told to omit it, even an agent that does not exist", async () => {
   const { seen, child } = childLog();
   const parent = await parentSession({
-    respond: script(child, () =>
+    respond: scriptTurns(child, () =>
       fauxAssistantMessage([
-        fauxToolCall(
-          "subagent",
+        lanes("named", [
           {
             description: "continue named",
             continue: "ffffffff",
             agent: "nope",
             task: "again named",
           },
-          { id: "named" },
-        ),
+        ]),
       ]),
     ),
   });
@@ -575,4 +536,37 @@ test("a continue naming an agent is told to omit it, even an agent that does not
   expect(res.isError).toBe(true);
   expect(textOf(res)).toContain("omit agent, prompt, tools, model and cwd");
   expect(seen.size).toBe(0);
+});
+
+test("the same continue id twice in one call is refused before anything runs", async () => {
+  const { seen, child } = childLog();
+  const parent = await parentSession({
+    respond: scriptTurns(
+      child,
+      () => fauxAssistantMessage([call({ task: "look" })]),
+      (context) => {
+        const id = childIds(context)[0]!;
+        return fauxAssistantMessage([
+          lanes("twice", [
+            { description: "first", continue: id, task: "again 1" },
+            {
+              description: "second",
+              continue: id.slice(0, 4),
+              task: "again 2",
+            },
+          ]),
+        ]);
+      },
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  const res = results(parent.session).get("twice")!;
+  expect(res.isError).toBe(true);
+  expect(textOf(res)).toMatch(
+    /^subagent: nothing ran; fix these and call again:\n- task 2 \("second"\): continues the same subagent as task 1 \([0-9a-f]{8}\); one run per subagent at a time, so merge them into one task$/,
+  );
+  expect(seen.get("look")).toHaveLength(1);
 });

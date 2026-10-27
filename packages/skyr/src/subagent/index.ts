@@ -1,12 +1,13 @@
 /**
- * `subagent`: runs a task in a fresh session as a named agent from an agent file, or as an ad-hoc
- * one, and returns the agent's final answer, at once or later as a message. A child loads no
- * extensions, so it never gets this tool itself.
+ * `subagent`: runs each task of a call in a fresh session, as a named agent from an agent file or
+ * as an ad-hoc one, and returns the agents' final answers, at once or later as messages. A child
+ * loads no extensions, so it never gets this tool itself.
  */
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import {
   Box,
+  Container,
   Text,
   TruncatedText,
   truncateToWidth,
@@ -25,6 +26,7 @@ import {
   toolRow,
 } from "../tools/render.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
+import { addUsage } from "./child/protocol.js";
 import { resultText, startedText } from "./result.js";
 import { createRuns, MESSAGE_TYPE, Task } from "./runs.js";
 import {
@@ -34,7 +36,7 @@ import {
   type RunSnapshot,
   taskOf,
 } from "./store.js";
-import { laneLine, widgetLines } from "./view.js";
+import { laneLine, laneTree, widgetLines } from "./view.js";
 import { repoRoot } from "./worktree.js";
 
 const WIDGET_KEY = "skyr.subagents";
@@ -42,23 +44,29 @@ const TASK_SOURCE = "skyr/subagents";
 const MAX_WIDGET_LINES = 10;
 const PREVIEW_LINES = 12;
 
-const ABOUT =
-  "Run a task in a subagent: a fresh agent with its own context and tools that returns only its final answer. Use it for work that would fill your context, such as searching a codebase, reading many files or researching the web. The agent sees nothing of this conversation, so the task must stand alone: give paths, context and the answer you want back. Independent tasks go out as several subagent calls in one turn, and run in parallel.";
-const ADHOC =
-  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory tree: a second one for the same directory, or one above or below it, waits until the first ends, so issue writes that depend on each other in separate turns. A writer call with NO cwd runs in its own fresh git worktree cut from HEAD instead of queueing; its writes stay uncommitted, and the result states the worktree path, branch, and how to inspect and merge them. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it. With `continue: <id>` the call starts a new run on a finished subagent's saved session, reusing its tools, model and directory: give a fresh task only. Ids are the 8-char id shown with each subagent's answer and in a background start, and they are valid only while the current session lives. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
+const MAX_TASKS = 8;
 
-// `continue` stays after `background`, so the schema the model reads keeps its order.
-const { continue: continueOf, ...rest } = Task.properties;
-const Params = Type.Object({
-  ...rest,
-  background: Type.Optional(
-    Type.Boolean({
-      description:
-        "Return at once; the answer arrives later as a message, and Esc does not stop it. For work you do not need before your next step.",
+const ABOUT =
+  "Run tasks in subagents: fresh agents, each with its own context and tools, that return only their final answers. Use them for work that would fill your context, such as searching a codebase, reading many files or researching the web. A subagent sees nothing of this conversation, so each task must stand alone: give paths, context and the answer you want back. Put independent tasks in one call: they run in parallel, cannot see each other's answers, and the call returns when the last one ends unless it runs in the background. Each task is a full agent run with its own token cost, so split work only where the parts are truly independent; work that needs another task's answer goes in a later call.";
+const ADHOC =
+  "Without `agent` a task's subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. A task's `prompt`, `tools`, `model` and `cwd` override what its agent file or that default gives. A task whose tools include edit or write runs alone in its directory tree: another writer for the same directory, or one above or below it, waits until the first ends, even within one call. A writer task with NO cwd runs in its own fresh git worktree cut from HEAD instead of waiting; its writes stay uncommitted, and its answer states the worktree path, branch, and how to inspect and merge them. With `background: true` on the call, it returns at once and each task's answer arrives in a message when its task finishes; keep working meanwhile and never poll for them. A task with `continue: <id>` starts a new run on a finished subagent's saved session, reusing its tools, model and directory: give a fresh task only. Ids are the 8-char id shown with each task, and they are valid only while the current session lives. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
+
+const Params = Type.Object(
+  {
+    tasks: Type.Array(Task, {
+      minItems: 1,
+      maxItems: MAX_TASKS,
+      description: `One entry per subagent, 1 to ${MAX_TASKS}. They run in parallel and cannot see each other's answers; a foreground call's answers come back in this order.`,
     }),
-  ),
-  continue: continueOf,
-});
+    background: Type.Optional(
+      Type.Boolean({
+        description:
+          "For every task in this call: return at once; each answer arrives later in a message when its task finishes, and Esc does not stop them. For work you do not need before your next step.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 /** Sorted, so the description stays byte-identical and the prompt cache holds. */
 function describe(agents: Map<string, AgentDef>): string {
@@ -95,6 +103,25 @@ function lanesOf(details: unknown): RunSnapshot[] | undefined {
   return isRun(details) ? [details] : undefined;
 }
 
+/**
+ * The tasks a call's arguments name, for its row: the string fields of each, from a whole or a
+ * half-streamed `tasks` array, or from the one flat task a call made before `tasks` existed.
+ */
+function tasksOf(
+  args: unknown,
+): { agent?: string; description?: string; cwd?: string }[] {
+  if (typeof args !== "object" || args === null) return [];
+  const raw: unknown = "tasks" in args ? args.tasks : args;
+  const tasks: unknown[] = Array.isArray(raw) ? raw : [raw];
+  return tasks.flatMap((task) => {
+    if (typeof task !== "object" || task === null) return [];
+    const fields: Record<string, unknown> = { ...task };
+    const text = (key: string) =>
+      typeof fields[key] === "string" ? { [key]: fields[key] } : {};
+    return [{ ...text("agent"), ...text("description"), ...text("cwd") }];
+  });
+}
+
 export function registerSubagent(pi: ExtensionAPI): void {
   let loaded: Awaited<ReturnType<typeof loadAgents>> = {
     agents: new Map(),
@@ -127,47 +154,79 @@ export function registerSubagent(pi: ExtensionAPI): void {
     name: "subagent",
     label: "Subagent",
     description: ABOUT,
-    promptSnippet: "Delegate a self-contained task to a subagent",
+    promptSnippet:
+      "Delegate self-contained tasks to subagents, several in parallel in one call",
     parameters: Params,
     prepareLoadout: () => ({ descriptions: { subagent: description } }),
-    async execute(
-      _toolCallId,
-      { background, ...task },
-      signal,
-      _onUpdate,
-      ctx,
-    ) {
+    async execute(_toolCallId, { tasks, background }, signal, _onUpdate, ctx) {
       if (!background) {
-        const outcome = await runs.run(task, signal, ctx);
+        const outcomes = await runs.run(tasks, signal, ctx);
+        // Every task's spend, failed and stopped ones too, so the session counts all of it.
+        const usages = outcomes.flatMap(({ usage }) => usage ?? []);
         return {
-          content: [{ type: "text", text: resultText(outcome) }],
-          details: outcome.run,
-          usage: outcome.usage,
-          isError: outcome.run.error !== undefined,
+          content: [{ type: "text", text: resultText(outcomes) }],
+          details: outcomes.map(({ run }) => run),
+          usage: usages.length > 0 ? usages.reduce(addUsage) : undefined,
+          isError: outcomes.every(({ run }) => run.error !== undefined),
         };
       }
-      const started = runs.start(task, ctx);
+      const started = runs.start(tasks, ctx);
       return {
         content: [{ type: "text", text: startedText(started) }],
         details: started,
       };
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
+      const tasks = tasksOf(args);
+      const [only] = tasks;
+      if (tasks.length <= 1)
+        return toolRow(theme, [
+          ["toolTitle", "subagent", true],
+          ["accent", only?.agent ? ` ${only.agent}` : ""],
+          ["muted", only?.description ? ` "${only.description}"` : ""],
+          ["muted", only?.cwd ? ` in ${only.cwd}` : ""],
+        ]);
+      // While the call runs, its row is all there is to say what it started; once it ends, the
+      // result's lines name every task.
+      const named = context.isPartial
+        ? tasks.flatMap(({ agent, description }) =>
+            description === undefined ? [] : [labelOf({ agent, description })],
+          )
+        : [...new Set(tasks.flatMap(({ agent }) => agent ?? []))];
       return toolRow(theme, [
         ["toolTitle", "subagent", true],
-        ["accent", args.agent ? ` ${args.agent}` : ""],
-        ["muted", args.description ? ` "${args.description}"` : ""],
-        ["muted", args.cwd ? ` in ${args.cwd}` : ""],
+        ["muted", ` ${count(tasks.length, "task")}`],
+        [
+          context.isPartial ? "muted" : "accent",
+          named.length > 0 ? ` · ${named.join(", ")}` : "",
+        ],
       ]);
     },
     renderResult(result, _options, theme, context) {
       // Saved details only: Pi draws a running call from renderCall alone.
       const lanes = lanesOf(result.details);
-      const run = lanes?.length === 1 ? lanes[0] : undefined;
-      if (!run || context.isError)
+      if (lanes && lanes.length > 1) return rows(theme, laneTree(lanes));
+      const run = lanes?.[0];
+      if (!run) {
+        // Refused or thrown: Pi draws no content beside a renderer, so the row carries the cause
+        // and each problem line, but not the arguments Pi's validator echoes after them.
+        const [head = "", ...rest] = messageLines(result);
+        const end = rest.findIndex((line) =>
+          line.startsWith("Received arguments"),
+        );
+        const problems = rest
+          .slice(0, end < 0 ? undefined : end)
+          .filter((line) => line.trimStart().startsWith("- "));
+        return rows(theme, [
+          [["error", head]],
+          ...problems.map((line): Segment[] => [["muted", line.trimStart()]]),
+        ]);
+      }
+      if (context.isError)
         return toolRow(theme, [
-          ["error", run?.error ?? firstLine(result.content)],
-          ...(run ? [...summary(run), ...runTime(run)] : []),
+          ["error", run.error ?? firstLine(result.content)],
+          ...summary(run),
+          ...runTime(run),
         ]);
       if (run.background)
         return toolRow(theme, [
@@ -305,4 +364,11 @@ function summary(run: RunSnapshot): Segment[] {
 // From the snapshot, not the web rows' row-state clock: a resumed row has only its details.
 function runTime(run: RunSnapshot): Segment[] {
   return seconds((run.endedAt ?? Date.now()) - run.startedAt);
+}
+
+/** One tool row per line. */
+function rows(theme: Theme, lines: Segment[][]): Container {
+  const box = new Container();
+  for (const line of lines) box.addChild(toolRow(theme, line));
+  return box;
 }

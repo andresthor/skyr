@@ -1,7 +1,7 @@
 /**
- * The subagent runs of one registration: resolving a call, claiming what it holds, running the
- * child, and handing back or delivering its answer. `open` and `close` reset what belongs to one
- * session; the unit itself lives as long as the extension.
+ * The subagent runs of one registration: resolving a call's tasks, claiming what they hold,
+ * running each child, and handing back or delivering its answer. `open` and `close` reset what
+ * belongs to one session; the unit itself lives as long as the extension.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
@@ -37,49 +37,56 @@ import {
 export const MESSAGE_TYPE = "skyr.subagent";
 
 /** One subagent task; `index.ts` composes it into the tool's parameters. */
-export const Task = Type.Object({
-  agent: Type.Optional(
-    Type.String({
-      description:
-        "Name of one of the agents listed in this tool's description. Omit for a general-purpose subagent.",
+// Closed, as the call is: Pi's validator then names a misplaced or unknown key instead of
+// running without it.
+export const Task = Type.Object(
+  {
+    agent: Type.Optional(
+      Type.String({
+        description:
+          "Name of one of the agents listed in this tool's description. Omit for a general-purpose subagent.",
+      }),
+    ),
+    description: Type.String({
+      description: "3-5 words for the user, naming this task",
     }),
-  ),
-  description: Type.String({ description: "3-5 words for the user" }),
-  task: Type.String({
-    description:
-      "The whole task — the job for this one call, standalone. Role shaping goes in `prompt` (it is appended to the child's system prompt), never the job itself. The agent sees nothing of this conversation: give paths, context and the answer you want back.",
-  }),
-  prompt: Type.Optional(
-    Type.String({
+    task: Type.String({
       description:
-        "Added to the subagent's system prompt, after the agent's own when agent is given. Give it the role in a sentence, how to work, and the shape of the answer you want back.",
+        "The whole job for this subagent, standalone: paths, context and the answer you want back. Role shaping goes in `prompt`, never the job itself.",
     }),
-  ),
-  tools: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        "Tool names the subagent may use; replaces the agent's or the default set. Add edit or write only to change files: such a subagent runs alone in its directory tree.",
-    }),
-  ),
-  model: Type.Optional(
-    Type.String({
-      description:
-        "Model for the subagent, as `pi --model` takes it (provider/id or a pattern). Defaults to the agent's, else yours.",
-    }),
-  ),
-  cwd: Type.Optional(
-    Type.String({
-      description:
-        "Existing directory the subagent works in, absolute or relative to yours. Create it first if you need a fresh one.",
-    }),
-  ),
-  continue: Type.Optional(
-    Type.String({
-      description:
-        "ID (8 chars) of a finished subagent, from the `id` on its answer, whose saved session gets another run: same tools, model and directory; give a fresh task only. Omit agent, prompt, tools, model and cwd.",
-    }),
-  ),
-});
+    prompt: Type.Optional(
+      Type.String({
+        description:
+          "Added to the subagent's system prompt, after the agent's own when agent is given. Give it the role in a sentence, how to work, and the shape of the answer you want back.",
+      }),
+    ),
+    tools: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Tool names this subagent may use; replaces the agent's or the default set. Add edit or write only to change files: such a subagent runs alone in its directory tree.",
+      }),
+    ),
+    model: Type.Optional(
+      Type.String({
+        description:
+          "Model for this subagent, as `pi --model` takes it (provider/id or a pattern). Defaults to the agent's, else yours.",
+      }),
+    ),
+    cwd: Type.Optional(
+      Type.String({
+        description:
+          "Existing directory this subagent works in, absolute or relative to yours. Create it first if you need a fresh one.",
+      }),
+    ),
+    continue: Type.Optional(
+      Type.String({
+        description:
+          "ID (8 chars) of a finished subagent, from the `id` on its answer: its saved session gets another run with the same tools, model and directory. Give description and a fresh task only; omit agent, prompt, tools, model and cwd.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 type CallContext = Pick<
   ExtensionContext,
@@ -99,20 +106,22 @@ interface Runs {
   /** Running children, for the widget, ACP and `/subagents`; read-only. */
   readonly store: Pick<RunStore, "running" | "subscribe">;
   /**
-   * Foreground. Resolves the task, then claims it before the first await; a bad task throws one
-   * model-facing error, having claimed nothing. `signal` (Esc) stops the child. Settles once the
-   * child has, and never rejects after the claim: a stop or a failure is the outcome's `error`.
+   * Foreground. Resolves every task, then claims each in task order, before the first await; any
+   * bad task throws one model-facing error naming every bad task, having claimed nothing.
+   * `signal` (Esc) stops every child. Settles once every child has, in task order, and never
+   * rejects after the claim: a stop or a failure is that outcome's `error`.
    */
   run(
-    task: Static<typeof Task>,
+    tasks: readonly Static<typeof Task>[],
     signal: AbortSignal | undefined,
     ctx: CallContext,
-  ): Promise<LaneOutcome>;
+  ): Promise<LaneOutcome[]>;
   /**
-   * Background. Resolves and claims as `run` does, then returns the start snapshot. The child
-   * ignores Esc and queues its own delivery for the idle parent; nothing after the claim throws.
+   * Background. Resolves and claims as `run` does, then returns each task's start snapshot. The
+   * children ignore Esc, and each queues its own delivery for the idle parent; nothing after the
+   * claim throws.
    */
-  start(task: Static<typeof Task>, ctx: CallContext): RunSnapshot;
+  start(tasks: readonly Static<typeof Task>[], ctx: CallContext): RunSnapshot[];
   /** Sends every pending background answer as one message; `agent_settled`. */
   flush(): void;
   /** `/subagents stop <id|all>`: the notice. */
@@ -123,7 +132,7 @@ interface Runs {
   close(reason: string): void;
 }
 
-/** A call resolved against its agent file and the defaults; nothing has been spent yet. */
+/** One task resolved against its agent file and the defaults; nothing has been spent yet. */
 interface Call {
   agent?: string;
   label: string;
@@ -137,13 +146,15 @@ interface Call {
   parentKey: string;
   /** The description, sanitized and trimmed; the label's description half. */
   description: string;
+  /** The job the child is given, as the model wrote it. */
+  task: string;
   /** The child's id, minted at resolve time so a reserved worktree shares it. */
   id: string;
   /** Present: a worktree was reserved for a bare writer; the child runs inside it. */
   worktree?: WorktreePlan;
   /** Why a bare writer fell back to writing in-tree (non-repo, unborn HEAD, no git). */
   worktreeWhy?: string;
-  /** Present: this call continues a finished child; the record carries its calling facts. */
+  /** Present: this task continues a finished child; the record carries its calling facts. */
   continueOf?: ChildRecord;
 }
 
@@ -169,9 +180,8 @@ interface Slot {
   label: string;
 }
 
-/** Every error the model reads starts the same way and says what to try next. */
-const fail = (detail: string, cause?: unknown) =>
-  new Error(`subagent: ${detail}`, cause === undefined ? undefined : { cause });
+/** A task names an agent that is not loaded; the refusal then lists the agent files that failed. */
+class UnknownAgent extends Error {}
 
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -293,28 +303,65 @@ export function createRuns(
   let sessionAbort = new AbortController();
   let canSpawn = spawnCheck();
 
-  function unknownAgent(name: string): Error {
-    const { agents: defined, errors } = agents();
-    const names = [...defined.keys()].sort().join(", ") || "none";
-    const broken =
-      errors.length > 0
-        ? ` Agent files that failed to load: ${errors.join("; ")}`
-        : "";
-    return fail(`no agent "${clip(name)}"; available: ${names}.${broken}`);
+  /**
+   * Resolves every task of a call, then refuses the call if any is bad, with one error naming
+   * each problem. Synchronous, and claims nothing: a refusal leaves no trace.
+   */
+  function resolveAll(
+    tasks: readonly Static<typeof Task>[],
+    ctx: Pick<ExtensionContext, "cwd" | "model" | "sessionManager">,
+  ): Call[] {
+    const calls: Call[] = [];
+    const problems: string[] = [];
+    // A continued child's id, by the task that first continues it.
+    const continued = new Map<string, number>();
+    let agentMissing = false;
+    for (const [i, task] of tasks.entries()) {
+      // Clean where it enters: every label, title, error and answer built from it reads this one.
+      const description = sanitize(task.description).trim();
+      const which = `task ${i + 1}${description ? ` ("${clip(description)}")` : ""}`;
+      let call: Call;
+      try {
+        call = resolveCall(task, description, ctx);
+      } catch (error: unknown) {
+        if (error instanceof UnknownAgent) agentMissing = true;
+        problems.push(`- ${which}: ${errorText(error)}`);
+        continue;
+      }
+      const first = call.continueOf && continued.get(call.id);
+      if (first !== undefined) {
+        problems.push(
+          `- ${which}: continues the same subagent as task ${first} (${call.id.slice(0, 8)}); one run per subagent at a time, so merge them into one task`,
+        );
+        continue;
+      }
+      if (call.continueOf) continued.set(call.id, i + 1);
+      calls.push(call);
+    }
+    if (problems.length === 0) return calls;
+    const { errors } = agents();
+    throw new Error(
+      [
+        "subagent: nothing ran; fix these and call again:",
+        ...problems,
+        ...(agentMissing && errors.length > 0
+          ? [`Agent files that failed to load: ${errors.join("; ")}`]
+          : []),
+      ].join("\n"),
+    );
   }
 
   /**
-   * Resolves a call against its agent file and the defaults, throwing for anything the model
-   * must fix. Synchronous, and claims nothing: a throw leaves no trace.
+   * Resolves one task against its agent file and the defaults, throwing for anything the model
+   * must fix. Synchronous, and claims nothing.
    */
   function resolveCall(
     params: Static<typeof Task>,
+    description: string,
     ctx: Pick<ExtensionContext, "cwd" | "model" | "sessionManager">,
   ): Call {
-    // Clean where it enters: every label, title, error and answer built from it reads this one.
-    const description = sanitize(params.description).trim();
     if (description === "")
-      throw fail(
+      throw new Error(
         "give a short description: 3-5 words for the user, in description",
       );
     if (params.continue !== undefined)
@@ -323,7 +370,10 @@ export function createRuns(
       params.agent === undefined
         ? undefined
         : agents().agents.get(params.agent);
-    if (params.agent !== undefined && !agent) throw unknownAgent(params.agent);
+    if (params.agent !== undefined && !agent)
+      throw new UnknownAgent(
+        `no agent "${clip(params.agent)}"; available: ${[...agents().agents.keys()].sort().join(", ") || "none"}`,
+      );
     const childId = randomUUID();
     const label = labelOf({
       agent: agent?.name,
@@ -334,19 +384,19 @@ export function createRuns(
       agent?.model ??
       (ctx.model && `${ctx.model.provider}/${ctx.model.id}`);
     if (!model)
-      throw fail(`${label}: no model is selected; select one, or pass model`);
+      throw new Error("no model is selected; select one, or pass model");
     let tools: string[];
     try {
       tools = parseTools(params.tools) ?? agent?.tools ?? DEFAULT_TOOLS;
     } catch (error: unknown) {
-      throw fail(`tools: ${errorText(error)}`, error);
+      throw new Error(`tools: ${errorText(error)}`, { cause: error });
     }
     // Realpath, as Pi keys its file queue and trust store: two spellings of one dir share a slot.
     let parentKey: string;
     try {
       parentKey = realpathSync(ctx.cwd);
     } catch (error: unknown) {
-      throw fail(
+      throw new Error(
         `the working directory ${ctx.cwd} does not resolve (${errnoOf(error) ?? "fs error"}); tell the user to restart Pi in an existing directory`,
       );
     }
@@ -356,7 +406,7 @@ export function createRuns(
     try {
       key = realpathSync(cwd);
     } catch (error: unknown) {
-      throw fail(
+      throw new Error(
         `cwd ${quoted(params.cwd ?? ".", 120)} does not resolve (${errnoOf(error) ?? "fs error"}) (looked at ${clip(cwd)}); ${message}`,
       );
     }
@@ -364,11 +414,11 @@ export function createRuns(
     // disappeared while resolving: same diagnosis as a continue's record losing its cwd.
     const entry = statSync(key, { throwIfNoEntry: false });
     if (entry === undefined)
-      throw fail(
+      throw new Error(
         `cwd ${quoted(params.cwd ?? ".", 120)} no longer exists (looked at ${clip(key)}); ${message}`,
       );
     if (!entry.isDirectory())
-      throw fail(
+      throw new Error(
         `cwd ${quoted(params.cwd ?? ".", 120)} is not a directory (looked at ${clip(key)}); ${message}`,
       );
     const writer = tools.includes("edit") || tools.includes("write");
@@ -397,6 +447,7 @@ export function createRuns(
       writer,
       systemPrompt: [agent?.body, params.prompt].filter(Boolean).join("\n\n"),
       description,
+      task: params.task,
       cwd: worktree !== undefined ? worktree.path : cwd,
       key: worktree !== undefined ? worktree.path : key,
       parentKey,
@@ -420,45 +471,46 @@ export function createRuns(
       params.model !== undefined ||
       params.cwd !== undefined
     )
-      throw fail(
+      throw new Error(
         "continue reuses the subagent's tools, model and directory; omit agent, prompt, tools, model and cwd",
       );
     if (prefix === "")
-      throw fail(
+      throw new Error(
         "continue: pass the 8-char id of a finished subagent, from the `id` on its answer",
       );
     const matches = [...records.entries()].filter(([id]) =>
       id.startsWith(prefix),
     );
     if (matches.length === 0)
-      throw fail(
+      throw new Error(
         [...children.keys()].some((id) => id.startsWith(prefix))
           ? `subagent ...${clip(prefix)} is still running; wait for its answer or stop it`
           : `no subagent matches "${clip(prefix)}"; ids are the 8-char \`id\` on each subagent answer and are valid only in this session - start a fresh subagent instead`,
       );
     if (matches.length > 1)
-      throw fail(
+      throw new Error(
         `"${clip(prefix)}" matches more than one finished subagent (${matches.map(([, r]) => labelOf(r)).join(", ")}); give its whole 8-char id or start a fresh subagent`,
       );
     const [match] = matches;
-    if (!match) throw fail(`no subagent matches "${clip(prefix)}"`);
+    if (!match) throw new Error(`no subagent matches "${clip(prefix)}"`);
     const record = match[1];
     const entry = statSync(record.cwd, { throwIfNoEntry: false });
     if (entry === undefined)
-      throw fail(
+      throw new Error(
         `the subagent's working directory ${clip(record.cwd)} no longer exists; start a fresh subagent instead`,
       );
     if (!entry.isDirectory())
-      throw fail(
+      throw new Error(
         `the subagent's working directory ${clip(record.cwd)} is not a directory anymore; start a fresh subagent instead`,
       );
     if (runningContinues.has(record.id))
-      throw fail(
+      throw new Error(
         `subagent ${record.id.slice(0, 8)} already has a run in progress; wait for it to finish`,
       );
     return {
       agent: record.agent,
       description,
+      task: params.task,
       worktree: record.worktree,
       label: labelOf({ agent: record.agent, description }),
       model: record.model,
@@ -474,7 +526,7 @@ export function createRuns(
   }
 
   /**
-   * Claims a resolved call: the continue guard, the writer slot, the stop handle and the store
+   * Claims a resolved task: the continue guard, the writer slot, the stop handle and the store
    * entry. The caller releases each once the run ends.
    */
   function claim(call: Call, background: boolean) {
@@ -503,7 +555,7 @@ export function createRuns(
     const own = new AbortController();
     children.set(call.id, own);
     store.apply(call.id, { type: "start", snapshot });
-    return { slot, own, snapshot };
+    return { call, slot, own, snapshot };
   }
 
   /**
@@ -594,212 +646,220 @@ export function createRuns(
   }
 
   /**
-   * Resolves and claims a call, then starts its child. `settled` never rejects; `signal` is the
-   * call's Esc, which a background call does not pass.
+   * Resolves and claims every task of a call, then starts each child, in task order. Each
+   * `settled` never rejects; `signal` is the call's Esc, which a background call does not pass.
    */
   function launch(
-    task: Static<typeof Task>,
+    tasks: readonly Static<typeof Task>[],
     ctx: CallContext,
     background: boolean,
     signal?: AbortSignal,
-  ): { started: RunSnapshot; settled: Promise<LaneOutcome> } {
-    const call = resolveCall(task, ctx);
-    // Read before the claim: nothing that can throw sits between it and the release below.
+  ): { started: RunSnapshot; settled: Promise<LaneOutcome> }[] {
+    const calls = resolveAll(tasks, ctx);
+    // Read before the claims: nothing that can throw sits between them and the releases below.
     const parentFile = ctx.sessionManager.getSessionFile();
-    // Before the first await: Pi starts a batch's calls in order only up to that point.
-    const { slot, own, snapshot } = claim(call, background);
-    let started = snapshot;
-    const { label, key } = call;
-    // A continued run reuses the child's id (via the record the resolve read).
-    const resumed = call.continueOf;
-    const sessionSignal = sessionAbort.signal;
-    const childSignal = AbortSignal.any([
-      ...(signal ? [signal] : []),
-      sessionSignal,
-      own.signal,
-    ]);
-    // First cause; anything but the session is Esc, `/subagents stop`, or Pi aborting the turn
-    // before a session switch.
-    const stoppedBy = () =>
-      !childSignal.aborted
-        ? ""
-        : childSignal.reason !== sessionSignal.reason
-          ? " by the user"
-          : sessionSignal.reason === "reload"
-            ? " because Pi reloaded"
-            : " because the session ended";
-    const id = call.id;
+    // Every claim before the first await: Pi starts a batch's calls in order only up to that
+    // point, so writers queue in call order, then task order.
+    const claimed = calls.map((call) => claim(call, background));
+    return claimed.map(({ call, slot, own, snapshot }, i) => {
+      const lane = { n: i + 1, of: claimed.length };
+      let started = snapshot;
+      const { label, key } = call;
+      // A continued run reuses the child's id (via the record the resolve read).
+      const resumed = call.continueOf;
+      const sessionSignal = sessionAbort.signal;
+      const childSignal = AbortSignal.any([
+        ...(signal ? [signal] : []),
+        sessionSignal,
+        own.signal,
+      ]);
+      // First cause; anything but the session is Esc, `/subagents stop`, or Pi aborting the turn
+      // before a session switch.
+      const stoppedBy = () =>
+        !childSignal.aborted
+          ? ""
+          : childSignal.reason !== sessionSignal.reason
+            ? " by the user"
+            : sessionSignal.reason === "reload"
+              ? " because Pi reloaded"
+              : " because the session ended";
+      const id = call.id;
 
-    // A continue's worktree may hold its earlier run's writes; only a fresh one is known empty.
-    const fresh = resumed === undefined ? call.worktree : undefined;
-    // The store's snapshot while the child is live, else the one this call last started it with
-    // (the store is empty once the child has ended, or when a reload cleared it mid-run);
-    // either way without the live-only `activity`.
-    const ended = (
-      status: RunStatus,
-      body: string,
-      extra: Partial<RunSnapshot> = {},
-    ): LaneOutcome => {
-      const { activity: _, ...last } = store.get(id) ?? started;
-      return {
-        body,
-        notes: [],
-        run: { ...last, status, endedAt: Date.now(), ...extra },
-      };
-    };
-    const stoppedBeforeStart = (): LaneOutcome => {
-      const why = noAnswer(label, {
-        stoppedBy: stoppedBy(),
-        before: "started",
-      });
-      return {
-        ...ended("aborted", why.body, { error: why.error }),
-        // A stop can land once the fresh worktree exists, and nothing deletes it.
-        notes:
-          fresh !== undefined && existsSync(fresh.path)
-            ? [{ kind: "line", text: worktreeNote(fresh, false) }]
-            : [],
-      };
-    };
-
-    const finish = async (): Promise<LaneOutcome> => {
-      try {
-        if (slot?.behind) {
-          await slot.wait(childSignal);
-          if (childSignal.aborted) return stoppedBeforeStart();
-          const { behind: _, ...rest } = started;
-          started = { ...rest, status: "running" };
-          store.apply(id, { type: "start", snapshot: started });
-        }
-        if (call.worktree !== undefined && resumed === undefined)
-          // A fresh bare writer creates its reserved worktree; a continue of an older
-          // worktree child reuses the existing one (re-adding would fail the identity).
-          await addWorktree(call.parentKey, call.worktree, childSignal);
-        const trusted =
-          resumed !== undefined
-            ? resumed.trusted
-            : await trustFor(key, call.parentKey, ctx.isProjectTrusted());
-        const result = await runnerFor(
-          ctx.modelRegistry,
-          registerChildTools,
-          canSpawn,
-        ).run(
-          {
-            id,
-            cwd: call.cwd,
-            model: call.model,
-            thinkingLevel: ctx.thinkingLevel,
-            tools: call.tools,
-            systemPrompt: call.systemPrompt,
-            task: task.task,
-            trusted,
-            description: call.description,
-            agent: call.agent,
-            session: resumed
-              ? { resume: resumed.sessionFile }
-              : parentFile
-                ? {
-                    dir: childSessionDir(parentFile) ?? "",
-                    parent: parentFile,
-                  }
-                : undefined,
-          },
-          childSignal,
-          (event) => store.apply(id, event),
-        );
-        const { body, spill, error } = await answer(label, id, result, {
-          stoppedBy: stoppedBy(),
-        });
-        if (result.sessionFile !== undefined && result.sessionFile !== "")
-          records.set(id, {
-            id,
-            agent: call.agent,
-            description: call.description,
-            model: call.model,
-            tools: call.tools,
-            cwd: call.cwd,
-            key,
-            trusted,
-            systemPrompt: call.systemPrompt,
-            sessionFile: result.sessionFile,
-            worktree: call.worktree,
-          });
+      // A continue's worktree may hold its earlier run's writes; only a fresh one is known empty.
+      const fresh = resumed === undefined ? call.worktree : undefined;
+      // The store's snapshot while the child is live, else the one this call last started it with
+      // (the store is empty once the child has ended, or when a reload cleared it mid-run);
+      // either way without the live-only `activity`.
+      const ended = (
+        status: RunStatus,
+        body: string,
+        extra: Partial<RunSnapshot> = {},
+      ): LaneOutcome => {
+        const { activity: _, ...last } = store.get(id) ?? started;
         return {
-          ...ended(result.status, body, {
-            sessionFile: result.sessionFile,
-            spillFile: spill?.path,
-            ...(error !== undefined ? { error } : {}),
-          }),
-          notes: [
-            ...(spill ? [spill] : []),
-            ...(call.worktree
-              ? [
-                  {
-                    kind: "line" as const,
-                    text: worktreeNote(
-                      call.worktree,
-                      result.status === "done" || resumed !== undefined,
-                    ),
-                  },
-                ]
-              : call.worktreeWhy !== undefined
+          lane,
+          body,
+          notes: [],
+          run: { ...last, status, endedAt: Date.now(), ...extra },
+        };
+      };
+      const stoppedBeforeStart = (): LaneOutcome => {
+        const why = noAnswer(label, {
+          stoppedBy: stoppedBy(),
+          before: "started",
+        });
+        return {
+          ...ended("aborted", why.body, { error: why.error }),
+          // A stop can land once the fresh worktree exists, and nothing deletes it.
+          notes:
+            fresh !== undefined && existsSync(fresh.path)
+              ? [{ kind: "line", text: worktreeNote(fresh, false) }]
+              : [],
+        };
+      };
+
+      const finish = async (): Promise<LaneOutcome> => {
+        try {
+          if (slot?.behind) {
+            await slot.wait(childSignal);
+            if (childSignal.aborted) return stoppedBeforeStart();
+            const { behind: _, ...rest } = started;
+            started = { ...rest, status: "running" };
+            store.apply(id, { type: "start", snapshot: started });
+          }
+          if (call.worktree !== undefined && resumed === undefined)
+            // A fresh bare writer creates its reserved worktree; a continue of an older
+            // worktree child reuses the existing one (re-adding would fail the identity).
+            await addWorktree(call.parentKey, call.worktree, childSignal);
+          const trusted =
+            resumed !== undefined
+              ? resumed.trusted
+              : await trustFor(key, call.parentKey, ctx.isProjectTrusted());
+          const result = await runnerFor(
+            ctx.modelRegistry,
+            registerChildTools,
+            canSpawn,
+          ).run(
+            {
+              id,
+              cwd: call.cwd,
+              model: call.model,
+              thinkingLevel: ctx.thinkingLevel,
+              tools: call.tools,
+              systemPrompt: call.systemPrompt,
+              task: call.task,
+              trusted,
+              description: call.description,
+              agent: call.agent,
+              session: resumed
+                ? { resume: resumed.sessionFile }
+                : parentFile
+                  ? {
+                      dir: childSessionDir(parentFile) ?? "",
+                      parent: parentFile,
+                    }
+                  : undefined,
+            },
+            childSignal,
+            (event) => store.apply(id, event),
+          );
+          const { body, spill, error } = await answer(label, id, result, {
+            stoppedBy: stoppedBy(),
+          });
+          if (result.sessionFile !== undefined && result.sessionFile !== "")
+            records.set(id, {
+              id,
+              agent: call.agent,
+              description: call.description,
+              model: call.model,
+              tools: call.tools,
+              cwd: call.cwd,
+              key,
+              trusted,
+              systemPrompt: call.systemPrompt,
+              sessionFile: result.sessionFile,
+              worktree: call.worktree,
+            });
+          return {
+            ...ended(result.status, body, {
+              sessionFile: result.sessionFile,
+              spillFile: spill?.path,
+              ...(error !== undefined ? { error } : {}),
+            }),
+            notes: [
+              ...(spill ? [spill] : []),
+              ...(call.worktree
                 ? [
                     {
                       kind: "line" as const,
-                      text: `${call.worktreeWhy}; writing in-tree: NOT isolated from your uncommitted files.`,
+                      text: worktreeNote(
+                        call.worktree,
+                        result.status === "done" || resumed !== undefined,
+                      ),
                     },
                   ]
-                : []),
-          ],
-          usage: result.usage,
-        };
-      } finally {
-        slot?.release();
-        children.delete(id);
-        runningContinues.delete(id);
-        store.apply(id, { type: "end" });
-      }
-    };
+                : call.worktreeWhy !== undefined
+                  ? [
+                      {
+                        kind: "line" as const,
+                        text: `${call.worktreeWhy}; writing in-tree: NOT isolated from your uncommitted files.`,
+                      },
+                    ]
+                  : []),
+            ],
+            usage: result.usage,
+          };
+        } finally {
+          slot?.release();
+          children.delete(id);
+          runningContinues.delete(id);
+          store.apply(id, { type: "end" });
+        }
+      };
 
-    return {
-      started: snapshot,
-      // A throw after the claim is this run's failure, not the call's: Pi keeps a tool's own
-      // result after Esc, so a stopped run still hands back its details.
-      settled: finish().catch((error: unknown) => {
-        if (childSignal.aborted) return stoppedBeforeStart();
-        const why = noAnswer(label, {
-          cause: errorText(error),
-          context: fresh
-            ? `created worktree ${fresh.path} on branch ${fresh.branch}; it is empty — `
-            : undefined,
-        });
-        return ended("failed", why.body, { error: why.error });
-      }),
-    };
+      return {
+        started: snapshot,
+        // A throw after the claim is this run's failure, not the call's: Pi keeps a tool's own
+        // result after Esc, so a stopped run still hands back its details.
+        settled: finish().catch((error: unknown) => {
+          if (childSignal.aborted) return stoppedBeforeStart();
+          const why = noAnswer(label, {
+            cause: errorText(error),
+            context: fresh
+              ? `created worktree ${fresh.path} on branch ${fresh.branch}; it is empty — `
+              : undefined,
+          });
+          return ended("failed", why.body, { error: why.error });
+        }),
+      };
+    });
   }
 
   return {
     store,
-    async run(task, signal, ctx) {
-      return launch(task, ctx, false, signal).settled;
+    async run(tasks, signal, ctx) {
+      return Promise.all(
+        launch(tasks, ctx, false, signal).map(({ settled }) => settled),
+      );
     },
-    start(task, ctx) {
+    start(tasks, ctx) {
       const born = generation;
-      const { started, settled } = launch(task, ctx, true);
-      void settled.then((outcome) => {
-        if (born !== generation) return;
-        pending.push(outcome);
-        let idle: boolean;
-        try {
-          idle = ctx.isIdle();
-        } catch {
-          // The runner is stale because the host disposed or reloaded the session without
-          // events; the instance is gone, so there is nothing to deliver to.
-          return;
-        }
-        if (idle) flush();
+      return launch(tasks, ctx, true).map(({ started, settled }) => {
+        void settled.then((outcome) => {
+          if (born !== generation) return;
+          pending.push(outcome);
+          let idle: boolean;
+          try {
+            idle = ctx.isIdle();
+          } catch {
+            // The runner is stale because the host disposed or reloaded the session without
+            // events; the instance is gone, so there is nothing to deliver to.
+            return;
+          }
+          if (idle) flush();
+        });
+        return started;
       });
-      return started;
     },
     flush,
     stop(target) {

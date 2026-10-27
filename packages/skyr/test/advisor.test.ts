@@ -232,7 +232,7 @@ describe("activation and config", () => {
 
   test("a subagent child is never offered advisor, even while the parent has it", async () => {
     const { respond } = advisorRouter(
-      router([call({ task: "look" })], () => fauxAssistantMessage("found")),
+      router([call({ prompt: "look" })], () => fauxAssistantMessage("found")),
       advise(),
     );
     const parent = await parentSession({ respond, skyr: ADVISOR_ON });

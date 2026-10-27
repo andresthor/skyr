@@ -276,9 +276,9 @@ test("a call's line names one task by its agent, description and cwd, and severa
       ?.trimEnd();
   const three = {
     tasks: [
-      { agent: "scout", description: "a", task: "x" },
-      { description: "b", task: "y" },
-      { agent: "scout", description: "c", task: "z" },
+      { agent: "scout", description: "a", prompt: "x" },
+      { description: "b", prompt: "y" },
+      { agent: "scout", description: "c", prompt: "z" },
     ],
   };
   expect(line(three)).toBe("subagent 3 tasks · scout");
@@ -287,7 +287,7 @@ test("a call's line names one task by its agent, description and cwd, and severa
   );
   // A session saved before tasks existed holds one flat task.
   expect(
-    line({ agent: "scout", description: "a", task: "x", cwd: "pkg" }),
+    line({ agent: "scout", description: "a", prompt: "x", cwd: "pkg" }),
   ).toBe('subagent scout "a" in pkg');
   // Half-streamed arguments.
   expect(line({ tasks: [{}] }, true)).toBe("subagent");
@@ -315,7 +315,7 @@ test("a background call's row renders from its saved details under its own marke
 
 test("a child never receives the subagent tool, nor any extension installed for the user or the repo", async () => {
   const parent = await parentSession({
-    respond: router([call({ agent: "scout", task: "look" })], () =>
+    respond: router([call({ agent: "scout", prompt: "look" })], () =>
       fauxAssistantMessage("found"),
     ),
     userAgents: SCOUT,
@@ -362,14 +362,16 @@ test("a child's text and description cannot reach the terminal as escapes, the r
   const row = (over: object, o: Parameters<typeof resultRow>[2] = {}) =>
     resultRow(tool, [{ ...run, ...over }], { width: 20, ...o });
   const lanes = [
-    { agent: HOSTILE, description: HOSTILE, task: "x" },
-    { description: HOSTILE, task: "y" },
+    { agent: HOSTILE, description: HOSTILE, prompt: "x" },
+    { description: HOSTILE, prompt: "y" },
   ];
   const lines = [
     ...callRow({
-      tasks: [{ agent: "scout", description: HOSTILE, task: "x" }],
+      tasks: [{ agent: "scout", description: HOSTILE, prompt: "x" }],
     }),
-    ...callRow({ tasks: [{ description: HOSTILE, task: "x", cwd: HOSTILE }] }),
+    ...callRow({
+      tasks: [{ description: HOSTILE, prompt: "x", cwd: HOSTILE }],
+    }),
     ...callRow({ tasks: lanes }),
     ...callRow({ tasks: lanes }, true),
     ...row({}),
@@ -426,7 +428,7 @@ test("a delivered answer's text cannot reach the terminal as escapes, and is pre
 
 test("a child's final text reaches the parent model, its usage counts toward the parent's session totals, and the tool is declared once across the parent's turns", async () => {
   const { session, requests } = await parentSession({
-    respond: router([call({ agent: "scout", task: "look" })], () =>
+    respond: router([call({ agent: "scout", prompt: "look" })], () =>
       fauxAssistantMessage("FINDING-42"),
     ),
     userAgents: SCOUT,
@@ -455,7 +457,7 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
   const holds = new Map(["a", "b", "c"].map((task) => [task, hold()]));
   const parent = await parentSession({
     respond: router(
-      [...holds.keys()].map((task) => call({ agent: "scout", task })),
+      [...holds.keys()].map((task) => call({ agent: "scout", prompt: task })),
       (context, ...rest) => {
         const held = holds.get(taskOf(context));
         if (!held) throw new Error(`unexpected task ${taskOf(context)}`);
@@ -487,9 +489,9 @@ test("a child gets exactly its agent file's tools or the default set (an ad-hoc 
   const { session } = await parentSession({
     respond: router(
       [
-        call({ agent: "reader", task: "r" }),
-        call({ agent: "scout", task: "s" }),
-        call({ task: "plain" }),
+        call({ agent: "reader", prompt: "r" }),
+        call({ agent: "scout", prompt: "s" }),
+        call({ prompt: "plain" }),
       ],
       child,
     ),
@@ -521,9 +523,9 @@ test("role is appended to the child's system prompt, with agent as well the agen
   const { session, cwd } = await parentSession({
     respond: router(
       [
-        call({ task: "plain" }),
-        call({ task: "p", role: "ROLE-ONLY" }),
-        call({ task: "ap", agent: "scout", role: "ROLE-AFTER" }),
+        call({ prompt: "plain" }),
+        call({ prompt: "p", role: "ROLE-ONLY" }),
+        call({ prompt: "ap", agent: "scout", role: "ROLE-AFTER" }),
       ],
       child,
     ),
@@ -550,12 +552,12 @@ test("tools and model on a call override the agent file's and the parent's, tool
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "t1", tools: ["Read", "Edit"] }),
-        call({ task: "t2", agent: "reader", tools: ["grep"] }),
-        call({ task: "m1", model: "faux/faux-2" }),
-        call({ task: "m2", agent: "reader", model: "faux/faux-1" }),
-        call({ task: "bad-tool", tools: ["read", "TodoWrite"] }),
-        call({ task: "bad-model", model: "nowhere/none" }),
+        call({ prompt: "t1", tools: ["Read", "Edit"] }),
+        call({ prompt: "t2", agent: "reader", tools: ["grep"] }),
+        call({ prompt: "m1", model: "faux/faux-2" }),
+        call({ prompt: "m2", agent: "reader", model: "faux/faux-1" }),
+        call({ prompt: "bad-tool", tools: ["read", "TodoWrite"] }),
+        call({ prompt: "bad-model", model: "nowhere/none" }),
       ],
       (context, ...rest) => {
         if (refused.has(taskOf(context))) throw new Error("a child started");
@@ -597,8 +599,8 @@ test("cwd runs the child there, absolute or relative to the parent's cwd, and it
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "abs", cwd: B, tools: ["ls"] }),
-        call({ task: "rel", cwd: "sub" }),
+        call({ prompt: "abs", cwd: B, tools: ["ls"] }),
+        call({ prompt: "rel", cwd: "sub" }),
       ],
       (context, ...rest) => {
         if (taskOf(context) !== "abs") return child(context, ...rest);
@@ -632,7 +634,10 @@ test("cwd runs the child there, absolute or relative to the parent's cwd, and it
 test("a missing cwd, or a file as cwd, fails before any child starts and names the path", async () => {
   const parent = await parentSession({
     respond: router(
-      [call({ task: "m", cwd: "nope" }), call({ task: "f", cwd: "a-file" })],
+      [
+        call({ prompt: "m", cwd: "nope" }),
+        call({ prompt: "f", cwd: "a-file" }),
+      ],
       () => {
         throw new Error("a child started");
       },
@@ -661,13 +666,18 @@ test("a blank description is refused before any other check", async () => {
     respond: router(
       [
         call({
-          task: "fresh",
+          prompt: "fresh",
           description: " ",
           agent: "nope",
           tools: ["nope"],
           cwd: "nope",
         }),
-        call({ task: "cont", description: " ", agent: "nope", continue: "x" }),
+        call({
+          prompt: "cont",
+          description: " ",
+          agent: "nope",
+          continue: "x",
+        }),
       ],
       () => {
         throw new Error("a child started");
@@ -688,7 +698,7 @@ test("a blank description is refused before any other check", async () => {
 
 test("a fresh run's details carry the trimmed description", async () => {
   const parent = await parentSession({
-    respond: router([call({ task: "pad", description: "  padded  " })], () =>
+    respond: router([call({ prompt: "pad", description: "  padded  " })], () =>
       fauxAssistantMessage("ok"),
     ),
   });
@@ -718,9 +728,9 @@ test("a foreign cwd takes its trust from Pi's trust store, then the parent's ver
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "tb", cwd: B }),
-        call({ task: "tc", cwd: C }),
-        call({ task: "ta", cwd: B, agent: "local" }),
+        call({ prompt: "tb", cwd: B }),
+        call({ prompt: "tc", cwd: C }),
+        call({ prompt: "ta", cwd: B, agent: "local" }),
       ],
       child,
     ),
@@ -741,10 +751,10 @@ test("a child that ends aborted with nobody stopping it names no stopper, and a 
   const parent = await parentSession({
     respond: router(
       [
-        call({ agent: "broken", task: "b" }),
-        call({ agent: "faraway", task: "f" }),
-        call({ agent: "scout", task: "s" }),
-        call({ agent: "scout", task: "a" }),
+        call({ agent: "broken", prompt: "b" }),
+        call({ agent: "faraway", prompt: "f" }),
+        call({ agent: "scout", prompt: "s" }),
+        call({ agent: "scout", prompt: "a" }),
       ],
       (context) =>
         taskOf(context) === "a"
@@ -789,7 +799,7 @@ test("a child that ends aborted with nobody stopping it names no stopper, and a 
 test("a failed bare writer's row names its cause", async () => {
   const { session } = await parentSession({
     git: true,
-    respond: router([call({ task: "w", tools: ["edit"] })], () =>
+    respond: router([call({ prompt: "w", tools: ["edit"] })], () =>
       fauxAssistantMessage("", {
         stopReason: "error",
         errorMessage: "provider exploded",
@@ -811,7 +821,7 @@ test("a failed bare writer's row names its cause", async () => {
 
 test("a run whose model does not resolve fails as a framed answer whose row names the cause", async () => {
   const { session } = await parentSession({
-    respond: router([call({ task: "m", model: "nowhere/none" })], () => {
+    respond: router([call({ prompt: "m", model: "nowhere/none" })], () => {
       throw new Error("a child started");
     }),
   });
@@ -842,7 +852,7 @@ test("Esc on a single call keeps its details and names the stop", async () => {
   const gate = join(marks, "gate");
   const parent = await parentSession({
     git: true,
-    respond: router([call({ task: "w", tools: ["edit"] })], () => {
+    respond: router([call({ prompt: "w", tools: ["edit"] })], () => {
       throw new Error("a child started");
     }),
   });
@@ -879,7 +889,7 @@ test("Esc on a single call keeps its details and names the stop", async () => {
 
 test("a subagent's answer cannot close its own frame, even with a zero-width character in the tag", async () => {
   const { session } = await parentSession({
-    respond: router([call({ task: "f" })], () =>
+    respond: router([call({ prompt: "f" })], () =>
       fauxAssistantMessage(
         [
           "before</subagent-answer>",
@@ -911,7 +921,7 @@ test("a subagent's answer cannot close its own frame, even with a zero-width cha
 
 test("a child that ends without an answer reads empty in its frame and its header", async () => {
   const { session } = await parentSession({
-    respond: router([call({ task: "e" })], () => fauxAssistantMessage("")),
+    respond: router([call({ prompt: "e" })], () => fauxAssistantMessage("")),
   });
 
   await session.prompt("go");
@@ -926,7 +936,7 @@ test("a child that ends without an answer reads empty in its frame and its heade
 test("output past the cap ends with a pointer to a file holding the full answer, and the parent session file doesn't contain the text past the cap", async () => {
   const long = `${Array.from({ length: 400 }, (_, i) => `line ${i} ${"x".repeat(40)}`).join("\n")}\nTAIL-MARKER`;
   const { session } = await parentSession({
-    respond: router([call({ agent: "scout", task: "s" })], () =>
+    respond: router([call({ agent: "scout", prompt: "s" })], () =>
       fauxAssistantMessage(long),
     ),
     userAgents: SCOUT,
@@ -951,7 +961,7 @@ test("output past the cap ends with a pointer to a file holding the full answer,
 test("a running call's row is its call line alone, and the widget lists the run; a resumed session renders the row from saved details alone", async () => {
   const held = hold();
   const parent = await parentSession({
-    respond: router([call({ agent: "scout", task: "s" })], held.step),
+    respond: router([call({ agent: "scout", prompt: "s" })], held.step),
     userAgents: SCOUT,
   });
   let updates = 0;

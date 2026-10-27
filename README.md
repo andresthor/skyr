@@ -133,13 +133,13 @@ Edits apply after `/reload`. An agent with a field skyr does not act on, such as
 `tools`, an agent gets `read`, `grep`, `find`, `ls`, `bash`, `web_search` and `web_fetch`. Pi
 lists the agents to the model.
 
-A call runs one to eight tasks, each in its own subagent: they run in parallel and can't see each
-other's answers, and a foreground call returns once the last of them ends, with every answer in
-task order. A call with a bad task runs none of them, and its error names every bad task. A task
-needs no agent file: without `agent` it gets a general-purpose subagent with Pi's own prompt, the
-default tools, the parent's model and working directory. On any task, `role` (added to the
-system prompt), `tools`, `model` and `cwd` (an existing directory) override what the agent file or
-the default gives. A call fails only when no task gave an answer.
+A call runs one to eight tasks, each in its own subagent and each with its job in `prompt`: they run
+in parallel and can't see each other's answers, and a foreground call returns once the last of them
+ends, with every answer in task order. A call with a bad task runs none of them, and its error names
+every bad task. A task needs no agent file: without `agent` it gets a general-purpose subagent with
+Pi's own prompt, the default tools, the parent's model and working directory. On any task, `role`
+(added to the system prompt), `tools`, `model` and `cwd` (an existing directory) override what the
+agent file or the default gives. A call fails only when no task gave an answer.
 
 A subagent whose tools include `edit` or `write` is a writer, and one writer runs per directory at
 a time: a second one for the same directory, from the same call or another, waits until the first
@@ -165,7 +165,7 @@ The model reads each answer inside a `<subagent-answer>` block, foreground or de
 attributes carry the run's status, tokens and 8-char `id`; the subagent's own text can't open or
 close a block, and harness notes (a spill file, a worktree) follow it. A background start names
 the same id. A task with `continue: <id>` starts a second run on a finished subagent's
-saved session — same agent, tools, model and directory, a fresh task. The ids are valid in the
+saved session — same agent, tools, model and directory, a fresh prompt. The ids are valid in the
 current session only; ongoing and other sessions can't continue from them.
 
 A subagent runs in-process by default, but runs as its own process when (a) the child entry can

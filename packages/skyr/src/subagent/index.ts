@@ -43,7 +43,7 @@ const MAX_TASKS = 8;
 const ABOUT =
   "Run tasks in subagents: fresh agents, each with its own context and tools, that return only their final answers. Use them for work that would fill your context, such as searching a codebase, reading many files or researching the web. A subagent sees nothing of this conversation, so each task must stand alone: give paths, context and the answer you want back. Put independent tasks in one call: they run in parallel, cannot see each other's answers, and the call returns when the last one ends unless it runs in the background. Each task is a full agent run with its own token cost, so split work only where the parts are truly independent; work that needs another task's answer goes in a later call.";
 const ADHOC =
-  "Without `agent` a task's subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. A task's `role`, `tools`, `model` and `cwd` override what its agent file or that default gives. A task whose tools include edit or write runs alone in its directory tree: another writer for the same directory, or one above or below it, waits until the first ends, even within one call. A writer task with NO cwd runs in its own fresh git worktree cut from HEAD instead of waiting; its writes stay uncommitted, and its answer states the worktree path, branch, and how to inspect and merge them. With `background: true` on the call, it returns at once and each task's answer arrives in a message when its task finishes; keep working meanwhile and never poll for them. A task with `continue: <id>` starts a new run on a finished subagent's saved session, reusing its tools, model and directory: give a fresh task only. Ids are the 8-char id shown with each task, and they are valid only while the current session lives. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
+  "Without `agent` a task's subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. A task's `role`, `tools`, `model` and `cwd` override what its agent file or that default gives. A task whose tools include edit or write runs alone in its directory tree: another writer for the same directory, or one above or below it, waits until the first ends, even within one call. A writer task with NO cwd runs in its own fresh git worktree cut from HEAD instead of waiting; its writes stay uncommitted, and its answer states the worktree path, branch, and how to inspect and merge them. With `background: true` on the call, it returns at once and each task's answer arrives in a message when its task finishes; keep working meanwhile and never poll for them. A task with `continue: <id>` starts a new run on a finished subagent's saved session, reusing its tools, model and directory: give a fresh prompt only. Ids are the 8-char id shown with each task, and they are valid only while the current session lives. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
 
 const Params = Type.Object(
   {
@@ -153,11 +153,23 @@ export function registerSubagent(pi: ExtensionAPI): void {
       "Delegate self-contained tasks to subagents, several in parallel in one call",
     parameters: Params,
     // A new object: Pi passes the call's own arguments, which the session saves as they came.
-    prepareArguments: (args) =>
-      // Anything still off the schema goes back for Pi's validator to report.
-      (isRecord(args) && "tasks" in args
-        ? { ...args, tasks: parseTasks(args.tasks) }
-        : args) as Static<typeof Params>,
+    prepareArguments: (args) => {
+      if (!isRecord(args) || !("tasks" in args))
+        return args as Static<typeof Params>;
+      const tasks = parseTasks(args.tasks);
+      // Pi returns a throw here as the call's result; its own refusal echoes every argument and,
+      // beside a role-shaped prompt, never says where the job goes.
+      if (
+        (Array.isArray(tasks) ? tasks : [tasks]).some(
+          (lane) => isRecord(lane) && "task" in lane,
+        )
+      )
+        throw new Error(
+          "subagent: nothing ran; `task` is not a field: put each task's job in `prompt` and any role in `role`, then call again",
+        );
+      // Anything else off the schema goes back for Pi's validator to report.
+      return { ...args, tasks } as Static<typeof Params>;
+    },
     prepareLoadout: () => ({ descriptions: { subagent: description } }),
     async execute(_toolCallId, { tasks, background }, signal, _onUpdate, ctx) {
       if (!background) {

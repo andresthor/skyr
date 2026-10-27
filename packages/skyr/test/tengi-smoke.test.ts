@@ -57,7 +57,7 @@ describe.skipIf(TENGI_DIR === undefined)("inside tengi", () => {
           tasks: [
             {
               description: "hold for the test",
-              task: tool("bash", { command: gate.command }),
+              prompt: tool("bash", { command: gate.command }),
             },
           ],
         }),
@@ -87,7 +87,7 @@ describe.skipIf(TENGI_DIR === undefined)("inside tengi", () => {
           tasks: [
             {
               description: "hold for the test",
-              task: tool("bash", { command: gate.command }),
+              prompt: tool("bash", { command: gate.command }),
             },
           ],
           background: true,

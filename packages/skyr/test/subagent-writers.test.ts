@@ -41,9 +41,9 @@ test("writers in one cwd run one at a time in call order, from an agent file's t
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "w1", agent: "editor" }),
-        call({ task: "w2", tools: ["read", "edit"] }),
-        call({ task: "w3", tools: ["write"] }),
+        call({ prompt: "w1", agent: "editor" }),
+        call({ prompt: "w2", tools: ["read", "edit"] }),
+        call({ prompt: "w3", tools: ["write"] }),
       ],
       (context, ...rest) => {
         const task = taskOf(context);
@@ -88,9 +88,9 @@ test("a writer and a reader in the same cwd run concurrently, and bash does not 
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "w", tools: ["edit"] }),
-        call({ task: "r" }),
-        call({ task: "b", tools: ["read", "bash"] }),
+        call({ prompt: "w", tools: ["edit"] }),
+        call({ prompt: "r" }),
+        call({ prompt: "b", tools: ["read", "bash"] }),
       ],
       (context, ...rest) => holds.get(taskOf(context))!.step(context, ...rest),
     ),
@@ -116,9 +116,9 @@ test("writers in different cwds run concurrently, and a second spelling of the s
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "wa", tools: ["edit"] }),
-        call({ task: "wb", tools: ["edit"], cwd: B }),
-        call({ task: "wb2", tools: ["edit"], cwd: link }),
+        call({ prompt: "wa", tools: ["edit"] }),
+        call({ prompt: "wb", tools: ["edit"], cwd: B }),
+        call({ prompt: "wb2", tools: ["edit"], cwd: link }),
       ],
       (context: TranscriptContext, ...rest) => {
         const task = taskOf(context);
@@ -152,8 +152,8 @@ test("a writer in a subdirectory queues behind a writer in the directory above i
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "root", tools: ["edit"] }),
-        call({ task: "sub", tools: ["edit"], cwd: "sub" }),
+        call({ prompt: "root", tools: ["edit"] }),
+        call({ prompt: "sub", tools: ["edit"], cwd: "sub" }),
       ],
       (context, ...rest) => {
         if (taskOf(context) === "sub" && !releasedRoot)
@@ -186,8 +186,8 @@ test("a failed first writer still lets the second start", async () => {
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "w1", tools: ["edit"] }),
-        call({ task: "w2", tools: ["edit"] }),
+        call({ prompt: "w1", tools: ["edit"] }),
+        call({ prompt: "w2", tools: ["edit"] }),
       ],
       (context, ...rest) =>
         taskOf(context) === "w1"
@@ -218,8 +218,8 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "w1", tools: ["edit"] }),
-        call({ task: "w2", tools: ["edit"] }),
+        call({ prompt: "w1", tools: ["edit"] }),
+        call({ prompt: "w2", tools: ["edit"] }),
       ],
       (context, ...rest) => {
         if (taskOf(context) === "w2") throw new Error("w2 started");
@@ -260,8 +260,8 @@ test("a reload aborts queued children, and their result says Pi reloaded", async
   const parent = await parentSession({
     respond: router(
       [
-        call({ task: "w1", tools: ["edit"] }),
-        call({ task: "w2", tools: ["edit"] }),
+        call({ prompt: "w1", tools: ["edit"] }),
+        call({ prompt: "w2", tools: ["edit"] }),
       ],
       (context, ...rest) => {
         if (taskOf(context) === "w2") throw new Error("w2 started");
@@ -291,7 +291,11 @@ test("writer lanes in one directory run one at a time: call order, then lane ord
   const order = ["w1", "w2", "w3", "w4"];
   const holds = new Map(order.map((task) => [task, hold()]));
   const released = new Set<string>();
-  const writer = (task: string) => ({ task, tools: ["write"], cwd: "." });
+  const writer = (task: string) => ({
+    prompt: task,
+    tools: ["write"],
+    cwd: ".",
+  });
   const parent = await parentSession({
     respond: router(
       [
@@ -330,8 +334,8 @@ test("two writer lanes of one call in one directory both finish", async () => {
     respond: router(
       [
         lanes("A", [
-          { task: "w1", tools: ["write"], cwd: "." },
-          { task: "w2", tools: ["write"], cwd: "." },
+          { prompt: "w1", tools: ["write"], cwd: "." },
+          { prompt: "w2", tools: ["write"], cwd: "." },
         ]),
       ],
       () => fauxAssistantMessage("ok"),
@@ -350,8 +354,8 @@ test("a lane whose model does not resolve releases its writer slot", async () =>
     respond: router(
       [
         lanes("A", [
-          { task: "w1", tools: ["write"], cwd: ".", model: "nowhere/none" },
-          { task: "w2", tools: ["write"], cwd: "." },
+          { prompt: "w1", tools: ["write"], cwd: ".", model: "nowhere/none" },
+          { prompt: "w2", tools: ["write"], cwd: "." },
         ]),
       ],
       (context) => {
@@ -398,7 +402,7 @@ function heldFirst() {
   return { w1, child };
 }
 
-const writer = (task: string) => ({ task, tools: ["write"], cwd: "." });
+const writer = (task: string) => ({ prompt: task, tools: ["write"], cwd: "." });
 
 test("a stopped queued writer keeps the directory locked until the writer ahead ends", async () => {
   const { w1, child } = heldFirst();

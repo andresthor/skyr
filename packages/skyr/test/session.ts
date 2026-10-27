@@ -297,9 +297,9 @@ export function sections(
   return first?.role === "system" ? (first.sections ?? {}) : {};
 }
 
-/** One task of a `subagent` call; its description defaults to `run <agent or task>`. */
+/** One task of a `subagent` call; its description defaults to `run <agent or prompt>`. */
 interface Lane {
-  task: string;
+  prompt: string;
   agent?: string;
   description?: string;
   role?: string;
@@ -323,7 +323,7 @@ export function lanes(
     "subagent",
     defined({
       tasks: tasks.map((lane) =>
-        defined({ description: `run ${lane.agent ?? lane.task}`, ...lane }),
+        defined({ description: `run ${lane.agent ?? lane.prompt}`, ...lane }),
       ),
       background: o.background,
     }),
@@ -335,7 +335,8 @@ export function lanes(
 export const call = ({
   background,
   ...lane
-}: Lane & { background?: boolean }) => lanes(lane.task, [lane], { background });
+}: Lane & { background?: boolean }) =>
+  lanes(lane.prompt, [lane], { background });
 
 /** The parent makes `calls` on its first turn and then answers "done"; children get `child`. */
 export function router(

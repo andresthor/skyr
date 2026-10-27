@@ -285,8 +285,8 @@ test("the TUI parent is offered ask_user; a subagent child is not, and a subagen
     userAgents: { "scout.md": agentFile("Finds things") },
     respond: router(
       [
-        call({ task: "look", agent: "scout" }),
-        call({ task: "ask", agent: "scout", tools: ["ask_user"] }),
+        call({ prompt: "look", agent: "scout" }),
+        call({ prompt: "ask", agent: "scout", tools: ["ask_user"] }),
       ],
       (context) => {
         childTools.push(toolsSeen(context));

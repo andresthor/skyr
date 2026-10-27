@@ -56,7 +56,7 @@ async function delivered(parent: Parent) {
 test("a background call returns before the child answers, and the answer arrives as a message that starts a parent turn once the parent is idle", async () => {
   const held = hold();
   const parent = await parentSession({
-    respond: bgRouter([call({ task: "bg", background: true })], held.step),
+    respond: bgRouter([call({ prompt: "bg", background: true })], held.step),
   });
 
   await parent.session.prompt("go");
@@ -91,7 +91,7 @@ test("an answer that finishes while the parent is streaming is delivered when th
   });
   const parent = await parentSession({
     respond: bgRouter(
-      [call({ task: "bg", background: true })],
+      [call({ prompt: "bg", background: true })],
       () => fauxAssistantMessage("BG-DONE"),
       parentHold.step,
     ),
@@ -125,11 +125,11 @@ test("a background answer with a hostile description is still delivered", async 
     respond: bgRouter(
       [
         call({
-          task: "a",
+          prompt: "a",
           background: true,
           description: `${HOSTILE} "quoted" <b>\nnext`,
         }),
-        call({ task: "b", background: true }),
+        call({ prompt: "b", background: true }),
       ],
       (context) => fauxAssistantMessage(`ANSWER-${taskOf(context)}`),
       parentHold.step,
@@ -173,7 +173,7 @@ test("Esc does not stop a background child, and /subagents stop <id> does", asyn
   let childAborted = false;
   const parent = await parentSession({
     respond: bgRouter(
-      [call({ task: "bg", background: true })],
+      [call({ prompt: "bg", background: true })],
       (context, options, ...rest) => {
         options?.signal?.addEventListener("abort", () => {
           childAborted = true;
@@ -210,7 +210,7 @@ test("session_shutdown aborts background children and clears the widget, and the
   let childAborted = false;
   const parent = await parentSession({
     respond: bgRouter(
-      [call({ task: "bg", background: true })],
+      [call({ prompt: "bg", background: true })],
       (context, options, ...rest) => {
         options?.signal?.addEventListener("abort", () => {
           childAborted = true;
@@ -237,8 +237,8 @@ test("the widget lists live children with sanitised text within the width, and c
   const parent = await parentSession({
     respond: bgRouter(
       [
-        call({ task: "bg", background: true, description: hostile }),
-        call({ task: "fg", description: hostile }),
+        call({ prompt: "bg", background: true, description: hostile }),
+        call({ prompt: "fg", description: hostile }),
       ],
       (context: TranscriptContext, ...rest) =>
         holds.get(taskOf(context))!.step(context, ...rest),
@@ -263,8 +263,8 @@ test("a background writer takes the per-cwd slot like a blocking one", async () 
   const parent = await parentSession({
     respond: bgRouter(
       [
-        call({ task: "bg", background: true, tools: ["edit"] }),
-        call({ task: "fg", tools: ["edit"] }),
+        call({ prompt: "bg", background: true, tools: ["edit"] }),
+        call({ prompt: "fg", tools: ["edit"] }),
       ],
       (context, ...rest) => holds.get(taskOf(context))!.step(context, ...rest),
     ),
@@ -293,8 +293,8 @@ test("a queued background writer returns at once as queued and runs when the slo
   const parent = await parentSession({
     respond: bgRouter(
       [
-        call({ task: "fg", tools: ["edit"] }),
-        call({ task: "bg", background: true, tools: ["edit"] }),
+        call({ prompt: "fg", tools: ["edit"] }),
+        call({ prompt: "bg", background: true, tools: ["edit"] }),
       ],
       (context, ...rest) => holds.get(taskOf(context))!.step(context, ...rest),
     ),
@@ -326,7 +326,7 @@ test("a queued background writer returns at once as queued and runs when the slo
 test("a description's terminal escapes never reach the model: a hostile one starts inert", async () => {
   const parent = await parentSession({
     respond: bgRouter(
-      [call({ task: "bg", background: true, description: HOSTILE })],
+      [call({ prompt: "bg", background: true, description: HOSTILE })],
       () => fauxAssistantMessage("done"),
     ),
   });
@@ -354,7 +354,7 @@ test("Esc leaves every lane of a background call running; `/subagents stop <lane
   const parentHold = hold();
   const parent = await parentSession({
     respond: bgRouter(
-      [lanes("bg", [{ task: "a" }, { task: "b" }], { background: true })],
+      [lanes("bg", [{ prompt: "a" }, { prompt: "b" }], { background: true })],
       child,
       parentHold.step,
     ),
@@ -403,7 +403,7 @@ test("lanes of a background call that end while the parent is busy arrive as one
   });
   const parent = await parentSession({
     respond: bgRouter(
-      [lanes("bg", [{ task: "a" }, { task: "b" }], { background: true })],
+      [lanes("bg", [{ prompt: "a" }, { prompt: "b" }], { background: true })],
       (context) => fauxAssistantMessage(`ANSWER-${taskOf(context)}`),
       parentHold.step,
     ),
@@ -438,7 +438,7 @@ test("a reload stops every background lane and nothing reaches the next session"
   const { holds, aborted, child } = heldLanes("a", "b");
   const parent = await parentSession({
     respond: bgRouter(
-      [lanes("bg", [{ task: "a" }, { task: "b" }], { background: true })],
+      [lanes("bg", [{ prompt: "a" }, { prompt: "b" }], { background: true })],
       child,
     ),
   });

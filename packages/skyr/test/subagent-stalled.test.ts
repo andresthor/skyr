@@ -20,7 +20,7 @@ test("a quiet in-process child is never shown as stalled, and finishes once rele
         return held.step(context, options, state, model);
       turns += 1;
       return turns === 1
-        ? fauxAssistantMessage([call({ task: "quiet" })])
+        ? fauxAssistantMessage([call({ prompt: "quiet" })])
         : fauxAssistantMessage("done");
     },
   });

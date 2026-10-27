@@ -50,9 +50,9 @@ export const Task = Type.Object(
     description: Type.String({
       description: "3-5 words for the user, naming this task",
     }),
-    task: Type.String({
+    prompt: Type.String({
       description:
-        "The whole job for this subagent, standalone: paths, context and the answer you want back. Role shaping goes in `role`, never the job itself.",
+        "The whole job for this subagent, standalone: paths, context and the answer you want back. A role goes in `role`, never the job itself.",
     }),
     role: Type.Optional(
       Type.String({
@@ -81,7 +81,7 @@ export const Task = Type.Object(
     continue: Type.Optional(
       Type.String({
         description:
-          "ID (8 chars) of a finished subagent, from the `id` on its answer: its saved session gets another run with the same tools, model and directory. Give description and a fresh task only; omit agent, role, tools, model and cwd.",
+          "ID (8 chars) of a finished subagent, from the `id` on its answer: its saved session gets another run with the same tools, model and directory. Give description and a fresh prompt only; omit agent, role, tools, model and cwd.",
       }),
     ),
   },
@@ -447,7 +447,7 @@ export function createRuns(
       writer,
       systemPrompt: [agent?.body, params.role].filter(Boolean).join("\n\n"),
       description,
-      task: params.task,
+      task: params.prompt,
       cwd: worktree !== undefined ? worktree.path : cwd,
       key: worktree !== undefined ? worktree.path : key,
       parentKey,
@@ -510,7 +510,7 @@ export function createRuns(
     return {
       agent: record.agent,
       description,
-      task: params.task,
+      task: params.prompt,
       worktree: record.worktree,
       label: labelOf({ agent: record.agent, description }),
       model: record.model,

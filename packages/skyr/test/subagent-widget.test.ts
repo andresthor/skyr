@@ -29,7 +29,7 @@ async function writers(count: number) {
     respond: router(
       Array.from({ length: count }, (_, i) =>
         call({
-          task: `w${i}`,
+          prompt: `w${i}`,
           tools: ["write"],
           cwd: ".",
           description: i === 0 ? HOSTILE : `漢字🙂 writer ${i}`,
@@ -61,7 +61,7 @@ async function parentTurns(parent: Parent, n: number): Promise<void> {
 test("the subagent widget is set once per appearance, not once per tick", async () => {
   const held = hold();
   const parent = await parentSession({
-    respond: router([call({ task: "s" })], held.step),
+    respond: router([call({ prompt: "s" })], held.step),
   });
   fakeTicks();
 
@@ -120,10 +120,10 @@ test("with a host that never mounts the widget, no repaint tick runs and the wid
   const held = hold();
   const again = hold();
   const turns = [
-    fauxAssistantMessage([call({ task: "bg", background: true })]),
+    fauxAssistantMessage([call({ prompt: "bg", background: true })]),
     fauxAssistantMessage("done"),
     fauxAssistantMessage("noted"),
-    fauxAssistantMessage([call({ task: "bg2", background: true })]),
+    fauxAssistantMessage([call({ prompt: "bg2", background: true })]),
     fauxAssistantMessage("done"),
   ];
   const sets: string[] = [];
@@ -167,7 +167,7 @@ test("after the host disposes the widget, the next run shows it again", async ()
   const parent = await parentSession({
     respond: router(
       [...holds.keys()].map((task) =>
-        call({ task, tools: ["write"], cwd: "." }),
+        call({ prompt: task, tools: ["write"], cwd: "." }),
       ),
       (context, ...rest) => {
         const held = holds.get(taskOf(context));

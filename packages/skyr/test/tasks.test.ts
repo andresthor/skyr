@@ -79,7 +79,7 @@ const subagents: Begin = async (bus) => {
     mode: "tui",
     eventBus: bus,
     respond: router(
-      [call({ agent: "scout", task: "look", description: "look around" })],
+      [call({ agent: "scout", prompt: "look", description: "look around" })],
       held.step,
     ),
     userAgents: { "scout.md": agentFile("Finds things") },
@@ -160,7 +160,7 @@ test("shells and subagents publish their own lists, each under its own source", 
   const { session } = await parentSession({
     mode: "tui",
     eventBus: bus,
-    respond: router([shell.start(), call({ task: "look" })], held.step),
+    respond: router([shell.start(), call({ prompt: "look" })], held.step),
   });
   const run = session.prompt("go");
   await held.entered;
@@ -185,8 +185,8 @@ test("a 2-lane call publishes two task items with distinct titles; each leaves a
     respond: router(
       [
         lanes("call", [
-          { agent: "scout", task: "look", description: "look around" },
-          { agent: "scout", task: "seek", description: "seek elsewhere" },
+          { agent: "scout", prompt: "look", description: "look around" },
+          { agent: "scout", prompt: "seek", description: "seek elsewhere" },
         ]),
       ],
       (context, ...rest) => holds.get(taskOf(context))!.step(context, ...rest),

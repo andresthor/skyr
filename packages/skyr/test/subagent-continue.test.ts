@@ -33,7 +33,7 @@ const cont = (task: string, prefix: string) =>
     {
       description: `continue ${task}`,
       continue: prefix,
-      task: `again ${task}`,
+      prompt: `again ${task}`,
     },
   ]);
 
@@ -93,13 +93,13 @@ function savedFileOf(toolCallId: string, parent: Parent): string | undefined {
   return typeof file === "string" ? file : undefined;
 }
 
-test("a continue runs the child's saved session with a fresh task and its old facts", async () => {
+test("a continue runs the child's saved session with a fresh prompt and its old facts", async () => {
   const { seen, child } = childLog({ look: "RUN1-ANSWER" });
   const parent = await parentSession({
     userAgents: SCOUT,
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
+      () => fauxAssistantMessage([call({ agent: "scout", prompt: "look" })]),
       (context) => fauxAssistantMessage([cont("one", childIds(context)[0]!)]),
     ),
   });
@@ -133,14 +133,14 @@ test("a continue with overrides is refused before it spends anything", async () 
     userAgents: SCOUT,
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
+      () => fauxAssistantMessage([call({ agent: "scout", prompt: "look" })]),
       (context) =>
         fauxAssistantMessage([
           lanes("meddle", [
             {
               description: "continue meddled",
               continue: childIds(context)[0]!,
-              task: "meddle",
+              prompt: "meddle",
               model: "faux-1",
               cwd: "/tmp",
               role: "overridden",
@@ -168,7 +168,7 @@ test("continuing a still-running child is refused until it finishes", async () =
         taskOf(context) === "bg"
           ? held.step(context, ...rest)
           : child(context, ...rest),
-      () => fauxAssistantMessage([call({ task: "bg", background: true })]),
+      () => fauxAssistantMessage([call({ prompt: "bg", background: true })]),
       (context) => fauxAssistantMessage([cont("live", childIds(context)[0]!)]),
     ),
   });
@@ -196,7 +196,7 @@ test("an unknown or blank id is refused with the rule spelled out", async () => 
     userAgents: SCOUT,
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
+      () => fauxAssistantMessage([call({ agent: "scout", prompt: "look" })]),
       () =>
         fauxAssistantMessage([cont("dead", "ffffffff"), cont("blank", "  ")]),
     ),
@@ -220,7 +220,7 @@ test("the same continue id in two calls of one message: the first runs it, the s
     userAgents: SCOUT,
     respond: scriptTurns(
       resumedGate("again a", contHold, child),
-      () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
+      () => fauxAssistantMessage([call({ agent: "scout", prompt: "look" })]),
       (context) =>
         fauxAssistantMessage([
           cont("a", childIds(context)[0]!),
@@ -249,7 +249,7 @@ test("Esc on a running foreground continue aborts it inline and delivers nothing
     userAgents: SCOUT,
     respond: scriptTurns(
       resumedGate("again two", contHold, child),
-      () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
+      () => fauxAssistantMessage([call({ agent: "scout", prompt: "look" })]),
       (context) => fauxAssistantMessage([cont("two", childIds(context)[0]!)]),
     ),
   });
@@ -277,7 +277,7 @@ test("a new session clears the records: ids from before it are refused", async (
     userAgents: SCOUT,
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
+      () => fauxAssistantMessage([call({ agent: "scout", prompt: "look" })]),
       (context) => {
         tag = childIds(context)[0]!;
         return fauxAssistantMessage([cont("ok", tag)]);
@@ -313,7 +313,7 @@ test("a continue whose saved session file is gone fails with the honest error", 
     userAgents: SCOUT,
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ agent: "scout", task: "look" })]),
+      () => fauxAssistantMessage([call({ agent: "scout", prompt: "look" })]),
       () => fauxAssistantMessage("idling"),
       (context) => fauxAssistantMessage([cont("gone", childIds(context)[0]!)]),
     ),
@@ -342,7 +342,7 @@ test("a continue whose child's cwd vanished, or stopped being a directory, fails
       child,
       () =>
         fauxAssistantMessage([
-          call({ agent: "scout", task: "look", cwd: workdir }),
+          call({ agent: "scout", prompt: "look", cwd: workdir }),
         ]),
       () => fauxAssistantMessage("round one"),
       (context) => fauxAssistantMessage([cont("gone", childIds(context)[0]!)]),
@@ -385,7 +385,7 @@ const worktreeChild = async (
     git: true,
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ task: "w", tools: ["edit"] })]),
+      () => fauxAssistantMessage([call({ prompt: "w", tools: ["edit"] })]),
       ...turns,
     ),
   });
@@ -456,14 +456,14 @@ test("a continue with a blank description is refused, and the child can still be
   const parent = await parentSession({
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ task: "look" })]),
+      () => fauxAssistantMessage([call({ prompt: "look" })]),
       (context) =>
         fauxAssistantMessage([
           lanes("blank", [
             {
               description: "  ",
               continue: childIds(context)[0]!,
-              task: "again blank",
+              prompt: "again blank",
             },
           ]),
         ]),
@@ -486,7 +486,7 @@ test("a continued run's description is trimmed in its label and its details", as
   const parent = await parentSession({
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ task: "look" })]),
+      () => fauxAssistantMessage([call({ prompt: "look" })]),
       (context) =>
         fauxAssistantMessage([
           lanes(
@@ -495,7 +495,7 @@ test("a continued run's description is trimmed in its label and its details", as
               {
                 description: "  padded  ",
                 continue: childIds(context)[0]!,
-                task: "again padded",
+                prompt: "again padded",
               },
             ],
             { background: true },
@@ -522,7 +522,7 @@ test("a continue naming an agent is told to omit it, even an agent that does not
             description: "continue named",
             continue: "ffffffff",
             agent: "nope",
-            task: "again named",
+            prompt: "again named",
           },
         ]),
       ]),
@@ -543,16 +543,16 @@ test("the same continue id twice in one call is refused before anything runs", a
   const parent = await parentSession({
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ task: "look" })]),
+      () => fauxAssistantMessage([call({ prompt: "look" })]),
       (context) => {
         const id = childIds(context)[0]!;
         return fauxAssistantMessage([
           lanes("twice", [
-            { description: "first", continue: id, task: "again 1" },
+            { description: "first", continue: id, prompt: "again 1" },
             {
               description: "second",
               continue: id.slice(0, 4),
-              task: "again 2",
+              prompt: "again 2",
             },
           ]),
         ]);

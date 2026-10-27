@@ -54,7 +54,7 @@ function plant(jobsRoot: string, id: string, result: string): string {
 
 test("a crashed parent's finished child is delivered once on the next session start, its job dir removed", async () => {
   const parent = await parentSession({
-    respond: turnRouter([call({ task: "pick" })]),
+    respond: turnRouter([call({ prompt: "pick" })]),
   });
   await parent.session.prompt("go");
   expect(parentTurns(parent)).toHaveLength(2);
@@ -110,7 +110,7 @@ async function recover(parent: Parent, fields: object): Promise<string> {
 
 test("a recovered job whose agent is not a string is still delivered", async () => {
   const parent = await parentSession({
-    respond: turnRouter([call({ task: "pick" })]),
+    respond: turnRouter([call({ prompt: "pick" })]),
   });
   await parent.session.prompt("go");
 
@@ -121,7 +121,7 @@ test("a recovered job whose agent is not a string is still delivered", async () 
 
 test("a recovered worktree child's answer is followed by its worktree", async () => {
   const parent = await parentSession({
-    respond: turnRouter([call({ task: "pick" })]),
+    respond: turnRouter([call({ prompt: "pick" })]),
   });
   await parent.session.prompt("go");
   const worktree = join(dirname(jobsRootOf(parent)), "worktrees", "deadbeef");
@@ -136,7 +136,7 @@ test("a recovered worktree child's answer is followed by its worktree", async ()
 
 test("a recovered run's delivered line says it was recovered, with no time, and names a failure's cause", async () => {
   const parent = await parentSession({
-    respond: turnRouter([call({ task: "pick" })]),
+    respond: turnRouter([call({ prompt: "pick" })]),
   });
   await parent.session.prompt("go");
   const stored = { v: 1, usage, sessionFile: undefined };
@@ -186,7 +186,7 @@ test("a recovered run's delivered line says it was recovered, with no time, and 
 
 test("a malformed job is reaped only when it has aged out; a fresh one stays for its live child", async () => {
   const parent = await parentSession({
-    respond: turnRouter([call({ task: "pick" })]),
+    respond: turnRouter([call({ prompt: "pick" })]),
   });
   await parent.session.prompt("go");
   const jobsRoot = jobsRootOf(parent);

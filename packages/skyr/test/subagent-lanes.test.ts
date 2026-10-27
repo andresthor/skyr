@@ -55,14 +55,14 @@ test("a call with one bad task among three runs nothing and names every bad task
     respond: router(
       [
         lanes("one", [
-          { task: "a" },
-          { task: "b", agent: "nope" },
-          { task: "c" },
+          { prompt: "a" },
+          { prompt: "b", agent: "nope" },
+          { prompt: "c" },
         ]),
         lanes("many", [
-          { task: "d", cwd: "missing" },
-          { task: "e" },
-          { task: "f", description: " " },
+          { prompt: "d", cwd: "missing" },
+          { prompt: "e" },
+          { prompt: "f", description: " " },
         ]),
       ],
       nobody,
@@ -94,20 +94,28 @@ test("a refused call claims nothing: a later writer in that directory starts at 
   const parent = await parentSession({
     respond: scriptTurns(
       (context) => fauxAssistantMessage(`ANSWER ${taskOf(context)}`),
-      () => fauxAssistantMessage([call({ task: "look" })]),
+      () => fauxAssistantMessage([call({ prompt: "look" })]),
       (context) =>
         fauxAssistantMessage([
           lanes("refused", [
-            { task: "w1", tools: ["write"], cwd: "." },
-            { description: "again", continue: childIds(context)[0], task: "x" },
-            { task: "bad", agent: "nope" },
+            { prompt: "w1", tools: ["write"], cwd: "." },
+            {
+              description: "again",
+              continue: childIds(context)[0],
+              prompt: "x",
+            },
+            { prompt: "bad", agent: "nope" },
           ]),
         ]),
       (context) =>
         fauxAssistantMessage([
           lanes("after", [
-            { task: "w2", tools: ["write"], cwd: "." },
-            { description: "again", continue: childIds(context)[0], task: "y" },
+            { prompt: "w2", tools: ["write"], cwd: "." },
+            {
+              description: "again",
+              continue: childIds(context)[0],
+              prompt: "y",
+            },
           ]),
         ]),
     ),
@@ -130,7 +138,7 @@ test("a misplaced background is refused, naming the key", async () => {
       [
         fauxToolCall(
           "subagent",
-          { tasks: [{ description: "x", task: "bg", background: true }] },
+          { tasks: [{ description: "x", prompt: "bg", background: true }] },
           { id: "bg" },
         ),
       ],
@@ -152,7 +160,7 @@ test("agent on the call is refused, naming the key", async () => {
       [
         fauxToolCall(
           "subagent",
-          { agent: "scout", tasks: [{ description: "x", task: "a" }] },
+          { agent: "scout", tasks: [{ description: "x", prompt: "a" }] },
           { id: "a" },
         ),
       ],
@@ -175,7 +183,7 @@ test("nine tasks fail Pi's validation before anything starts", async () => {
       [
         lanes(
           "nine",
-          Array.from({ length: 9 }, (_, i) => ({ task: `t${i}` })),
+          Array.from({ length: 9 }, (_, i) => ({ prompt: `t${i}` })),
         ),
       ],
       nobody,
@@ -209,15 +217,15 @@ test("a call is an error only when every task failed, stopped or ended empty", a
     respond: router(
       [
         lanes("mixed", [
-          { task: "stop 1" },
-          { task: "ok" },
-          { task: "boom 1" },
-          { task: "empty 1" },
+          { prompt: "stop 1" },
+          { prompt: "ok" },
+          { prompt: "boom 1" },
+          { prompt: "empty 1" },
         ]),
         lanes("none", [
-          { task: "boom 2" },
-          { task: "empty 2" },
-          { task: "stop 2" },
+          { prompt: "boom 2" },
+          { prompt: "empty 2" },
+          { prompt: "stop 2" },
         ]),
       ],
       child,
@@ -252,10 +260,10 @@ test("Esc keeps every finished lane's answer; a running lane reads stopped befor
     respond: router(
       [
         lanes("call", [
-          { task: "fast" },
-          { task: "slow" },
-          { task: "w1", tools: ["write"], cwd: "." },
-          { task: "w2", tools: ["write"], cwd: "." },
+          { prompt: "fast" },
+          { prompt: "slow" },
+          { prompt: "w1", tools: ["write"], cwd: "." },
+          { prompt: "w2", tools: ["write"], cwd: "." },
         ]),
       ],
       (context, ...rest) => {
@@ -306,7 +314,7 @@ test("Esc reaches every lane of a call at once", async () => {
       [
         lanes(
           "call",
-          [...holds.keys()].map((task) => ({ task })),
+          [...holds.keys()].map((task) => ({ prompt: task })),
         ),
       ],
       (context, ...rest) => holds.get(taskOf(context))!.step(context, ...rest),
@@ -329,7 +337,7 @@ test("Esc reaches every lane of a call at once", async () => {
 test("each call's result carries only its own lanes, and session totals count every lane of both calls once", async () => {
   const { session } = await parentSession({
     respond: router(
-      [lanes("two", [{ task: "a" }, { task: "b" }]), call({ task: "c" })],
+      [lanes("two", [{ prompt: "a" }, { prompt: "b" }]), call({ prompt: "c" })],
       (context) => fauxAssistantMessage(`ANSWER ${taskOf(context)}`),
     ),
   });
@@ -355,7 +363,7 @@ test("each call's result carries only its own lanes, and session totals count ev
 test("each lane's details carry its own counters", async () => {
   const { session } = await parentSession({
     respond: router(
-      [lanes("call", [{ task: "tool" }, { task: "plain" }])],
+      [lanes("call", [{ prompt: "tool" }, { prompt: "plain" }])],
       (context) =>
         taskOf(context) === "tool" &&
         context.messages.at(-1)?.role !== "toolResult"
@@ -377,7 +385,7 @@ test("each lane's answer is cut at 10 KB and names its own spill file", async ()
     `${Array.from({ length: 400 }, (_, i) => `${task} ${i} ${"x".repeat(40)}`).join("\n")}\nTAIL-${task}`;
   const { session } = await parentSession({
     respond: router(
-      [lanes("call", [{ task: "a" }, { task: "b" }])],
+      [lanes("call", [{ prompt: "a" }, { prompt: "b" }])],
       (context) => fauxAssistantMessage(long(taskOf(context))),
     ),
   });
@@ -403,8 +411,11 @@ test("a failed task's spend still counts: toward its call's usage, and toward th
   const { session } = await parentSession({
     respond: router(
       [
-        lanes("mixed", [{ task: "tool, then fail" }, { task: "ok" }]),
-        lanes("failed", [{ task: "fail" }, { task: "tool, then fail too" }]),
+        lanes("mixed", [{ prompt: "tool, then fail" }, { prompt: "ok" }]),
+        lanes("failed", [
+          { prompt: "fail" },
+          { prompt: "tool, then fail too" },
+        ]),
       ],
       (context) => {
         const task = taskOf(context);
@@ -450,8 +461,8 @@ test("a stringified tasks array runs as the array it encodes", async () => {
           "subagent",
           {
             tasks: JSON.stringify([
-              { description: "a", task: "a" },
-              { description: "b", task: "b" },
+              { description: "a", prompt: "a" },
+              { description: "b", prompt: "b" },
             ]),
           },
           { id: "s" },
@@ -480,7 +491,7 @@ test("a lone task object runs as one lane", async () => {
       [
         fauxToolCall(
           "subagent",
-          { tasks: { description: "solo", task: "solo" } },
+          { tasks: { description: "solo", prompt: "solo" } },
           { id: "s" },
         ),
       ],
@@ -497,9 +508,45 @@ test("a lone task object runs as one lane", async () => {
   );
 });
 
+test("a lane that still sends task is refused with where the job and the role go, before any child starts", async () => {
+  const parent = await parentSession({
+    respond: router(
+      [
+        fauxToolCall(
+          "subagent",
+          {
+            tasks: [
+              { description: "a", prompt: "a" },
+              { description: "old", prompt: "You are a reviewer.", task: "b" },
+            ],
+          },
+          { id: "lanes" },
+        ),
+        fauxToolCall(
+          "subagent",
+          { tasks: { description: "solo", task: "c" } },
+          { id: "lone" },
+        ),
+      ],
+      nobody,
+    ),
+  });
+
+  await parent.session.prompt("go");
+
+  for (const id of ["lanes", "lone"]) {
+    const result = results(parent.session).get(id)!;
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      "subagent: nothing ran; `task` is not a field: put each task's job in `prompt` and any role in `role`, then call again",
+    );
+  }
+  expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);
+});
+
 test("a shimmed call's row renders its lanes from the raw arguments", async () => {
-  const scout = { agent: "scout", description: "a", task: "a" };
-  const tasks = [scout, { description: "b", task: "b" }];
+  const scout = { agent: "scout", description: "a", prompt: "a" };
+  const tasks = [scout, { description: "b", prompt: "b" }];
   const parent = await parentSession({
     respond: router(
       [

@@ -61,8 +61,8 @@ test("two bare writers in one turn run in their own worktrees without queueing",
     git: true,
     userAgents: SCOUT,
     respond: turnRunner(heldChild(holds), [
-      call({ task: "w1", tools: ["edit"] }),
-      call({ task: "w2", tools: ["edit"] }),
+      call({ prompt: "w1", tools: ["edit"] }),
+      call({ prompt: "w2", tools: ["edit"] }),
     ]),
   });
 
@@ -100,8 +100,8 @@ test("a bare writer in a non-repo falls back in-tree, queues, and says so", asyn
   const parent = await parentSession({
     // A plain temp cwd: not a git repo.
     respond: turnRunner(heldChild(holds), [
-      call({ task: "intree", tools: ["edit"], cwd: "." }),
-      call({ task: "bare", tools: ["edit"] }),
+      call({ prompt: "intree", tools: ["edit"], cwd: "." }),
+      call({ prompt: "bare", tools: ["edit"] }),
     ]),
   });
 
@@ -130,7 +130,7 @@ test("a bare reader keeps the parent's tree and gets no worktree note", async ()
   const parent = await parentSession({
     git: true,
     userAgents: SCOUT,
-    respond: turnRunner(heldChild(holds), [call({ task: "look" })]),
+    respond: turnRunner(heldChild(holds), [call({ prompt: "look" })]),
   });
 
   const done = parent.session.prompt("go");
@@ -154,7 +154,7 @@ test("an aborted bare writer leaves its worktree on disk; nothing deletes it", a
     git: true,
     userAgents: SCOUT,
     respond: turnRunner(heldChild(holds), [
-      call({ task: "w", tools: ["edit"], background: true }),
+      call({ prompt: "w", tools: ["edit"], background: true }),
     ]),
   });
 

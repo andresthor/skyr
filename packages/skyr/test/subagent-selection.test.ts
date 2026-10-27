@@ -103,7 +103,7 @@ const textOfResult = (parent: Parent, task: string) =>
 test("a model the parent registered stays in-process: the child streams through the parent's provider", async () => {
   proc.runs = 0;
   const parent = await parentSession({
-    respond: router([call({ task: "look" })], childAnswers("found")),
+    respond: router([call({ prompt: "look" })], childAnswers("found")),
   });
 
   await parent.session.prompt("go");
@@ -117,7 +117,7 @@ test("a model resolvable only in the agent dir's files selects the subprocess ru
   proc.runs = 0;
   const parent = await parentSession({
     respond: router(
-      [call({ task: "filed", model: "testy/testy-1" })],
+      [call({ prompt: "filed", model: "testy/testy-1" })],
       childAnswers("unused"),
     ),
   });
@@ -133,7 +133,7 @@ test("a model resolvable only in the agent dir's files selects the subprocess ru
 test("a model that resolves both ways stays in-process: the parent's live registration wins", async () => {
   proc.runs = 0;
   const parent = await parentSession({
-    respond: router([call({ task: "shadowed" })], childAnswers("found")),
+    respond: router([call({ prompt: "shadowed" })], childAnswers("found")),
   });
   fileModel(parent, "faux", "faux-1");
 
@@ -152,7 +152,7 @@ test("a model that resolves both ways stays in-process: the parent's live regist
 test("an unreadable models.json fails soft into the in-process runner", async () => {
   proc.runs = 0;
   const parent = await parentSession({
-    respond: router([call({ task: "broken" })], childAnswers("found")),
+    respond: router([call({ prompt: "broken" })], childAnswers("found")),
   });
   writeFileSync(join(parent.agentDir, "models.json"), "not json at all");
 
@@ -167,7 +167,7 @@ test("the smoke probe runs once per session, however many subagents start, and a
   probes.count = 0;
   const parent = await parentSession({
     respond: router(
-      [call({ task: "one" }), call({ task: "two" })],
+      [call({ prompt: "one" }), call({ prompt: "two" })],
       childAnswers("found"),
     ),
   });

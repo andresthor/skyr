@@ -5,14 +5,21 @@
  */
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  Box,
+  Text,
+  TruncatedText,
+  truncateToWidth,
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { loadPi } from "../pi.js";
 import { publishTasks } from "../tengi.js";
 import {
   firstLine,
+  messageLines,
   type Segment,
   seconds,
+  styled,
   textMessageRenderer,
   tokens,
   toolRow,
@@ -27,7 +34,7 @@ import {
   type RunSnapshot,
   taskOf,
 } from "./store.js";
-import { widgetLines } from "./view.js";
+import { laneLine, widgetLines } from "./view.js";
 import { repoRoot } from "./worktree.js";
 
 const WIDGET_KEY = "skyr.subagents";
@@ -65,7 +72,6 @@ function describe(agents: Map<string, AgentDef>): string {
   return `${ABOUT}\n\n${ADHOC}\n\n${list}`;
 }
 
-/** Saved details can be `{}` from a call that threw, or from an older shape. */
 function isRun(details: unknown): details is RunSnapshot {
   if (typeof details !== "object" || details === null) return false;
   const run: Record<string, unknown> = { ...details };
@@ -77,6 +83,16 @@ function isRun(details: unknown): details is RunSnapshot {
     RUN_STATUSES.some((status) => status === run.status) &&
     [run.startedAt, run.turns, run.toolCalls, run.tokens].every(Number.isFinite)
   );
+}
+
+/**
+ * The runs saved in a tool result's or a delivered message's details, which can be `{}` from a
+ * call that threw, or from an older shape: undefined unless every run has every field read.
+ */
+function lanesOf(details: unknown): RunSnapshot[] | undefined {
+  if (Array.isArray(details))
+    return details.length > 0 && details.every(isRun) ? details : undefined;
+  return isRun(details) ? [details] : undefined;
 }
 
 export function registerSubagent(pi: ExtensionAPI): void {
@@ -152,7 +168,8 @@ export function registerSubagent(pi: ExtensionAPI): void {
     },
     renderResult(result, _options, theme, context) {
       // Saved details only: Pi draws a running call from renderCall alone.
-      const run = isRun(result.details) ? result.details : undefined;
+      const lanes = lanesOf(result.details);
+      const run = lanes?.length === 1 ? lanes[0] : undefined;
       if (!run || context.isError)
         return toolRow(theme, [
           ["error", run?.error ?? firstLine(result.content)],
@@ -172,7 +189,20 @@ export function registerSubagent(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerMessageRenderer(MESSAGE_TYPE, textMessageRenderer(PREVIEW_LINES));
+  const asText = textMessageRenderer(PREVIEW_LINES);
+  // Collapsed, a line per run, so a later run's failure is not hidden below an earlier answer.
+  pi.registerMessageRenderer(MESSAGE_TYPE, (message, options, theme) => {
+    const lanes = lanesOf(message.details);
+    if (!lanes) return asText(message, options, theme);
+    const box = new Box(options.outputPad, 1, (t) =>
+      theme.bg("customMessageBg", t),
+    );
+    for (const run of lanes)
+      box.addChild(new TruncatedText(styled(theme, laneLine(run))));
+    if (options.expanded)
+      box.addChild(new Text(["", ...messageLines(message)].join("\n"), 0, 0));
+    return box;
+  });
 
   pi.registerCommand("subagents", {
     description:

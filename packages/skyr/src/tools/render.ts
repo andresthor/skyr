@@ -161,8 +161,11 @@ export function tokens(n: number): string {
   return n < 1000 ? `${n} tok` : `${Math.round(n / 1000)}k tok`;
 }
 
+/** A span as a row shows it, to a tenth of a second: `3.0s`. */
+export const secondsText = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+
 export function seconds(ms: number): Segment[] {
-  return [["muted", ` · ${(ms / 1000).toFixed(1)}s`]];
+  return [["muted", ` · ${secondsText(ms)}`]];
 }
 
 // Only `took` stops a row's ticking, and Pi can drop a running row first (a chat rebuild, an
@@ -239,7 +242,7 @@ export function took(context: {
 }
 
 /** A message's text, one sanitized line per line. */
-function messageLines(
+export function messageLines(
   message: Pick<Parameters<MessageRenderer>[0], "content">,
 ): string[] {
   const text =

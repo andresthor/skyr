@@ -110,6 +110,100 @@ function resultRow(
   );
 }
 
+/** A delivered message's rendered lines, without the box's blank padding. */
+function messageRows(
+  details: unknown,
+  o: { text?: string; expanded?: boolean; width?: number } = {},
+): string[] {
+  return (
+    registered()
+      .message(
+        {
+          role: "custom",
+          customType: "skyr.subagent",
+          content: [{ type: "text", text: o.text ?? "" }],
+          display: true,
+          details,
+          timestamp: 0,
+        },
+        { expanded: o.expanded ?? false, outputPad: 0 },
+        plain,
+      )
+      ?.render(o.width ?? 200)
+      .map((line) => line.trimEnd())
+      .filter(Boolean) ?? []
+  );
+}
+
+const ended = {
+  id: "abcdef0123",
+  description: "look",
+  status: "done",
+  startedAt: 1_000,
+  endedAt: 4_000,
+  turns: 1,
+  toolCalls: 2,
+  tokens: 1_500,
+};
+
+test("a delivered message saved before runs carried their error still draws a line per run", () => {
+  expect(
+    messageRows(
+      [
+        { ...ended, agent: "scout" },
+        { ...ended, id: "12345678ff", status: "failed", turns: 0 },
+      ],
+      { text: "[background subagent scout (id abcdef01): done …]\n\nfound" },
+    ),
+  ).toEqual([
+    '✓ scout "look" · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
+    '✗ "look" · 0 turns · 2 tools · 2k tok · 3.0s · 12345678',
+  ]);
+});
+
+test("a delivered run that gave no answer draws its cause in its line", () => {
+  expect(
+    messageRows([
+      { ...ended, status: "failed", error: "provider exploded" },
+      { ...ended, error: "ended without an answer" },
+      { ...ended, status: "aborted", error: "stopped by the user" },
+    ]),
+  ).toEqual([
+    '✗ "look" · provider exploded · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
+    '✗ "look" · ended without an answer · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
+    '■ "look" · stopped by the user · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
+  ]);
+});
+
+test("a delivered message's lines and text cannot reach the terminal as escapes at 20 columns, and the text shows only when expanded", () => {
+  const details = [
+    {
+      ...ended,
+      agent: "scout",
+      description: HOSTILE,
+      status: "failed",
+      error: HOSTILE,
+    },
+  ];
+  const text = `subagent: scout failed: ${HOSTILE}`;
+  const collapsed = messageRows(details, { text, width: 20 });
+  const expanded = messageRows(details, { text, width: 20, expanded: true });
+  expect(collapsed).toHaveLength(1);
+  expect(collapsed[0]).toMatch(/^✗ scout "/);
+  expect(expanded.length).toBeGreaterThan(1);
+  expectInert([...collapsed, ...expanded], 20);
+});
+
+test("a delivered message holding one unreadable run draws its sanitized text instead", () => {
+  const rows = messageRows(
+    [ended, { ...ended, status: "weird", turns: Number.NaN }],
+    { text: `[background subagent "look"]\n\n${HOSTILE}`, width: 40 },
+  );
+  expect(rows[0]).toBe('[background subagent "look"]');
+  expect(rows.some((row) => row.startsWith("✓"))).toBe(false);
+  expectInert(rows, 40);
+});
+
 test("a background call's row renders from its saved details under its own marker", () => {
   const started = {
     id: "abcdef0123",

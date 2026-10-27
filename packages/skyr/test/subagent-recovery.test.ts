@@ -5,6 +5,7 @@ import {
   type FauxResponseFactory,
   fauxAssistantMessage,
 } from "@earendil-works/pi-ai";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { expect, test, vi } from "vitest";
 import { call, type Parent, parentSession, taskOf, textOf } from "./session.js";
 
@@ -28,6 +29,12 @@ function turnRouter(calls: ReturnType<typeof call>[]): FauxResponseFactory {
       : fauxAssistantMessage("done");
   };
 }
+
+const plain = {
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+} as unknown as Theme;
 
 const parentTurns = (parent: Parent) =>
   parent.requests.filter((r) => taskOf(r) === "go");
@@ -81,6 +88,56 @@ test("a crashed parent's finished child is delivered once on the next session st
   await parent.session.reload();
   await parent.session.waitForIdle();
   expect(parentTurns(parent)).toHaveLength(3);
+});
+
+test("a recovered run's delivered line says it was recovered, with no time, and names a failure's cause", async () => {
+  const parent = await parentSession({
+    respond: turnRouter([call({ task: "pick" })]),
+  });
+  await parent.session.prompt("go");
+  const stored = { v: 1, usage, sessionFile: undefined };
+  plant(
+    jobsRootOf(parent),
+    "deadbeef01",
+    JSON.stringify({
+      ...stored,
+      status: "done",
+      text: "RECOVERED-ANSWER",
+      agent: "scout",
+      description: "answers the old call",
+    }),
+  );
+  plant(
+    jobsRootOf(parent),
+    "cafebabe01",
+    JSON.stringify({
+      ...stored,
+      status: "failed",
+      error: "disk full",
+      description: "fails the old call",
+    }),
+  );
+
+  await parent.session.reload();
+  await vi.waitFor(() => expect(parentTurns(parent)).toHaveLength(3));
+  await parent.session.waitForIdle();
+  const message = parent.session.messages.find(
+    (m) => m.role === "custom" && m.customType === "skyr.subagent",
+  );
+  if (message?.role !== "custom") throw new Error("nothing was delivered");
+  const lines = parent.session.extensionRunner
+    .getMessageRenderer("skyr.subagent")?.(
+      message,
+      { expanded: false, outputPad: 0 },
+      plain,
+    )
+    ?.render(200)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  expect(lines?.sort()).toEqual([
+    '✓ scout "answers the old call" · recovered after a restart · 42 tok · deadbeef',
+    '✗ "fails the old call" · disk full · recovered after a restart · 42 tok · cafebabe',
+  ]);
 });
 
 test("a malformed job is reaped only when it has aged out; a fresh one stays for its live child", async () => {

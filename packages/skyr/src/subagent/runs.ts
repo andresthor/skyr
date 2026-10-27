@@ -52,12 +52,12 @@ export const Task = Type.Object(
     }),
     task: Type.String({
       description:
-        "The whole job for this subagent, standalone: paths, context and the answer you want back. Role shaping goes in `prompt`, never the job itself.",
+        "The whole job for this subagent, standalone: paths, context and the answer you want back. Role shaping goes in `role`, never the job itself.",
     }),
-    prompt: Type.Optional(
+    role: Type.Optional(
       Type.String({
         description:
-          "Added to the subagent's system prompt, after the agent's own when agent is given. Give it the role in a sentence, how to work, and the shape of the answer you want back.",
+          "Added to the subagent's system prompt, after the agent's own when agent is given. Give it the role in a sentence, how to work, and the shape of the answer you want back; never the job.",
       }),
     ),
     tools: Type.Optional(
@@ -81,7 +81,7 @@ export const Task = Type.Object(
     continue: Type.Optional(
       Type.String({
         description:
-          "ID (8 chars) of a finished subagent, from the `id` on its answer: its saved session gets another run with the same tools, model and directory. Give description and a fresh task only; omit agent, prompt, tools, model and cwd.",
+          "ID (8 chars) of a finished subagent, from the `id` on its answer: its saved session gets another run with the same tools, model and directory. Give description and a fresh task only; omit agent, role, tools, model and cwd.",
       }),
     ),
   },
@@ -445,7 +445,7 @@ export function createRuns(
       model,
       tools,
       writer,
-      systemPrompt: [agent?.body, params.prompt].filter(Boolean).join("\n\n"),
+      systemPrompt: [agent?.body, params.role].filter(Boolean).join("\n\n"),
       description,
       task: params.task,
       cwd: worktree !== undefined ? worktree.path : cwd,
@@ -466,13 +466,13 @@ export function createRuns(
     const prefix = raw;
     if (
       params.agent !== undefined ||
-      params.prompt !== undefined ||
+      params.role !== undefined ||
       params.tools !== undefined ||
       params.model !== undefined ||
       params.cwd !== undefined
     )
       throw new Error(
-        "continue reuses the subagent's tools, model and directory; omit agent, prompt, tools, model and cwd",
+        "continue reuses the subagent's tools, model and directory; omit agent, role, tools, model and cwd",
       );
     if (prefix === "")
       throw new Error(

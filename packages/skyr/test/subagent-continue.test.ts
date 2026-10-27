@@ -143,7 +143,7 @@ test("a continue with overrides is refused before it spends anything", async () 
               task: "meddle",
               model: "faux-1",
               cwd: "/tmp",
-              prompt: "overridden",
+              role: "overridden",
               tools: ["read"],
             },
           ]),
@@ -154,7 +154,7 @@ test("a continue with overrides is refused before it spends anything", async () 
   await parent.session.prompt("go");
   const res = await vi.waitFor(() => results(parent.session).get("meddle"));
   expect(res?.isError).toBe(true);
-  expect(textOf(res!)).toContain("omit agent, prompt, tools, model and cwd");
+  expect(textOf(res!)).toContain("omit agent, role, tools, model and cwd");
   // Only run 1 ever ran; the meddled continue spent nothing.
   expect([...seen.keys()]).toEqual(["look"]);
 });
@@ -534,7 +534,7 @@ test("a continue naming an agent is told to omit it, even an agent that does not
 
   const res = results(parent.session).get("named")!;
   expect(res.isError).toBe(true);
-  expect(textOf(res)).toContain("omit agent, prompt, tools, model and cwd");
+  expect(textOf(res)).toContain("omit agent, role, tools, model and cwd");
   expect(seen.size).toBe(0);
 });
 

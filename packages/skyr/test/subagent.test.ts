@@ -516,14 +516,14 @@ test("a child gets exactly its agent file's tools or the default set (an ad-hoc 
   expect(seen.get("plain")).toMatchObject(defaults);
 });
 
-test("prompt is appended to the child's system prompt, with agent as well the agent body comes first, and with neither Pi's own prompt gets nothing appended", async () => {
+test("role is appended to the child's system prompt, with agent as well the agent body comes first, and with neither Pi's own prompt gets nothing appended", async () => {
   const { seen, child } = recorder();
   const { session, cwd } = await parentSession({
     respond: router(
       [
         call({ task: "plain" }),
-        call({ task: "p", prompt: "PROMPT-ONLY" }),
-        call({ task: "ap", agent: "scout", prompt: "PROMPT-AFTER" }),
+        call({ task: "p", role: "ROLE-ONLY" }),
+        call({ task: "ap", agent: "scout", role: "ROLE-AFTER" }),
       ],
       child,
     ),
@@ -537,10 +537,10 @@ test("prompt is appended to the child's system prompt, with agent as well the ag
   expect(plain?.addendum).toBeUndefined();
   expect(plain?.cwd).toBe(`<cwd>\n${cwd}\n</cwd>`);
   expect(seen.get("p")?.sections.addendum).toBe(
-    "<addendum>\nPROMPT-ONLY\n</addendum>",
+    "<addendum>\nROLE-ONLY\n</addendum>",
   );
   expect(seen.get("ap")?.sections.addendum).toMatch(
-    /^<addendum>\nYou are a test agent\.\n\nPROMPT-AFTER\n<\/addendum>$/,
+    /^<addendum>\nYou are a test agent\.\n\nROLE-AFTER\n<\/addendum>$/,
   );
 });
 

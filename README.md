@@ -137,7 +137,7 @@ A call runs one to eight tasks, each in its own subagent: they run in parallel a
 other's answers, and a foreground call returns once the last of them ends, with every answer in
 task order. A call with a bad task runs none of them, and its error names every bad task. A task
 needs no agent file: without `agent` it gets a general-purpose subagent with Pi's own prompt, the
-default tools, the parent's model and working directory. On any task, `prompt` (added to the
+default tools, the parent's model and working directory. On any task, `role` (added to the
 system prompt), `tools`, `model` and `cwd` (an existing directory) override what the agent file or
 the default gives. A call fails only when no task gave an answer.
 

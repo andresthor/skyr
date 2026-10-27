@@ -302,7 +302,7 @@ interface Lane {
   task: string;
   agent?: string;
   description?: string;
-  prompt?: string;
+  role?: string;
   tools?: string[];
   model?: string;
   cwd?: string;

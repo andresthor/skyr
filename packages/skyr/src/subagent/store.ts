@@ -6,7 +6,14 @@ import type { TaskItem } from "../tengi.js";
 import { clip } from "../tools/render.js";
 import type { ChildEvent } from "./runner.js";
 
-export type RunStatus = "queued" | "running" | "done" | "failed" | "aborted";
+export const RUN_STATUSES = [
+  "queued",
+  "running",
+  "done",
+  "failed",
+  "aborted",
+] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
 
 export interface RunSnapshot {
   id: string;
@@ -35,6 +42,8 @@ export interface RunSnapshot {
   recovered?: true;
   sessionFile?: string;
   spillFile?: string;
+  /** Why an ended run gave no answer; present exactly when it gave none, so never while live. */
+  error?: string;
 }
 
 type RunEvent =

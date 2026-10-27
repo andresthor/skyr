@@ -3,7 +3,7 @@
  * the result of a background start, and the id tag `continue` takes.
  */
 import { loadPi } from "../pi.js";
-import { tokens } from "../tools/render.js";
+import { clip, tokens } from "../tools/render.js";
 import { spill } from "../tools/spill.js";
 import type { ChildResult } from "./runner.js";
 import { count, labelOf, type RunSnapshot } from "./store.js";
@@ -21,9 +21,9 @@ export interface LaneOutcome {
 export const idTag = (id: string) => `(id ${id.slice(0, 8)})`;
 
 /**
- * The child's answer, or a sentence saying why there is none. An answer past the cap is cut, and
- * the whole of it saved to the returned `spillFile`. `stoppedBy` follows "was stopped", as in
- * `" by the user"`.
+ * The child's answer, or a sentence saying why there is none, with the reason alone as `error`.
+ * An answer past the cap is cut, and the whole of it saved to the returned `spillFile`.
+ * `stoppedBy` follows "was stopped", as in `" by the user"`.
  */
 export async function answer(
   label: string,
@@ -33,18 +33,25 @@ export async function answer(
     recovered,
     stoppedBy = "",
   }: { recovered?: boolean; stoppedBy?: string } = {},
-): Promise<{ text: string; spillFile?: string }> {
+): Promise<{ text: string; spillFile?: string; error?: string }> {
   const marker = recovered ? " (recovered after a restart)" : "";
   if (result.status === "aborted")
     return {
       text: `subagent: ${label} was stopped${stoppedBy} before it answered${marker}`,
+      error: `stopped${stoppedBy}`,
     };
-  if (result.status === "failed")
+  if (result.status === "failed") {
+    const cause = result.error ?? "no error message";
     return {
-      text: `subagent: ${label} failed${marker}: ${result.error ?? "no error message"}`,
+      text: `subagent: ${label} failed${marker}: ${cause}`,
+      error: clip(cause),
     };
+  }
   if (!result.text)
-    return { text: `subagent: ${label} ended without an answer${marker}` };
+    return {
+      text: `subagent: ${label} ended without an answer${marker}`,
+      error: "ended without an answer",
+    };
   const { truncateHead, DEFAULT_MAX_LINES } = await loadPi();
   const cut = truncateHead(result.text, {
     maxBytes: MAX_ANSWER_BYTES,

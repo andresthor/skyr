@@ -225,7 +225,7 @@ async function sweepJobs(
       continue;
     }
     await rm(jobDir, { recursive: true, force: true }).catch(() => undefined);
-    const { text } = await answer(
+    const { text, error } = await answer(
       labelOf(stored),
       entry.name,
       {
@@ -249,6 +249,7 @@ async function sweepJobs(
         toolCalls: 0,
         tokens: stored.usage.totalTokens,
         recovered: true as const,
+        ...(error !== undefined ? { error } : {}),
       },
       isError: stored.status !== "done",
     });
@@ -654,6 +655,8 @@ export function createRuns(
       ended(
         "aborted",
         `subagent: ${label} was stopped${stoppedBy()} before it started`,
+        true,
+        { error: `stopped${stoppedBy()}` },
       );
 
     const finish = async (): Promise<LaneOutcome> => {
@@ -701,7 +704,7 @@ export function createRuns(
           childSignal,
           (event) => store.apply(id, event),
         );
-        const { text, spillFile } = await answer(label, id, result, {
+        const { text, spillFile, error } = await answer(label, id, result, {
           stoppedBy: stoppedBy(),
         });
         const noted = call.worktree
@@ -731,7 +734,11 @@ export function createRuns(
             result.status,
             noted + text,
             result.status !== "done" || !result.text,
-            { sessionFile: result.sessionFile, spillFile },
+            {
+              sessionFile: result.sessionFile,
+              spillFile,
+              ...(error !== undefined ? { error } : {}),
+            },
           ),
           usage: result.usage,
         };
@@ -749,7 +756,10 @@ export function createRuns(
         // Pi's own cancellation (Esc) is Pi's to report.
         if (signal?.aborted) throw error;
         if (childSignal.aborted) return stoppedBeforeStart();
-        if (background) return ended("failed", failed(error).message);
+        if (background)
+          return ended("failed", failed(error).message, true, {
+            error: clip(errorText(error)),
+          });
         throw failed(error);
       }),
     };

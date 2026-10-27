@@ -577,6 +577,29 @@ test("a child that ends aborted with nobody stopping it names no stopper, and a 
   expect(parent.notices[0]).toMatch(/broken\.md/);
 });
 
+test("a failed bare writer's row names its cause", async () => {
+  const { session } = await parentSession({
+    git: true,
+    respond: router([call({ task: "w", tools: ["edit"] })], () =>
+      fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "provider exploded",
+      }),
+    ),
+  });
+
+  await session.prompt("go");
+
+  const result = results(session).get("w");
+  // The worktree note leads the text, so its first line is no cause.
+  expect(result && textOf(result)).toMatch(/^Ran in worktree /);
+  const row = resultRow(registered(), result?.details, {
+    text: result && textOf(result),
+    isError: result?.isError,
+  });
+  expect(row[0]).toMatch(/^provider exploded · /);
+});
+
 test("output past the cap ends with a pointer to a file holding the full answer, and the parent session file doesn't contain the text past the cap", async () => {
   const long = `${Array.from({ length: 400 }, (_, i) => `line ${i} ${"x".repeat(40)}`).join("\n")}\nTAIL-MARKER`;
   const { session } = await parentSession({

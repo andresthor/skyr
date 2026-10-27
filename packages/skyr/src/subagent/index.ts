@@ -10,7 +10,7 @@ import { Type } from "typebox";
 import { loadPi } from "../pi.js";
 import { publishTasks } from "../tengi.js";
 import {
-  errorRow,
+  firstLine,
   registerTextMessageRenderer,
   type Segment,
   seconds,
@@ -20,7 +20,13 @@ import {
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { idTag, startedText } from "./result.js";
 import { createRuns, MESSAGE_TYPE, Task } from "./runs.js";
-import { count, labelOf, type RunSnapshot, taskOf } from "./store.js";
+import {
+  count,
+  labelOf,
+  RUN_STATUSES,
+  type RunSnapshot,
+  taskOf,
+} from "./store.js";
 import { widgetLines } from "./view.js";
 import { repoRoot } from "./worktree.js";
 
@@ -61,19 +67,15 @@ function describe(agents: Map<string, AgentDef>): string {
 
 /** Saved details can be `{}` from a call that threw, or from an older shape. */
 function isRun(details: unknown): details is RunSnapshot {
+  if (typeof details !== "object" || details === null) return false;
+  const run: Record<string, unknown> = { ...details };
   return (
-    typeof details === "object" &&
-    details !== null &&
-    "status" in details &&
-    typeof details.status === "string" &&
-    "startedAt" in details &&
-    typeof details.startedAt === "number" &&
-    "turns" in details &&
-    typeof details.turns === "number" &&
-    "toolCalls" in details &&
-    typeof details.toolCalls === "number" &&
-    "tokens" in details &&
-    typeof details.tokens === "number"
+    typeof run.id === "string" &&
+    typeof run.description === "string" &&
+    (run.agent === undefined || typeof run.agent === "string") &&
+    (run.error === undefined || typeof run.error === "string") &&
+    RUN_STATUSES.some((status) => status === run.status) &&
+    [run.startedAt, run.turns, run.toolCalls, run.tokens].every(Number.isFinite)
   );
 }
 
@@ -152,11 +154,10 @@ export function registerSubagent(pi: ExtensionAPI): void {
       // Saved details only: Pi draws a running call from renderCall alone.
       const run = isRun(result.details) ? result.details : undefined;
       if (!run || context.isError)
-        return errorRow(
-          theme,
-          result.content,
-          run ? [...summary(run), ...runTime(run)] : [],
-        );
+        return toolRow(theme, [
+          ["error", run?.error ?? firstLine(result.content)],
+          ...(run ? [...summary(run), ...runTime(run)] : []),
+        ]);
       if (run.background)
         return toolRow(theme, [
           ["accent", "↗ background"],

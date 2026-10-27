@@ -561,7 +561,8 @@ export function createRuns(
   /**
    * The next writer slot for `key`, behind every live writer in the same directory, above it or
    * below it. `behind` names the latest of those, if any; `wait` resolves once they have all
-   * released or `signal` aborts; `release` frees the slot exactly once, whatever happened.
+   * released or `signal` aborts; `release` frees the slot exactly once, whatever happened, and
+   * a slot freed while still queued keeps the directory locked until every writer ahead ends.
    */
   function takeSlot(
     key: string,
@@ -601,7 +602,12 @@ export function createRuns(
             ]),
       release: () => {
         grant();
-        if (writers.get(key)?.chain === chain) writers.delete(key);
+        // Freed while queued: the next writer now waits for the one this slot waited for.
+        if (behind !== undefined && writers.get(key)?.chain === chain)
+          writers.set(key, { chain, label: behind });
+        void chain.then(() => {
+          if (writers.get(key)?.chain === chain) writers.delete(key);
+        });
       },
     };
   }

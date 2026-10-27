@@ -2,6 +2,7 @@
 import { mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type FauxResponseFactory,
   fauxAssistantMessage,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
@@ -372,4 +373,92 @@ test("a lane whose model does not resolve releases its writer slot", async () =>
     },
     { status: "done" },
   ]);
+});
+
+/** The parent answers each prompt with its calls, by the prompt's text, and anything else with "done". */
+function byPrompt(
+  calls: Record<string, ReturnType<typeof call>[]>,
+  child: FauxResponseFactory,
+): FauxResponseFactory {
+  return (context, ...rest) => {
+    if (taskOf(context) !== "go") return child(context, ...rest);
+    const last = context.messages.at(-1);
+    const own = last?.role === "user" ? calls[textOf(last)] : undefined;
+    return fauxAssistantMessage(own ?? "done");
+  };
+}
+
+/** w1 holds until released; any other writer answers at once. */
+function heldFirst() {
+  const w1 = hold();
+  const child: FauxResponseFactory = (context, ...rest) =>
+    taskOf(context) === "w1"
+      ? w1.step(context, ...rest)
+      : fauxAssistantMessage("ok");
+  return { w1, child };
+}
+
+const writer = (task: string) => ({ task, tools: ["write"], cwd: "." });
+
+test("a stopped queued writer keeps the directory locked until the writer ahead ends", async () => {
+  const { w1, child } = heldFirst();
+  const parent = await parentSession({
+    respond: byPrompt(
+      {
+        go: [lanes("bg", [writer("w1"), writer("w2")], { background: true })],
+        again: [lanes("again", [writer("w3")], { background: true })],
+      },
+      child,
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await w1.entered;
+  const w2 = /- task 2: "run w2" \(id ([0-9a-f]{8})\)/.exec(
+    textOf(results(parent.session).get("bg")!),
+  )?.[1];
+  await parent.session.prompt(`/subagents stop ${w2}`);
+  await vi.waitFor(() =>
+    expect(parent.widgets.at(-1)).toEqual([expect.stringContaining("run w1")]),
+  );
+  await parent.session.waitForIdle();
+
+  await parent.session.prompt("again");
+  expect(parent.widgets.at(-1)).toContainEqual(
+    expect.stringMatching(/^○ queued "run w3" · behind "run w1" · /),
+  );
+  expect(parent.requests.some((r) => taskOf(r) === "w3")).toBe(false);
+
+  w1.release();
+  await vi.waitFor(() => expect(parent.widgets.at(-1)).toBeUndefined());
+  await parent.session.waitForIdle();
+});
+
+test("a foreground writer stopped by Esc while queued keeps the directory locked until the writer ahead ends", async () => {
+  const { w1, child } = heldFirst();
+  const parent = await parentSession({
+    respond: byPrompt(
+      {
+        go: [call({ ...writer("w1"), background: true }), call(writer("w2"))],
+        again: [lanes("again", [writer("w3")], { background: true })],
+      },
+      child,
+    ),
+  });
+
+  const run = parent.session.prompt("go");
+  await w1.entered;
+  await vi.waitFor(queued(parent, "w2"));
+  await parent.session.abort();
+  await run;
+
+  await parent.session.prompt("again");
+  expect(parent.widgets.at(-1)).toContainEqual(
+    expect.stringMatching(/^○ queued "run w3" · behind /),
+  );
+  expect(parent.requests.some((r) => taskOf(r) === "w3")).toBe(false);
+
+  w1.release();
+  await vi.waitFor(() => expect(parent.widgets.at(-1)).toBeUndefined());
+  await parent.session.waitForIdle();
 });

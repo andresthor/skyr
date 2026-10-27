@@ -29,7 +29,7 @@ interface Snapshot {
 
 interface StoredResult extends ChildResult {
   v: number;
-  /** Labels a recovered delivery's header even when the parent died before the answer. */
+  /** Names a recovered answer even when the parent died before it arrived. */
   description: string;
   agent?: string;
 }

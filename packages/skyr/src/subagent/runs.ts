@@ -76,7 +76,7 @@ export const Task = Type.Object({
   continue: Type.Optional(
     Type.String({
       description:
-        "ID prefix (8 chars) of a finished subagent (every subagent result ends with its `(id …)` tag) whose saved session gets another run: same tools, model and directory; give a fresh task only. Omit agent, prompt, tools, model and cwd.",
+        "ID (8 chars) of a finished subagent, from the `id` on its answer, whose saved session gets another run: same tools, model and directory; give a fresh task only. Omit agent, prompt, tools, model and cwd.",
     }),
   ),
 });
@@ -225,7 +225,7 @@ async function sweepJobs(
       continue;
     }
     await rm(jobDir, { recursive: true, force: true }).catch(() => undefined);
-    const { text, error } = await answer(
+    const { body, spill, error } = await answer(
       labelOf(stored),
       entry.name,
       {
@@ -237,9 +237,22 @@ async function sweepJobs(
       },
       { recovered: true },
     );
+    // A recovered bare writer keeps stating its worktree: the writes live on there.
+    const worktreeDir = join(base, "worktrees", entry.name.slice(0, 8));
     recovered.push({
-      text,
-      details: {
+      body,
+      notes: [
+        ...(spill ? [spill] : []),
+        ...(existsSync(worktreeDir)
+          ? [
+              {
+                kind: "line" as const,
+                text: `Ran in worktree ${worktreeDir} — its writes are uncommitted there; nothing deletes it`,
+              },
+            ]
+          : []),
+      ],
+      run: {
         id: entry.name,
         ...(stored.agent !== undefined ? { agent: stored.agent } : {}),
         description: stored.description,
@@ -253,15 +266,6 @@ async function sweepJobs(
       },
       isError: stored.status !== "done",
     });
-    // A recovered bare writer keeps stating its worktree: the writes live on there.
-    const worktreeDir = join(base, "worktrees", entry.name.slice(0, 8));
-    if (existsSync(worktreeDir)) {
-      const outcome = recovered[recovered.length - 1];
-      if (outcome === undefined) continue;
-      outcome.text =
-        `Ran in worktree ${worktreeDir} — its writes are uncommitted there; nothing deletes it\n` +
-        outcome.text;
-    }
   }
   return recovered;
 }
@@ -421,7 +425,9 @@ export function createRuns(
         "continue reuses the subagent's tools, model and directory; omit agent, prompt, tools, model and cwd",
       );
     if (prefix === "")
-      throw fail("continue: pass a subagent id prefix from one of its results");
+      throw fail(
+        "continue: pass the 8-char id of a finished subagent, from the `id` on its answer",
+      );
     const matches = [...records.entries()].filter(([id]) =>
       id.startsWith(prefix),
     );
@@ -429,11 +435,11 @@ export function createRuns(
       throw fail(
         [...children.keys()].some((id) => id.startsWith(prefix))
           ? `subagent ...${clip(prefix)} is still running; wait for its answer or stop it`
-          : `no subagent matches "${clip(prefix)}"; ids are the 8-char prefixes in subagent results and are valid only in this session - start a fresh subagent instead`,
+          : `no subagent matches "${clip(prefix)}"; ids are the 8-char \`id\` on each subagent answer and are valid only in this session - start a fresh subagent instead`,
       );
     if (matches.length > 1)
       throw fail(
-        `"${clip(prefix)}" matches more than one finished subagent (${matches.map(([, r]) => labelOf(r)).join(", ")}); give a longer prefix or start a fresh subagent`,
+        `"${clip(prefix)}" matches more than one finished subagent (${matches.map(([, r]) => labelOf(r)).join(", ")}); give its whole 8-char id or start a fresh subagent`,
       );
     const [match] = matches;
     if (!match) throw fail(`no subagent matches "${clip(prefix)}"`);
@@ -573,16 +579,16 @@ export function createRuns(
   /** One message for everything that finished, so a second send never lands in a steer queue. */
   function flush(): void {
     if (pending.length === 0) return;
-    const batch = pending;
+    // `delivery` never throws: every field it reads is checked where it enters.
+    const text = delivery(pending);
+    const details = pending.map((o) => o.run);
     pending = [];
     pi.sendMessage(
       {
         customType: MESSAGE_TYPE,
-        content: [
-          { type: "text", text: batch.map(delivery).join("\n\n---\n\n") },
-        ],
+        content: [{ type: "text", text }],
         display: true,
-        details: batch.map((o) => o.details),
+        details,
       },
       { triggerTurn: true },
     );
@@ -641,15 +647,16 @@ export function createRuns(
     // either way without the live-only `activity`.
     const ended = (
       status: RunStatus,
-      text: string,
+      body: string,
       isError = true,
       extra: Partial<RunSnapshot> = {},
     ): LaneOutcome => {
       const { activity: _, ...last } = store.get(id) ?? started;
       return {
-        text,
+        body,
+        notes: [],
         isError,
-        details: { ...last, status, endedAt: Date.now(), ...extra },
+        run: { ...last, status, endedAt: Date.now(), ...extra },
       };
     };
     const stoppedBeforeStart = () =>
@@ -705,17 +712,9 @@ export function createRuns(
           childSignal,
           (event) => store.apply(id, event),
         );
-        const { text, spillFile, error } = await answer(label, id, result, {
+        const { body, spill, error } = await answer(label, id, result, {
           stoppedBy: stoppedBy(),
         });
-        const noted = call.worktree
-          ? worktreeNote(
-              call.worktree,
-              result.status === "done" || resumed !== undefined,
-            )
-          : call.worktreeWhy === undefined
-            ? ""
-            : `${call.worktreeWhy}; writing in-tree: NOT isolated from your uncommitted files.\n`;
         if (result.sessionFile !== undefined && result.sessionFile !== "")
           records.set(id, {
             id,
@@ -733,14 +732,35 @@ export function createRuns(
         return {
           ...ended(
             result.status,
-            noted + text,
+            body,
             result.status !== "done" || !result.text,
             {
               sessionFile: result.sessionFile,
-              spillFile,
+              spillFile: spill?.path,
               ...(error !== undefined ? { error } : {}),
             },
           ),
+          notes: [
+            ...(spill ? [spill] : []),
+            ...(call.worktree
+              ? [
+                  {
+                    kind: "line" as const,
+                    text: worktreeNote(
+                      call.worktree,
+                      result.status === "done" || resumed !== undefined,
+                    ),
+                  },
+                ]
+              : call.worktreeWhy !== undefined
+                ? [
+                    {
+                      kind: "line" as const,
+                      text: `${call.worktreeWhy}; writing in-tree: NOT isolated from your uncommitted files.`,
+                    },
+                  ]
+                : []),
+          ],
           usage: result.usage,
         };
       } finally {
@@ -777,12 +797,15 @@ export function createRuns(
       void settled.then((outcome) => {
         if (born !== generation) return;
         pending.push(outcome);
+        let idle: boolean;
         try {
-          if (ctx.isIdle()) flush();
+          idle = ctx.isIdle();
         } catch {
-          // The only thrower: the runner is stale because the host disposed or reloaded the
-          // session without events; the instance is gone, so there is nothing to deliver.
+          // The runner is stale because the host disposed or reloaded the session without
+          // events; the instance is gone, so there is nothing to deliver to.
+          return;
         }
+        if (idle) flush();
       });
       return started;
     },

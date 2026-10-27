@@ -27,7 +27,7 @@ const SCOUT = {
 
 /**
  * One parent prompt per test. The parent's request factories run in order: the first turn
- * creates run 1, later turns read the `(id …)` tag out of earlier messages and issue continues.
+ * creates run 1, later turns read its id out of earlier messages and issue continues.
  * Turns past the list answer "done"; re-prompting consumes the next factory. A resumed child's
  * context starts with run 1's messages, so a child side sees `taskOf` = run 1's task again.
  */
@@ -44,10 +44,13 @@ function script(
   };
 }
 
-/** Every `(id …)` tag in a request's messages: tool-result texts and delivered headers. */
+/** A child id in a text: an answer's `id` attribute, or the `(id …)` of a background start. */
+const ID = /(?:\bid="|\(id )([0-9a-f]{8})/;
+
+/** The first child id in each of a request's messages: results and delivered answers. */
 function tagsOf(context: TranscriptContext): string[] {
   return context.messages.flatMap((m) => {
-    const id = /\(id ([0-9a-f]{8})\)/.exec(textOf(m));
+    const id = ID.exec(textOf(m));
     return id ? [id[1]!] : [];
   });
 }
@@ -152,7 +155,7 @@ test("a continue runs the child's saved session with a fresh task and its old fa
   expect(run2?.sections).toEqual(run1?.sections);
   // The second run shares the child id: both foreground results carry the same 8-char prefix.
   const ids = [...results(parent.session).values()]
-    .map((m) => /\(id ([0-9a-f]{8})\)/.exec(textOf(m))?.[1])
+    .map((m) => ID.exec(textOf(m))?.[1])
     .filter(Boolean) as string[];
   expect(ids).toHaveLength(2);
   expect(new Set(ids).size).toBe(1);
@@ -224,7 +227,7 @@ test("continuing a still-running child is refused until it finishes", async () =
   await parent.session.waitForIdle();
 });
 
-test("an unknown or blank id prefix is refused with the rule spelled out", async () => {
+test("an unknown or blank id is refused with the rule spelled out", async () => {
   const { seen, child } = childLog();
   const parent = await parentSession({
     userAgents: SCOUT,
@@ -243,7 +246,7 @@ test("an unknown or blank id prefix is refused with the rule spelled out", async
   expect(textOf(dead!)).toContain("start a fresh subagent");
   const blank = await vi.waitFor(() => results(parent.session).get("blank"));
   expect(blank?.isError).toBe(true);
-  expect(textOf(blank!)).toContain("pass a subagent id prefix");
+  expect(textOf(blank!)).toContain("pass the 8-char id of a finished subagent");
   expect([...seen.keys()]).toEqual(["look"]);
 });
 
@@ -542,7 +545,7 @@ test("a continued run's description is trimmed in its label and its details", as
   await parent.session.waitForIdle();
 
   const started = results(parent.session).get("padded")!;
-  expect(textOf(started)).toContain('started "padded" in the background');
+  expect(textOf(started)).toContain('- task 1: "padded" (id ');
   expect(started.details).toMatchObject({ description: "padded" });
 });
 

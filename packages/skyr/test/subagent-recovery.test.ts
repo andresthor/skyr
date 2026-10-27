@@ -78,16 +78,60 @@ test("a crashed parent's finished child is delivered once on the next session st
   await parent.session.waitForIdle();
   const message = parentTurns(parent)[2]!.messages.at(-1)!;
   expect(textOf(message)).toMatch(
-    /\[background subagent "answers the old call" \(id deadbeef\): done, /,
+    /^Background subagent answers\. .*\n\n<subagent-answer recovered="after a restart" description="answers the old call" status="done" tokens="42 tok" id="deadbeef">\nRECOVERED-ANSWER\n<\/subagent-answer>$/,
   );
-  expect(textOf(message)).toContain(", 42 tok]");
-  expect(textOf(message)).toContain("RECOVERED-ANSWER");
   expect(existsSync(job)).toBe(false);
 
   // Delivered once: a further start reads nothing, so no turn beyond the delivery's.
   await parent.session.reload();
   await parent.session.waitForIdle();
   expect(parentTurns(parent)).toHaveLength(3);
+});
+
+/** Plants one finished job, reloads, and returns the text of the message that delivered it. */
+async function recover(parent: Parent, fields: object): Promise<string> {
+  plant(
+    jobsRootOf(parent),
+    "deadbeef01",
+    JSON.stringify({
+      v: 1,
+      status: "done",
+      text: "RECOVERED-ANSWER",
+      usage,
+      description: "answers the old call",
+      ...fields,
+    }),
+  );
+  await parent.session.reload();
+  await vi.waitFor(() => expect(parentTurns(parent)).toHaveLength(3));
+  await parent.session.waitForIdle();
+  return textOf(parentTurns(parent)[2]!.messages.at(-1)!);
+}
+
+test("a recovered job whose agent is not a string is still delivered", async () => {
+  const parent = await parentSession({
+    respond: turnRouter([call({ task: "pick" })]),
+  });
+  await parent.session.prompt("go");
+
+  expect(await recover(parent, { agent: 42 })).toMatch(
+    /\n<subagent-answer recovered="after a restart" description="answers the old call" [^\n]*>\nRECOVERED-ANSWER\n/,
+  );
+});
+
+test("a recovered worktree child's answer is followed by its worktree", async () => {
+  const parent = await parentSession({
+    respond: turnRouter([call({ task: "pick" })]),
+  });
+  await parent.session.prompt("go");
+  const worktree = join(dirname(jobsRootOf(parent)), "worktrees", "deadbeef");
+  mkdirSync(worktree, { recursive: true });
+
+  expect(await recover(parent, {})).toMatch(
+    new RegExp(
+      `\\nRECOVERED-ANSWER\\n</subagent-answer>\\nRan in worktree ${worktree} — its writes are uncommitted there; nothing deletes it$`,
+    ),
+  );
 });
 
 test("a recovered run's delivered line says it was recovered, with no time, and names a failure's cause", async () => {

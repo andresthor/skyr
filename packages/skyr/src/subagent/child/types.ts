@@ -27,7 +27,7 @@ export interface ChildSpec {
   task: string;
   /** Whether the child may read the project's `.pi/` settings and prompts. */
   trusted: boolean;
-  /** Labels the run for a delivery header when a crashed parent's answer is recovered. */
+  /** Names the run in its answer when a crashed parent's answer is recovered. */
   description: string;
   agent?: string;
   /** Absent: the child is not saved, as for a parent run under `--no-session`. */

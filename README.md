@@ -157,10 +157,12 @@ made of lines only, and this one is a component. A delivered message shows one l
 subagent, naming why any of them gave no answer; expand it to read the answers. A background
 subagent's token usage is in the delivered message, not in the footer.
 
-Every foreground result ends with an `(id ab12cd34)` tag and every background message names the
-same tag in its header. With `continue: <tag prefix>` the next call starts a second run on a
-finished subagent's saved session — same agent, tools, model and directory, a fresh task. The ids
-are valid in the current session only; ongoing and other sessions can't continue from them.
+The model reads each answer inside a `<subagent-answer>` block, foreground or delivered, whose
+attributes carry the run's status, tokens and 8-char `id`; the subagent's own text can't open or
+close a block, and harness notes (a spill file, a worktree) follow it. A background start names
+the same id. With `continue: <id>` the next call starts a second run on a finished subagent's
+saved session — same agent, tools, model and directory, a fresh task. The ids are valid in the
+current session only; ongoing and other sessions can't continue from them.
 
 A subagent runs in-process by default, but runs as its own process when (a) the child entry can
 load (a jiti-backed TypeScript child, checked by a one shot smoke probe per session) and (b) the

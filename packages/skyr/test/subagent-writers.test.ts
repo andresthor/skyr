@@ -207,7 +207,7 @@ test("a failed first writer still lets the second start", async () => {
   expect(textOf(byTask.get("w1")!)).toContain(
     'subagent: "run w1" failed: provider exploded',
   );
-  expect(textOf(byTask.get("w1")!)).toMatch(/\(id [0-9a-f]{8}\)$/);
+  expect(textOf(byTask.get("w1")!)).toMatch(/ id="[0-9a-f]{8}">\n/);
   expect(byTask.get("w2")?.isError).toBe(false);
 });
 
@@ -244,7 +244,7 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
   expect(textOf(w2!)).toContain(
     'subagent: "run w2" was stopped by the user before it started',
   );
-  expect(textOf(w2!)).toMatch(/\(id [0-9a-f]{8}\)$/);
+  expect(textOf(w2!)).toMatch(/ id="[0-9a-f]{8}">\n/);
   expect(w2?.details).toMatchObject({ status: "aborted", turns: 0, tokens: 0 });
   expect(w2?.details).not.toHaveProperty("sessionFile");
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
@@ -278,7 +278,7 @@ test("a reload aborts queued children, and their result says Pi reloaded", async
   expect(textOf(byTask.get("w2")!)).toContain(
     'subagent: "run w2" was stopped because Pi reloaded before it started',
   );
-  expect(textOf(byTask.get("w2")!)).toMatch(/\(id [0-9a-f]{8}\)$/);
+  expect(textOf(byTask.get("w2")!)).toMatch(/ id="[0-9a-f]{8}">\n/);
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
   expect(parent.widgets.at(-1)).toBeUndefined();
 });

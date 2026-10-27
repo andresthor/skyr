@@ -160,6 +160,6 @@ export function worktreeNote(
         `git -C ${plan.path} status --porcelain (tracked edits only: git -C ${plan.path} diff ${plan.sha.slice(0, 8)})\n` +
         `To merge them: git -C ${plan.path} add -A && git -C ${plan.path} commit && then ` +
         `git merge ${plan.branch} from your checkout\n` +
-        `Nothing deletes the worktree; git worktree remove ${plan.path} does, when done\n`
-    : `${head}Nothing is there to merge; nothing deletes the worktree\n`;
+        `Nothing deletes the worktree; git worktree remove ${plan.path} does, when done`
+    : `${head}Nothing is there to merge; nothing deletes the worktree`;
 }

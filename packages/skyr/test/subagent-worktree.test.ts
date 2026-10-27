@@ -31,7 +31,7 @@ const texts = (parent: Parent) =>
     [...results(parent.session).entries()].map(([id, m]) => [id, textOf(m)]),
   );
 
-/** The `(id …)` tag inside a subagent result text. */
+/** The child id in a background start's `(id …)`. */
 const idTag = (text: string) => /\(id ([0-9a-f]{8})\)/.exec(text)?.[1];
 
 /** One parent turn that runs `calls`, then answers done; children route by task. */

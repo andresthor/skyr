@@ -63,13 +63,10 @@ export function readStoredResult(raw: unknown): StoredResult | undefined {
     output?: unknown;
     totalTokens?: unknown;
   };
-  if (
-    typeof usage.input !== "number" ||
-    typeof usage.output !== "number" ||
-    typeof usage.totalTokens !== "number"
-  )
+  if (![usage.input, usage.output, usage.totalTokens].every(Number.isFinite))
     return undefined;
-  return r as unknown as StoredResult;
+  const { agent, ...rest } = r;
+  return (typeof agent === "string" ? r : rest) as unknown as StoredResult;
 }
 
 export const readSnapshot = (raw: string): Snapshot | undefined => {

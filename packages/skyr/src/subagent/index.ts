@@ -25,7 +25,7 @@ import {
   toolRow,
 } from "../tools/render.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
-import { idTag, startedText } from "./result.js";
+import { resultText, startedText } from "./result.js";
 import { createRuns, MESSAGE_TYPE, Task } from "./runs.js";
 import {
   count,
@@ -45,7 +45,7 @@ const PREVIEW_LINES = 12;
 const ABOUT =
   "Run a task in a subagent: a fresh agent with its own context and tools that returns only its final answer. Use it for work that would fill your context, such as searching a codebase, reading many files or researching the web. The agent sees nothing of this conversation, so the task must stand alone: give paths, context and the answer you want back. Independent tasks go out as several subagent calls in one turn, and run in parallel.";
 const ADHOC =
-  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory tree: a second one for the same directory, or one above or below it, waits until the first ends, so issue writes that depend on each other in separate turns. A writer call with NO cwd runs in its own fresh git worktree cut from HEAD instead of queueing; its writes stay uncommitted, and the result states the worktree path, branch, and how to inspect and merge them. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it. With `continue: <id prefix>` the call starts a new run on a finished subagent's saved session, reusing its tools, model and directory: give a fresh task only. Ids are the `(id ab12cd34)` tag at the end of every subagent result, and they are valid only while the current session lives. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
+  "Without `agent` the subagent is general-purpose: Pi's own system prompt, the tools read, grep, find, ls, bash, web_search and web_fetch, your model and your working directory. `prompt`, `tools`, `model` and `cwd` each override what the agent file or that default gives. A subagent whose tools include edit or write runs alone in its directory tree: a second one for the same directory, or one above or below it, waits until the first ends, so issue writes that depend on each other in separate turns. A writer call with NO cwd runs in its own fresh git worktree cut from HEAD instead of queueing; its writes stay uncommitted, and the result states the worktree path, branch, and how to inspect and merge them. With `background: true` the call returns at once and the answer arrives as a message when the subagent finishes; keep working meanwhile and never poll for it. With `continue: <id>` the call starts a new run on a finished subagent's saved session, reusing its tools, model and directory: give a fresh task only. Ids are the 8-char id shown with each subagent's answer and in a background start, and they are valid only while the current session lives. Not in print mode (`pi -p`): the session ends after one turn and the answer would be lost.";
 
 // `continue` stays after `background`, so the schema the model reads keeps its order.
 const { continue: continueOf, ...rest } = Task.properties;
@@ -139,15 +139,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
     ) {
       if (!background) {
         const outcome = await runs.run(task, signal, ctx);
-        // Only a foreground result needs the id tag: a background one's delivered header carries it.
         return {
-          content: [
-            {
-              type: "text",
-              text: `${outcome.text}\n${idTag(outcome.details.id)}`,
-            },
-          ],
-          details: outcome.details,
+          content: [{ type: "text", text: resultText(outcome) }],
+          details: outcome.run,
           usage: outcome.usage,
           isError: outcome.isError,
         };

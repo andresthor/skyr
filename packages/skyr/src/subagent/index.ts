@@ -5,13 +5,7 @@
  */
 import { join } from "node:path";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import {
-  Box,
-  Container,
-  Text,
-  TruncatedText,
-  truncateToWidth,
-} from "@earendil-works/pi-tui";
+import { Box, Container, Text, TruncatedText } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { loadPi } from "../pi.js";
 import { isRecord, publishTasks } from "../tengi.js";
@@ -25,6 +19,7 @@ import {
   tokens,
   toolRow,
 } from "../tools/render.js";
+import { liveWidget } from "../tools/widget.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { addUsage } from "./child/protocol.js";
 import { resultText, startedText } from "./result.js";
@@ -41,7 +36,6 @@ import { repoRoot } from "./worktree.js";
 
 const WIDGET_KEY = "skyr.subagents";
 const TASK_SOURCE = "skyr/subagents";
-const MAX_WIDGET_LINES = 10;
 const PREVIEW_LINES = 12;
 
 const MAX_TASKS = 8;
@@ -149,21 +143,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
   store.subscribe(() =>
     publishTasks(pi.events, TASK_SOURCE, store.running().map(taskOf)),
   );
-  let unsubscribe: (() => void) | undefined;
-
-  function widgetRows(width: number): string[] {
-    const lines = widgetLines(store.running(), Date.now()) ?? [];
-    // Past the cap, the last row counts what it leaves out.
-    const rows =
-      lines.length > MAX_WIDGET_LINES
-        ? [
-            ...lines.slice(0, MAX_WIDGET_LINES - 1),
-            `… +${lines.length - MAX_WIDGET_LINES + 1} more · /subagents lists all`,
-          ]
-        : lines;
-    // Pi stops the TUI on a row wider than the pane; the pad matches Pi's own string widgets.
-    return rows.map((row) => ` ${truncateToWidth(row, width - 2)}`);
-  }
+  let stopWidget: (() => void) | undefined;
 
   pi.registerTool({
     name: "subagent",
@@ -324,52 +304,20 @@ export function registerSubagent(pi: ExtensionAPI): void {
         "warning",
       );
 
-    unsubscribe?.();
-    unsubscribe = undefined;
+    stopWidget?.();
+    stopWidget = undefined;
     if (!ctx.hasUI) return;
-    // Set only as the widget appears and goes: Pi re-inserts a key on every set, which would
-    // swap it with other widgets. A host that never mounts it (tengi, RPC) ticks nothing.
-    let shown = false;
-    let repaint: (() => void) | undefined;
-    const widget = (tui: { requestRender(): void }) => {
-      repaint = () => tui.requestRender();
-      // The clock in each line moves between store changes.
-      const tick = setInterval(repaint, 1000);
-      tick.unref();
-      return {
-        render: widgetRows,
-        invalidate() {},
-        dispose() {
-          clearInterval(tick);
-          repaint = undefined;
-          shown = false;
-        },
-      };
-    };
-    const off = store.subscribe(() => {
-      // A reload or session replacement leaves ctx stale; Pi reports a throw from a handler,
-      // but a child's progress arrives outside any, so the widget dead-stops instead.
-      try {
-        const live = store.running().length > 0;
-        if (live && !shown) {
-          ctx.ui.setWidget(WIDGET_KEY, widget);
-          shown = true;
-        } else if (!live && shown) {
-          shown = false;
-          ctx.ui.setWidget(WIDGET_KEY, undefined);
-        } else repaint?.();
-      } catch {
-        off();
-      }
+    stopWidget = liveWidget(ctx, WIDGET_KEY, {
+      subscribe: store.subscribe,
+      lines: () => widgetLines(store.running(), Date.now()),
+      lists: "/subagents",
     });
-    unsubscribe = off;
   });
 
-  pi.on("session_shutdown", (event, ctx) => {
-    unsubscribe?.();
-    unsubscribe = undefined;
+  pi.on("session_shutdown", (event) => {
+    stopWidget?.();
+    stopWidget = undefined;
     runs.close(event.reason);
-    ctx.ui.setWidget(WIDGET_KEY, undefined);
   });
 }
 

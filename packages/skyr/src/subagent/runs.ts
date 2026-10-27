@@ -274,6 +274,7 @@ async function sweepJobs(
         recovered: true as const,
         ...(error !== undefined ? { error } : {}),
       },
+      usage: stored.usage,
     });
   }
   return recovered;
@@ -638,7 +639,7 @@ export function createRuns(
     if (pending.length === 0) return;
     // `delivery` never throws: every field it reads is checked where it enters.
     const text = delivery(pending);
-    const details = pending.map((o) => o.run);
+    const details = pending.map((o) => ({ ...o.run, usage: o.usage }));
     pending = [];
     pi.sendMessage(
       {

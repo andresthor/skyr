@@ -53,6 +53,39 @@ async function delivered(parent: Parent) {
   return parentTurns(parent)[2]!.messages.at(-1)!;
 }
 
+/** The one delivered run in the parent's session record, once its answer has landed. */
+async function deliveredRun(parent: Parent) {
+  await delivered(parent);
+  const custom = parent.session.messages.find(
+    (m) => m.role === "custom" && m.customType === "skyr.subagent",
+  );
+  if (custom?.role !== "custom") throw new Error("nothing was delivered");
+  return custom;
+}
+
+test("a delivered background answer carries its child's usage on its details", async () => {
+  const held = hold();
+  const parent = await parentSession({
+    respond: bgRouter([call({ prompt: "bg", background: true })], held.step),
+  });
+
+  await parent.session.prompt("go");
+  held.release();
+  const custom = await deliveredRun(parent);
+
+  // Faux-model usage carries no cost; what must ride along is the child's real token record.
+  const runs = custom.details as Array<{
+    status: string;
+    tokens: number;
+    usage: { totalTokens: number; cost: { total: number } };
+  }>;
+  expect(runs).toHaveLength(1);
+  expect(runs[0]!.status).toBe("done");
+  expect(runs[0]!.usage.totalTokens).toBe(runs[0]!.tokens);
+  expect(runs[0]!.usage.totalTokens).toBeGreaterThan(0);
+  expect(Number.isFinite(runs[0]!.usage.cost.total)).toBe(true);
+});
+
 test("a background call returns before the child answers, and the answer arrives as a message that starts a parent turn once the parent is idle", async () => {
   const held = hold();
   const parent = await parentSession({

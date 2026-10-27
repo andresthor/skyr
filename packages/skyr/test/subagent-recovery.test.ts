@@ -182,6 +182,9 @@ test("a recovered run's delivered line says it was recovered, with no time, and 
     '✓ scout "answers the old call" · recovered after a restart · 42 tok · deadbeef',
     '✗ "fails the old call" · disk full · recovered after a restart · 42 tok · cafebabe',
   ]);
+  // The sweep knows the run's usage from its stored result; the delivery must carry it too.
+  const runs = message.details as Array<{ usage: typeof usage }>;
+  expect(runs.map((r) => r.usage)).toEqual([usage, usage]);
 });
 
 test("a malformed job is reaped only when it has aged out; a fresh one stays for its live child", async () => {

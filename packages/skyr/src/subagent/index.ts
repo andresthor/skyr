@@ -143,7 +143,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           content: [{ type: "text", text: resultText(outcome) }],
           details: outcome.run,
           usage: outcome.usage,
-          isError: outcome.isError,
+          isError: outcome.run.error !== undefined,
         };
       }
       const started = runs.start(task, ctx);

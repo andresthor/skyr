@@ -17,7 +17,7 @@ import { clip, errnoOf, quoted, sanitize } from "../tools/render.js";
 import { DEFAULT_TOOLS, type loadAgents, parseTools } from "./agents.js";
 import { readStoredResult } from "./child/protocol.js";
 import { registerChildTools } from "./child/tools.js";
-import { answer, delivery, type LaneOutcome } from "./result.js";
+import { answer, delivery, type LaneOutcome, noAnswer } from "./result.js";
 import { runnerFor, spawnCheck } from "./runner.js";
 import {
   count,
@@ -100,8 +100,8 @@ interface Runs {
   readonly store: Pick<RunStore, "running" | "subscribe">;
   /**
    * Foreground. Resolves the task, then claims it before the first await; a bad task throws one
-   * model-facing error, having claimed nothing. `signal` (Esc) stops the child. A run that throws
-   * rejects: with its own error after Esc, else with a model-facing one; any other stop settles.
+   * model-facing error, having claimed nothing. `signal` (Esc) stops the child. Settles once the
+   * child has, and never rejects after the claim: a stop or a failure is the outcome's `error`.
    */
   run(
     task: Static<typeof Task>,
@@ -264,7 +264,6 @@ async function sweepJobs(
         recovered: true as const,
         ...(error !== undefined ? { error } : {}),
       },
-      isError: stored.status !== "done",
     });
   }
   return recovered;
@@ -595,8 +594,8 @@ export function createRuns(
   }
 
   /**
-   * Resolves and claims a call, then starts its child. `settled` rejects only for a foreground
-   * call, as `run` says; `signal` is the call's Esc, which a background call does not pass.
+   * Resolves and claims a call, then starts its child. `settled` never rejects; `signal` is the
+   * call's Esc, which a background call does not pass.
    */
   function launch(
     task: Static<typeof Task>,
@@ -633,39 +632,35 @@ export function createRuns(
 
     // A continue's worktree may hold its earlier run's writes; only a fresh one is known empty.
     const fresh = resumed === undefined ? call.worktree : undefined;
-    const failed = (error: unknown) =>
-      fail(
-        `${label}: ` +
-          (fresh
-            ? `created worktree ${fresh.path} on branch ${fresh.branch}; it is empty — `
-            : "") +
-          errorText(error),
-        error,
-      );
     // The store's snapshot while the child is live, else the one this call last started it with
     // (the store is empty once the child has ended, or when a reload cleared it mid-run);
     // either way without the live-only `activity`.
     const ended = (
       status: RunStatus,
       body: string,
-      isError = true,
       extra: Partial<RunSnapshot> = {},
     ): LaneOutcome => {
       const { activity: _, ...last } = store.get(id) ?? started;
       return {
         body,
         notes: [],
-        isError,
         run: { ...last, status, endedAt: Date.now(), ...extra },
       };
     };
-    const stoppedBeforeStart = () =>
-      ended(
-        "aborted",
-        `subagent: ${label} was stopped${stoppedBy()} before it started`,
-        true,
-        { error: `stopped${stoppedBy()}` },
-      );
+    const stoppedBeforeStart = (): LaneOutcome => {
+      const why = noAnswer(label, {
+        stoppedBy: stoppedBy(),
+        before: "started",
+      });
+      return {
+        ...ended("aborted", why.body, { error: why.error }),
+        // A stop can land once the fresh worktree exists, and nothing deletes it.
+        notes:
+          fresh !== undefined && existsSync(fresh.path)
+            ? [{ kind: "line", text: worktreeNote(fresh, false) }]
+            : [],
+      };
+    };
 
     const finish = async (): Promise<LaneOutcome> => {
       try {
@@ -730,16 +725,11 @@ export function createRuns(
             worktree: call.worktree,
           });
         return {
-          ...ended(
-            result.status,
-            body,
-            result.status !== "done" || !result.text,
-            {
-              sessionFile: result.sessionFile,
-              spillFile: spill?.path,
-              ...(error !== undefined ? { error } : {}),
-            },
-          ),
+          ...ended(result.status, body, {
+            sessionFile: result.sessionFile,
+            spillFile: spill?.path,
+            ...(error !== undefined ? { error } : {}),
+          }),
           notes: [
             ...(spill ? [spill] : []),
             ...(call.worktree
@@ -773,15 +763,17 @@ export function createRuns(
 
     return {
       started: snapshot,
+      // A throw after the claim is this run's failure, not the call's: Pi keeps a tool's own
+      // result after Esc, so a stopped run still hands back its details.
       settled: finish().catch((error: unknown) => {
-        // Pi's own cancellation (Esc) is Pi's to report.
-        if (signal?.aborted) throw error;
         if (childSignal.aborted) return stoppedBeforeStart();
-        if (background)
-          return ended("failed", failed(error).message, true, {
-            error: clip(errorText(error)),
-          });
-        throw failed(error);
+        const why = noAnswer(label, {
+          cause: errorText(error),
+          context: fresh
+            ? `created worktree ${fresh.path} on branch ${fresh.branch}; it is empty — `
+            : undefined,
+        });
+        return ended("failed", why.body, { error: why.error });
       }),
     };
   }

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   fauxAssistantMessage,
@@ -14,7 +14,7 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { registerSkyr } from "../src/index.js";
 import {
   agentFile,
@@ -466,7 +466,7 @@ test("tools and model on a call override the agent file's and the parent's, tool
     /^subagent: tools: unknown tools TodoWrite; valid tools are /,
   );
   expect(text("bad-model")).toMatch(
-    /^subagent: "run bad-model": model "nowhere\/none" is not available/,
+    /status="failed" [^\n]*>\nsubagent: "run bad-model" failed: model "nowhere\/none" is not available/,
   );
   for (const task of refused) {
     expect(results(parent.session).get(task)?.isError).toBe(true);
@@ -661,7 +661,7 @@ test("a child that ends aborted with nobody stopping it names no stopper, and a 
     /^subagent: no agent "broken"; available: faraway, scout\. Agent files that failed to load: .*broken\.md: .*description/,
   );
   expect(text("f")).toMatch(
-    /^subagent: faraway "run faraway": model "nowhere\/none" is not available .* set `model:` on the call or in the agent file/,
+    /status="failed" [^\n]*>\nsubagent: faraway "run faraway" failed: model "nowhere\/none" is not available .* set `model:` on the call or in the agent file/,
   );
   expect(text("s")).toMatch(
     /status="failed" .*>\nsubagent: scout "run scout" failed: provider exploded\n<\/subagent-answer>$/,
@@ -694,6 +694,74 @@ test("a failed bare writer's row names its cause", async () => {
     isError: result?.isError,
   });
   expect(row[0]).toMatch(/^provider exploded · /);
+});
+
+test("a run whose model does not resolve fails as a framed answer whose row names the cause", async () => {
+  const { session } = await parentSession({
+    respond: router([call({ task: "m", model: "nowhere/none" })], () => {
+      throw new Error("a child started");
+    }),
+  });
+
+  await session.prompt("go");
+
+  const result = results(session).get("m");
+  expect(result?.isError).toBe(true);
+  expect(result && textOf(result)).toMatch(
+    /^subagent: 1 task · failed · 0 tok\n[\s\S]*\n<subagent-answer task="1 of 1" description="run m" status="failed" [^\n]*>\nsubagent: "run m" failed: model "nowhere\/none" is not available[\s\S]*\n<\/subagent-answer>$/,
+  );
+  expect(result?.details).toMatchObject({
+    status: "failed",
+    error: expect.stringMatching(/^model "nowhere\/none" is not available/),
+  });
+  const row = resultRow(registered(), result?.details, {
+    text: result && textOf(result),
+    isError: true,
+  });
+  expect(row[0]).toMatch(/^model "nowhere\/none" is not available/);
+});
+
+test("Esc on a single call keeps its details and names the stop", async () => {
+  const marks = scratchDir("hook");
+  const entered = join(marks, "entered");
+  const gate = join(marks, "gate");
+  const parent = await parentSession({
+    git: true,
+    respond: router([call({ task: "w", tools: ["edit"] })], () => {
+      throw new Error("a child started");
+    }),
+  });
+  // `git worktree add` runs this hook once the worktree exists, so Esc lands while it is being
+  // made. The hook outlives the git Esc kills; it ends at the gate, or when the test's dir goes.
+  const hooks = join(parent.cwd, ".git", "hooks");
+  mkdirSync(hooks, { recursive: true });
+  writeFileSync(
+    join(hooks, "post-checkout"),
+    `#!/bin/sh\ntouch '${entered}'\nwhile [ ! -e '${gate}' ] && [ -d '${marks}' ]; do sleep 0.05; done\n`,
+    { mode: 0o755 },
+  );
+
+  const run = parent.session.prompt("go");
+  await vi.waitFor(() => expect(existsSync(entered)).toBe(true));
+  await parent.session.abort();
+  await run;
+  writeFileSync(gate, "");
+
+  const result = results(parent.session).get("w");
+  expect(result?.isError).toBe(true);
+  expect(result && textOf(result)).toMatch(
+    /status="stopped" [^\n]*>\nsubagent: "run w" was stopped by the user before it started\n<\/subagent-answer>\nRan in worktree \S+ on branch skyr\/[^\n]*\nNothing is there to merge; nothing deletes the worktree$/,
+  );
+  expect(result?.details).toMatchObject({
+    description: "run w",
+    status: "aborted",
+    error: "stopped by the user",
+  });
+  const row = resultRow(registered(), result?.details, {
+    text: result && textOf(result),
+    isError: true,
+  });
+  expect(row[0]).toMatch(/^stopped by the user · /);
 });
 
 test("a subagent's answer cannot close its own frame, even with a zero-width character in the tag", async () => {

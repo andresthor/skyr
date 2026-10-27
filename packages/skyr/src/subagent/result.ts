@@ -19,7 +19,10 @@ type Spill = { kind: "spill"; path?: string };
 
 type Note = Spill | { kind: "line"; text: string };
 
-/** What a finished child hands back, for a tool result or a delivered message. */
+/**
+ * What a finished child hands back, for a tool result or a delivered message. `run.error` is
+ * present exactly when it gave no answer.
+ */
 export interface LaneOutcome {
   run: RunSnapshot;
   /** The answer, cut to the cap, or the sentence saying why there is none. */
@@ -27,13 +30,33 @@ export interface LaneOutcome {
   /** Harness lines after the frame, in order: spill, worktree, in-tree fallback. */
   notes: Note[];
   usage?: ChildResult["usage"];
-  isError: boolean;
 }
 
 /**
- * The child's answer, or a sentence saying why there is none, with the reason alone as `error`.
- * An answer past the cap is cut, and the whole of it saved to the path in `spill`.
- * `stoppedBy` follows "was stopped", as in `" by the user"`.
+ * Why a run gave no answer: the sentence the model reads, and the reason alone as `error`.
+ * `stoppedBy` follows "was stopped", as in `" by the user"`; `context` goes before the cause.
+ */
+export function noAnswer(
+  label: string,
+  why:
+    | { stoppedBy: string; before: "started" | "answered" }
+    | { cause: string; context?: string },
+  marker = "",
+): { body: string; error: string } {
+  if ("stoppedBy" in why)
+    return {
+      body: `subagent: ${label} was stopped${why.stoppedBy} before it ${why.before}${marker}`,
+      error: `stopped${why.stoppedBy}`,
+    };
+  return {
+    body: `subagent: ${label} failed${marker}: ${why.context ?? ""}${why.cause}`,
+    error: clip(why.cause),
+  };
+}
+
+/**
+ * The child's answer, or why there is none, as `noAnswer` says. An answer past the cap is cut,
+ * and the whole of it saved to the path in `spill`.
  */
 export async function answer(
   label: string,
@@ -46,17 +69,13 @@ export async function answer(
 ): Promise<{ body: string; spill?: Spill; error?: string }> {
   const marker = recovered ? " (recovered after a restart)" : "";
   if (result.status === "aborted")
-    return {
-      body: `subagent: ${label} was stopped${stoppedBy} before it answered${marker}`,
-      error: `stopped${stoppedBy}`,
-    };
-  if (result.status === "failed") {
-    const cause = result.error ?? "no error message";
-    return {
-      body: `subagent: ${label} failed${marker}: ${cause}`,
-      error: clip(cause),
-    };
-  }
+    return noAnswer(label, { stoppedBy, before: "answered" }, marker);
+  if (result.status === "failed")
+    return noAnswer(
+      label,
+      { cause: result.error ?? "no error message" },
+      marker,
+    );
   if (!result.text)
     return {
       body: `subagent: ${label} ended without an answer${marker}`,

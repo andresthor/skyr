@@ -264,3 +264,17 @@ test("a queued background writer returns at once as queued and runs when the slo
   );
   expect(parent.widgets.at(-1)).toBeUndefined();
 });
+
+test("a description's terminal escapes never reach the model: a hostile one starts inert", async () => {
+  const parent = await parentSession({
+    respond: bgRouter(
+      [call({ task: "bg", background: true, description: HOSTILE })],
+      () => fauxAssistantMessage("done"),
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await delivered(parent);
+
+  expectInert(textOf(results(parent.session).get("bg")!).split("\n"), 400);
+});

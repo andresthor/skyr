@@ -13,7 +13,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { loadPi } from "../pi.js";
-import { clip, errnoOf, quoted } from "../tools/render.js";
+import { clip, errnoOf, quoted, sanitize } from "../tools/render.js";
 import { DEFAULT_TOOLS, type loadAgents, parseTools } from "./agents.js";
 import { readStoredResult } from "./child/protocol.js";
 import { registerChildTools } from "./child/tools.js";
@@ -135,7 +135,7 @@ interface Call {
   /** Realpath of `cwd`: the writer-slot and trust key. */
   key: string;
   parentKey: string;
-  /** The trimmed description; the label's description half. */
+  /** The description, sanitized and trimmed; the label's description half. */
   description: string;
   /** The child's id, minted at resolve time so a reserved worktree shares it. */
   id: string;
@@ -308,7 +308,8 @@ export function createRuns(
     params: Static<typeof Task>,
     ctx: Pick<ExtensionContext, "cwd" | "model" | "sessionManager">,
   ): Call {
-    const description = params.description.trim();
+    // Clean where it enters: every label, title, error and answer built from it reads this one.
+    const description = sanitize(params.description).trim();
     if (description === "")
       throw fail(
         "give a short description: 3-5 words for the user, in description",

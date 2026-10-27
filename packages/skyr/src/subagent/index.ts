@@ -11,9 +11,9 @@ import { loadPi } from "../pi.js";
 import { publishTasks } from "../tengi.js";
 import {
   firstLine,
-  registerTextMessageRenderer,
   type Segment,
   seconds,
+  textMessageRenderer,
   tokens,
   toolRow,
 } from "../tools/render.js";
@@ -172,7 +172,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
     },
   });
 
-  registerTextMessageRenderer(pi, MESSAGE_TYPE, PREVIEW_LINES);
+  pi.registerMessageRenderer(MESSAGE_TYPE, textMessageRenderer(PREVIEW_LINES));
 
   pi.registerCommand("subagents", {
     description:

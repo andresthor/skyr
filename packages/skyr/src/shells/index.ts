@@ -20,7 +20,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import type { PiModule } from "../pi.js";
 import { publishTasks, type TaskRef } from "../tengi.js";
-import { registerTextMessageRenderer } from "../tools/render.js";
+import { textMessageRenderer } from "../tools/render.js";
 import { Moved, movingOperations } from "./exec.js";
 import { identify } from "./job.js";
 import {
@@ -174,7 +174,7 @@ export function wireShells(
       pi.setActiveTools([...names, "bash_stop"]);
   };
 
-  registerTextMessageRenderer(pi, MESSAGE_TYPE, PREVIEW_LINES);
+  pi.registerMessageRenderer(MESSAGE_TYPE, textMessageRenderer(PREVIEW_LINES));
 
   let session: ReturnType<typeof createShellSession> | undefined;
   let stopDrawing: (() => void) | undefined;

@@ -12,9 +12,9 @@ import {
   TruncatedText,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { loadPi } from "../pi.js";
-import { publishTasks } from "../tengi.js";
+import { isRecord, publishTasks } from "../tengi.js";
 import {
   firstLine,
   messageLines,
@@ -104,14 +104,29 @@ function lanesOf(details: unknown): RunSnapshot[] | undefined {
 }
 
 /**
- * The tasks a call's arguments name, for its row: the string fields of each, from a whole or a
- * half-streamed `tasks` array, or from the one flat task a call made before `tasks` existed.
+ * `tasks` that some models send as a JSON string, parsed; anything else, or a string that is not
+ * JSON, as it is. Pi's validator then wraps a lone task object in an array.
+ */
+function parseTasks(tasks: unknown): unknown {
+  if (typeof tasks !== "string") return tasks;
+  try {
+    const parsed: unknown = JSON.parse(tasks);
+    return parsed;
+  } catch {
+    return tasks;
+  }
+}
+
+/**
+ * The tasks a call's arguments name, for its row: the string fields of each, from a whole,
+ * half-streamed or JSON-string `tasks` array, a lone task object, or the one flat task a call
+ * made before `tasks` existed.
  */
 function tasksOf(
   args: unknown,
 ): { agent?: string; description?: string; cwd?: string }[] {
   if (typeof args !== "object" || args === null) return [];
-  const raw: unknown = "tasks" in args ? args.tasks : args;
+  const raw = "tasks" in args ? parseTasks(args.tasks) : args;
   const tasks: unknown[] = Array.isArray(raw) ? raw : [raw];
   return tasks.flatMap((task) => {
     if (typeof task !== "object" || task === null) return [];
@@ -157,6 +172,12 @@ export function registerSubagent(pi: ExtensionAPI): void {
     promptSnippet:
       "Delegate self-contained tasks to subagents, several in parallel in one call",
     parameters: Params,
+    // A new object: Pi passes the call's own arguments, which the session saves as they came.
+    prepareArguments: (args) =>
+      // Anything still off the schema goes back for Pi's validator to report.
+      (isRecord(args) && "tasks" in args
+        ? { ...args, tasks: parseTasks(args.tasks) }
+        : args) as Static<typeof Params>,
     prepareLoadout: () => ({ descriptions: { subagent: description } }),
     async execute(_toolCallId, { tasks, background }, signal, _onUpdate, ctx) {
       if (!background) {

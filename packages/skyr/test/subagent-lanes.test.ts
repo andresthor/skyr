@@ -5,7 +5,11 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  type Theme,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { expect, test, vi } from "vitest";
 import {
   agentFile,
@@ -33,6 +37,14 @@ const spentBy = (details: unknown) =>
           : 0),
       0,
     );
+
+const plain = {
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+} as unknown as Theme;
+
+type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 
 const nobody = () => {
   throw new Error("a child started");
@@ -428,6 +440,103 @@ test("a failed task's spend still counts: toward its call's usage, and toward th
   expect(session.getSessionStats().tokens.input).toBe(
     parentInput + spentBy(mixed.details) + spentBy(failed.details),
   );
+});
+
+test("a stringified tasks array runs as the array it encodes", async () => {
+  const parent = await parentSession({
+    respond: router(
+      [
+        fauxToolCall(
+          "subagent",
+          {
+            tasks: JSON.stringify([
+              { description: "a", task: "a" },
+              { description: "b", task: "b" },
+            ]),
+          },
+          { id: "s" },
+        ),
+      ],
+      (context) => fauxAssistantMessage(`ANSWER ${taskOf(context)}`),
+    ),
+  });
+
+  await parent.session.prompt("go");
+
+  const result = results(parent.session).get("s")!;
+  expect(result.isError).toBe(false);
+  expect(textOf(result)).toMatch(/^subagent: 2 tasks · 2 done · /);
+  expect(
+    parent.requests
+      .map(taskOf)
+      .filter((t) => t !== "go")
+      .sort(),
+  ).toEqual(["a", "b"]);
+});
+
+test("a lone task object runs as one lane", async () => {
+  const parent = await parentSession({
+    respond: router(
+      [
+        fauxToolCall(
+          "subagent",
+          { tasks: { description: "solo", task: "solo" } },
+          { id: "s" },
+        ),
+      ],
+      () => fauxAssistantMessage("ok"),
+    ),
+  });
+
+  await parent.session.prompt("go");
+
+  const result = results(parent.session).get("s")!;
+  expect(result.isError).toBe(false);
+  expect(textOf(result)).toMatch(
+    /^subagent: 1 task · done · [^\n]*\n[\s\S]*<subagent-answer task="1 of 1" description="solo" /,
+  );
+});
+
+test("a shimmed call's row renders its lanes from the raw arguments", async () => {
+  const scout = { agent: "scout", description: "a", task: "a" };
+  const tasks = [scout, { description: "b", task: "b" }];
+  const parent = await parentSession({
+    respond: router(
+      [
+        fauxToolCall(
+          "subagent",
+          { tasks: JSON.stringify(tasks) },
+          { id: "string" },
+        ),
+        fauxToolCall("subagent", { tasks: scout }, { id: "lone" }),
+      ],
+      () => fauxAssistantMessage("ok"),
+    ),
+    userAgents: { "scout.md": agentFile("Finds things") },
+  });
+
+  await parent.session.prompt("go");
+
+  // The session keeps the arguments as the model sent them.
+  const saved = new Map(
+    parent.session.messages.flatMap((m) =>
+      m.role === "assistant"
+        ? m.content.flatMap((c) =>
+            c.type === "toolCall" ? [[c.id, c.arguments] as const] : [],
+          )
+        : [],
+    ),
+  );
+  expect(typeof saved.get("string")?.tasks).toBe("string");
+  const tool = parent.session.extensionRunner.getToolDefinition("subagent");
+  const line = (id: string, isPartial: boolean) =>
+    tool
+      ?.renderCall?.(saved.get(id), plain, { isPartial } as RenderContext)
+      .render(200)[0]
+      ?.trimEnd();
+  expect(line("string", true)).toBe('subagent 2 tasks · scout "a", "b"');
+  expect(line("string", false)).toBe("subagent 2 tasks · scout");
+  expect(line("lone", false)).toBe('subagent scout "a"');
 });
 
 test("an old flat task call is refused, naming its keys", async () => {

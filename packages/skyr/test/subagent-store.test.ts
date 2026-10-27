@@ -3,7 +3,6 @@ import { createRunStore, type RunSnapshot } from "../src/subagent/store.js";
 
 const running: RunSnapshot = {
   id: "c1",
-  toolCallId: "t1",
   description: "look around",
   status: "running",
   startedAt: 0,

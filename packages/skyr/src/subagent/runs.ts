@@ -104,7 +104,6 @@ interface Runs {
    * rejects: with its own error after Esc, else with a model-facing one; any other stop settles.
    */
   run(
-    toolCallId: string,
     task: Static<typeof Task>,
     signal: AbortSignal | undefined,
     ctx: CallContext,
@@ -113,11 +112,7 @@ interface Runs {
    * Background. Resolves and claims as `run` does, then returns the start snapshot. The child
    * ignores Esc and queues its own delivery for the idle parent; nothing after the claim throws.
    */
-  start(
-    toolCallId: string,
-    task: Static<typeof Task>,
-    ctx: CallContext,
-  ): RunSnapshot;
+  start(task: Static<typeof Task>, ctx: CallContext): RunSnapshot;
   /** Sends every pending background answer as one message; `agent_settled`. */
   flush(): void;
   /** `/subagents stop <id|all>`: the notice. */
@@ -246,7 +241,6 @@ async function sweepJobs(
       text,
       details: {
         id: entry.name,
-        toolCallId: `recovered-${entry.name.slice(0, 8)}`,
         ...(stored.agent !== undefined ? { agent: stored.agent } : {}),
         description: stored.description,
         status: stored.status,
@@ -476,12 +470,11 @@ export function createRuns(
    * Claims a resolved call: the continue guard, the writer slot, the stop handle and the store
    * entry. The caller releases each once the run ends.
    */
-  function claim(call: Call, toolCallId: string, background: boolean) {
+  function claim(call: Call, background: boolean) {
     if (call.continueOf !== undefined) runningContinues.add(call.id);
     const slot = call.writer ? takeSlot(call.key, call.label) : undefined;
     const snapshot: RunSnapshot = {
       id: call.id,
-      toolCallId,
       agent: call.agent,
       description: call.description,
       status: slot?.behind ? "queued" : "running",
@@ -598,7 +591,6 @@ export function createRuns(
    * call, as `run` says; `signal` is the call's Esc, which a background call does not pass.
    */
   function launch(
-    toolCallId: string,
     task: Static<typeof Task>,
     ctx: CallContext,
     background: boolean,
@@ -608,7 +600,7 @@ export function createRuns(
     // Read before the claim: nothing that can throw sits between it and the release below.
     const parentFile = ctx.sessionManager.getSessionFile();
     // Before the first await: Pi starts a batch's calls in order only up to that point.
-    const { slot, own, snapshot } = claim(call, toolCallId, background);
+    const { slot, own, snapshot } = claim(call, background);
     let started = snapshot;
     const { label, key } = call;
     // A continued run reuses the child's id (via the record the resolve read).
@@ -765,12 +757,12 @@ export function createRuns(
 
   return {
     store,
-    async run(toolCallId, task, signal, ctx) {
-      return launch(toolCallId, task, ctx, false, signal).settled;
+    async run(task, signal, ctx) {
+      return launch(task, ctx, false, signal).settled;
     },
-    start(toolCallId, task, ctx) {
+    start(task, ctx) {
       const born = generation;
-      const { started, settled } = launch(toolCallId, task, ctx, true);
+      const { started, settled } = launch(task, ctx, true);
       void settled.then((outcome) => {
         if (born !== generation) return;
         pending.push(outcome);

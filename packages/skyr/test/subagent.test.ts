@@ -113,7 +113,6 @@ function resultRow(
 test("a background call's row renders from its saved details under its own marker", () => {
   const started = {
     id: "abcdef0123",
-    toolCallId: "t",
     agent: "scout",
     description: "look",
     status: "running",
@@ -162,7 +161,6 @@ test("a child's text and description cannot reach the terminal as escapes, the r
   const tool = registered();
   const run = {
     id: "1",
-    toolCallId: "t",
     agent: "scout",
     description: HOSTILE,
     status: "done",

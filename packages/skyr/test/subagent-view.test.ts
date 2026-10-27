@@ -4,7 +4,6 @@ import { widgetLines } from "../src/subagent/view.js";
 
 const running: RunSnapshot = {
   id: "abcdef0123",
-  toolCallId: "t1",
   agent: "scout",
   description: "look around",
   status: "running",

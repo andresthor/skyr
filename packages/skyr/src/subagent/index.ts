@@ -112,9 +112,15 @@ export function registerSubagent(pi: ExtensionAPI): void {
     promptSnippet: "Delegate a self-contained task to a subagent",
     parameters: Params,
     prepareLoadout: () => ({ descriptions: { subagent: description } }),
-    async execute(toolCallId, { background, ...task }, signal, _onUpdate, ctx) {
+    async execute(
+      _toolCallId,
+      { background, ...task },
+      signal,
+      _onUpdate,
+      ctx,
+    ) {
       if (!background) {
-        const outcome = await runs.run(toolCallId, task, signal, ctx);
+        const outcome = await runs.run(task, signal, ctx);
         // Only a foreground result needs the id tag: a background one's delivered header carries it.
         return {
           content: [
@@ -128,7 +134,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
           isError: outcome.isError,
         };
       }
-      const started = runs.start(toolCallId, task, ctx);
+      const started = runs.start(task, ctx);
       return {
         content: [{ type: "text", text: startedText(started) }],
         details: started,

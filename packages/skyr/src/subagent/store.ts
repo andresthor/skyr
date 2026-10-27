@@ -10,7 +10,6 @@ export type RunStatus = "queued" | "running" | "done" | "failed" | "aborted";
 
 export interface RunSnapshot {
   id: string;
-  toolCallId: string;
   /** Absent for an ad-hoc child. */
   agent?: string;
   description: string;

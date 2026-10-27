@@ -7,13 +7,12 @@ import type {
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import { loadPi } from "../../pi.js";
-import { zeroUsage } from "./protocol.js";
+import { addUsage, zeroUsage } from "./protocol.js";
 import type {
   AssistantMessage,
   ChildEvent,
   ChildResult,
   ChildSpec,
-  Usage,
 } from "./types.js";
 
 /** Provider sources the parent carries; the child's own file-backed runtime then passes none. */
@@ -34,23 +33,6 @@ export interface ChildRun {
 }
 
 const emptyUsage = () => zeroUsage();
-
-function addUsage(a: Usage, b: Usage): Usage {
-  return {
-    input: a.input + b.input,
-    output: a.output + b.output,
-    cacheRead: a.cacheRead + b.cacheRead,
-    cacheWrite: a.cacheWrite + b.cacheWrite,
-    totalTokens: a.totalTokens + b.totalTokens,
-    cost: {
-      input: a.cost.input + b.cost.input,
-      output: a.cost.output + b.cost.output,
-      cacheRead: a.cost.cacheRead + b.cost.cacheRead,
-      cacheWrite: a.cost.cacheWrite + b.cost.cacheWrite,
-      total: a.cost.total + b.cost.total,
-    },
-  };
-}
 
 function openResumable(pi: Awaited<ReturnType<typeof loadPi>>, file: string) {
   if (!existsSync(file))

@@ -1,5 +1,6 @@
 /** The job-dir protocol both sides of the boundary speak: one definition, defined here only. */
 import { rename, writeFile } from "node:fs/promises";
+import type { Usage } from "./types.js";
 
 /** Bump this when the snapshot or result fields change; readers refuse other versions. */
 export const PROTOCOL = 1;
@@ -38,6 +39,30 @@ export const zeroUsage = (): import("./types.js").Usage => ({
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 });
+
+/** `a + b` field by field, keeping a split (cache retention, reasoning) either one reports. */
+export function addUsage(a: Usage, b: Usage): Usage {
+  const split = (x: number | undefined, y: number | undefined) =>
+    x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0);
+  const cacheWrite1h = split(a.cacheWrite1h, b.cacheWrite1h);
+  const reasoning = split(a.reasoning, b.reasoning);
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    cacheRead: a.cacheRead + b.cacheRead,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
+    ...(cacheWrite1h !== undefined ? { cacheWrite1h } : {}),
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    totalTokens: a.totalTokens + b.totalTokens,
+    cost: {
+      input: a.cost.input + b.cost.input,
+      output: a.cost.output + b.cost.output,
+      cacheRead: a.cost.cacheRead + b.cost.cacheRead,
+      cacheWrite: a.cost.cacheWrite + b.cost.cacheWrite,
+      total: a.cost.total + b.cost.total,
+    },
+  };
+}
 
 /** Atomic write: same-directory temp then rename, so a reader never sees a torn file. */
 export async function writeJson(target: string, data: unknown): Promise<void> {

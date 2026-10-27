@@ -4,7 +4,13 @@ import { mkdtempSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessage,
+  type AssistantMessageEventStream,
+  createAssistantMessageEventStream,
+  fauxAssistantMessage,
+  fauxProvider,
+} from "@earendil-works/pi-ai";
 import { expect, onTestFinished, test } from "vitest";
 import { runChild } from "../src/subagent/child/main.js";
 
@@ -104,4 +110,46 @@ test("a result.json that cannot be written becomes a failed child that says why"
   const result = await runChild(dir, { providers });
   expect(result.status).toBe("failed");
   expect(result.error).toContain("could not write result.json");
+});
+
+test("a child's summed usage keeps the cache and reasoning splits its provider reports", async () => {
+  // Faux reports no splits, so this provider adds them to every answer it streams.
+  const withSplits = (message: AssistantMessage): AssistantMessage => ({
+    ...message,
+    usage: { ...message.usage, cacheWrite1h: 2, reasoning: 3 },
+  });
+  const split =
+    <A extends unknown[]>(
+      stream: (...args: A) => AssistantMessageEventStream,
+    ) =>
+    (...args: A) => {
+      const inner = stream(...args);
+      const outer = createAssistantMessageEventStream();
+      void (async () => {
+        for await (const event of inner)
+          outer.push(
+            event.type === "done"
+              ? { ...event, message: withSplits(event.message) }
+              : event,
+          );
+        outer.end(withSplits(await inner.result()));
+      })();
+      return outer;
+    };
+  const provider = {
+    ...faux.provider,
+    stream: split(faux.provider.stream),
+    streamSimple: split(faux.provider.streamSimple),
+  };
+  const dir = jobDir();
+  await writeFile(join(dir, "spec.json"), specOf(), "utf8");
+  const result = await runChild(dir, {
+    providers: {
+      ...providers,
+      getRegisteredNativeProvider: (id: string) =>
+        id === "faux" ? provider : undefined,
+    },
+  });
+  expect(result.status).toBe("done");
+  expect(result.usage).toMatchObject({ cacheWrite1h: 2, reasoning: 3 });
 });

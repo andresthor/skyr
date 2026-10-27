@@ -1,4 +1,9 @@
-/** The running subagents, as plain snapshots every live UI surface reads from. */
+/**
+ * The running subagents, as plain snapshots every live UI surface reads from, and the words that
+ * name a run and its progress.
+ */
+import type { TaskItem } from "../tengi.js";
+import { clip } from "../tools/render.js";
 import type { ChildEvent } from "./runner.js";
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "aborted";
@@ -107,3 +112,34 @@ export function createRunStore(): RunStore {
     },
   };
 }
+
+/** A run's turns, tools and state, or why it waits; empty for a queued run with nobody ahead. */
+export function progressOf(run: RunSnapshot): string {
+  if (run.status === "queued") return run.behind ? `behind ${run.behind}` : "";
+  return [
+    count(run.turns, "turn"),
+    count(run.toolCalls, "tool"),
+    run.tool,
+    run.worktree && "worktree",
+    run.activity === "unknown" && "stalled",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+export function taskOf(run: RunSnapshot): TaskItem {
+  const detail = progressOf(run);
+  return {
+    id: run.id,
+    title: labelOf(run),
+    status: run.status,
+    ...(detail ? { detail } : {}),
+    startedAt: run.startedAt,
+  };
+}
+
+export const labelOf = (run: { agent?: string; description: string }) =>
+  run.agent ?? `"${clip(run.description)}"`;
+
+export const count = (n: number, noun: string) =>
+  `${n} ${noun}${n === 1 ? "" : "s"}`;

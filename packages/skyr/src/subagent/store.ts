@@ -137,8 +137,9 @@ export function taskOf(run: RunSnapshot): TaskItem {
   };
 }
 
+/** `scout "Map store"` for an agent's run, `"Map store"` for an ad-hoc one. */
 export const labelOf = (run: { agent?: string; description: string }) =>
-  run.agent ?? `"${clip(run.description)}"`;
+  `${run.agent ? `${run.agent} ` : ""}"${clip(run.description)}"`;
 
 export const count = (n: number, noun: string) =>
   `${n} ${noun}${n === 1 ? "" : "s"}`;

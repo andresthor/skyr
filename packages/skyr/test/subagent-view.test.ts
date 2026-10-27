@@ -18,9 +18,9 @@ test("the widget line marks a stalled run, and only while its activity is unknow
   const line = (activity: RunSnapshot["activity"]) =>
     widgetLines([{ ...running, activity }], 3_000)?.[0];
   expect(line("unknown")).toBe(
-    "● running scout · 1 turn · 1 tool · grep · stalled · 3s · abcdef01",
+    '● running scout "look around" · 1 turn · 1 tool · grep · stalled · 3s · abcdef01',
   );
   expect(line("working")).toBe(
-    "● running scout · 1 turn · 1 tool · grep · 3s · abcdef01",
+    '● running scout "look around" · 1 turn · 1 tool · grep · 3s · abcdef01',
   );
 });

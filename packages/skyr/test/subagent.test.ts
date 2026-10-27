@@ -123,7 +123,7 @@ test("a background call's row renders from its saved details under its own marke
     background: true,
   };
   expect(resultRow(registered(), started)[0]?.trimEnd()).toBe(
-    "↗ background · scout · abcdef01",
+    '↗ background · scout "look" · abcdef01',
   );
 });
 
@@ -265,7 +265,7 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
     const result = results(parent.session).get(task);
     expect(result?.isError).toBe(true);
     expect(result && textOf(result)).toMatch(
-      /^subagent: scout was stopped by the user before it answered\n\(id [0-9a-f]{8}\)$/,
+      /^subagent: scout "run scout" was stopped by the user before it answered\n\(id [0-9a-f]{8}\)$/,
     );
   }
   expect(parent.widgets.at(-1)).toBeUndefined();
@@ -565,13 +565,13 @@ test("a child that ends aborted with nobody stopping it names no stopper, and a 
     /^subagent: no agent "broken"; available: faraway, scout\. Agent files that failed to load: .*broken\.md: .*description/,
   );
   expect(text("f")).toMatch(
-    /^subagent: faraway: model "nowhere\/none" is not available .* set `model:` on the call or in the agent file/,
+    /^subagent: faraway "run faraway": model "nowhere\/none" is not available .* set `model:` on the call or in the agent file/,
   );
   expect(text("s")).toMatch(
-    /^subagent: scout failed: provider exploded\n\(id [0-9a-f]{8}\)$/,
+    /^subagent: scout "run scout" failed: provider exploded\n\(id [0-9a-f]{8}\)$/,
   );
   expect(text("a")).toMatch(
-    /^subagent: scout was stopped before it answered\n\(id [0-9a-f]{8}\)$/,
+    /^subagent: scout "run scout" was stopped before it answered\n\(id [0-9a-f]{8}\)$/,
   );
   expect(parent.notices).toHaveLength(1);
   expect(parent.notices[0]).toMatch(/broken\.md/);
@@ -620,7 +620,7 @@ test("a running call's row is its call line alone, and the widget lists the run;
   const lines = parent.widgets.at(-1);
   expect(lines).toHaveLength(1);
   const id8 =
-    /^● running scout · 0 turns · 0 tools · \d+s · ([0-9a-f]{8})$/.exec(
+    /^● running scout "run scout" · 0 turns · 0 tools · \d+s · ([0-9a-f]{8})$/.exec(
       lines?.[0] ?? "",
     )?.[1];
   expect(id8).toBeDefined();

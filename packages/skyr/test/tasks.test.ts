@@ -7,7 +7,14 @@ import {
   type EventBus,
 } from "@earendil-works/pi-coding-agent";
 import { expect, onTestFinished, test } from "vitest";
-import { call, hold, parentSession, router, taskHost } from "./session.js";
+import {
+  agentFile,
+  call,
+  hold,
+  parentSession,
+  router,
+  taskHost,
+} from "./session.js";
 import { gated, gateFile } from "./shells-jobs.js";
 
 /** A background job that holds until the returned gate exists, and is released if the test ends first. */
@@ -69,7 +76,11 @@ const subagents: Begin = async (bus) => {
   const { session } = await parentSession({
     mode: "tui",
     eventBus: bus,
-    respond: router([call({ task: "look" })], held.step),
+    respond: router(
+      [call({ agent: "scout", task: "look", description: "look around" })],
+      held.step,
+    ),
+    userAgents: { "scout.md": agentFile("Finds things") },
   });
   const run = session.prompt("go");
   await held.entered;
@@ -84,7 +95,11 @@ const subagents: Begin = async (bus) => {
 
 const sources = [
   [SHELLS, shells, { title: expect.stringContaining("until [ -e") }],
-  [SUBAGENTS, subagents, { title: '"run look"', detail: "0 turns · 0 tools" }],
+  [
+    SUBAGENTS,
+    subagents,
+    { title: 'scout "look around"', detail: "0 turns · 0 tools" },
+  ],
 ] as const;
 
 test.each(sources)(

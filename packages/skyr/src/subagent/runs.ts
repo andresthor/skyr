@@ -226,7 +226,7 @@ async function sweepJobs(
     }
     await rm(jobDir, { recursive: true, force: true }).catch(() => undefined);
     const { text } = await answer(
-      stored.agent ?? `"${clip(stored.description)}"`,
+      labelOf(stored),
       entry.name,
       {
         status: stored.status,

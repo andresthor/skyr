@@ -23,6 +23,21 @@ test.each(["print", "json"] as const)(
   },
 );
 
+test.each(["rpc", "json", "print"] as const)(
+  "outside tui skyr never sets a footer (%s)",
+  async (mode) => {
+    const { ui, calls } = recordingUi();
+    const parent = await parentSession({
+      respond: () => fauxAssistantMessage("ok"),
+      mode,
+      ui,
+    });
+    await parent.session.prompt("go");
+    await parent.session.reload();
+    expect(calls.filter(({ method }) => method === "setFooter")).toEqual([]);
+  },
+);
+
 /** A held foreground child, so the subagent surface has something to draw. */
 async function withRunningChild(mode: "tui" | "rpc" | "json" | "print") {
   const held = hold();

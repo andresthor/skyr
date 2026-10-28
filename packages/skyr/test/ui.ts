@@ -288,6 +288,95 @@ export const WIDTHS_SWEEP: readonly number[] = Array.from(
   (_, i) => i,
 );
 
+type Footer = Component & { dispose?(): void };
+
+/** What a footer factory is handed to draw with: the part of Pi's `TUI` skyr reads. */
+interface FooterTui {
+  requestRender(): void;
+  terminal: { rows: number; columns: number };
+}
+
+/**
+ * A recording `setFooter` that holds the footer as Pi does: a set disposes the held component
+ * first, then calls the factory with `(tui, theme, footerData)` and holds what it returns.
+ * `footerData` is Pi's read-only provider over state the test controls. The held footer is
+ * disposed when the test ends.
+ */
+function footerHost() {
+  let held: Footer | undefined;
+  // Pi disposes the footer when its session ends, which is what releases the footer's clock tick
+  onTestFinished(() => {
+    held?.dispose?.();
+    held = undefined;
+  });
+  let renderRequests = 0;
+  const waiting: (() => void)[] = [];
+  let branch: string | null | Error = "main";
+  const statuses = new Map<string, string>();
+  const listeners = new Set<() => void>();
+  const footerData = {
+    getGitBranch() {
+      if (branch instanceof Error) throw branch;
+      return branch;
+    },
+    getExtensionStatuses: () => statuses as ReadonlyMap<string, string>,
+    getAvailableProviderCount: () => 1,
+    onBranchChange(callback: () => void) {
+      listeners.add(callback);
+      return () => void listeners.delete(callback);
+    },
+  };
+  return {
+    /** The extension statuses `getExtensionStatuses` reports; a test fills it. */
+    statuses,
+    /** The component Pi holds in the footer slot, if an extension set one. */
+    footer: (): Footer | undefined => held,
+    /** How many repaints the footer has asked of Pi's TUI. */
+    renders: () => renderRequests,
+    /** Settles at the footer's next repaint request, which is how a test waits for an event-driven change. */
+    nextRender: () => new Promise<void>((done) => waiting.push(done)),
+    /** Branch subscribers still live. */
+    subscribers: () => listeners.size,
+    /**
+     * Changes the branch and tells the subscribers, as Pi's git watcher does. An `Error` makes
+     * `getGitBranch` throw it from then on.
+     */
+    setBranch(next: string | null | Error) {
+      branch = next;
+      for (const callback of [...listeners]) callback();
+    },
+    /** Disposes the held footer and empties the slot, as Pi's `resetExtensionUI` does. */
+    resetFooter() {
+      held?.dispose?.();
+      held = undefined;
+    },
+    setFooter(
+      factory:
+        | ((
+            tui: FooterTui,
+            theme: typeof plainTheme,
+            data: typeof footerData,
+          ) => Footer)
+        | undefined,
+    ) {
+      held?.dispose?.();
+      held = undefined;
+      if (!factory) return;
+      held = factory(
+        {
+          requestRender() {
+            renderRequests++;
+            for (const done of waiting.splice(0)) done();
+          },
+          terminal: { rows: 40, columns: 100 },
+        },
+        plainTheme,
+        footerData,
+      );
+    },
+  };
+}
+
 /** One call skyr made on a UI context. */
 interface UiCall {
   method: string;
@@ -295,11 +384,13 @@ interface UiCall {
 }
 
 /**
- * A UI context that records every surface call skyr can make, in order. `setWidget` also holds
- * widgets as `widgetHost` does; `overrides` replace any method.
+ * A UI context that records every surface call skyr can make, in order. `setWidget` and
+ * `setFooter` also hold what they are given as `widgetHost` and `footerHost` do; `overrides`
+ * replace any method.
  */
 export function recordingUi(overrides: Partial<ExtensionUIContext> = {}) {
   const { setWidget, ...widgets } = widgetHost();
+  const { setFooter, ...footers } = footerHost();
   const calls: UiCall[] = [];
   const recorder =
     (method: string, then?: (...args: never[]) => unknown) =>
@@ -311,7 +402,7 @@ export function recordingUi(overrides: Partial<ExtensionUIContext> = {}) {
     setWidget: recorder("setWidget", setWidget),
     setStatus: recorder("setStatus"),
     setTitle: recorder("setTitle"),
-    setFooter: recorder("setFooter"),
+    setFooter: recorder("setFooter", setFooter),
     setWorkingIndicator: recorder("setWorkingIndicator"),
     setWorkingMessage: recorder("setWorkingMessage"),
     setEditorComponent: recorder("setEditorComponent"),
@@ -321,7 +412,7 @@ export function recordingUi(overrides: Partial<ExtensionUIContext> = {}) {
   };
   // The object holds the surface skyr calls, not Pi's whole context: one cast, here.
   const ui = { ...methods, ...overrides } as unknown as ExtensionUIContext;
-  return { ui, calls, ...widgets };
+  return { ui, calls, ...widgets, ...footers };
 }
 
 /**

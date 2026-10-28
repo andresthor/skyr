@@ -1,5 +1,5 @@
 /**
- * The jobs as rows: a bar row for each running or lingering job, and the `/shells` listing.
+ * The jobs as rows: a bar row for each running, lingering or failed job, and the `/shells` listing.
  * Strings are sanitized but not cut to a width; the caller fits them to its surface.
  */
 import type { BarRow } from "../chrome/bar.js";
@@ -7,14 +7,18 @@ import { formatDuration, formatElapsed } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
 import { active, type ShellSnapshot, titleOf } from "./store.js";
 
-/** A running or lingering job as a bar row. */
+/** A running or lingering job as a bar row; a job that exited non-zero, as a failed one. */
 export function barRow(job: ShellSnapshot): BarRow {
+  const failed = job.status === "failed";
   return {
     id: sanitize(job.id),
-    mark: "running",
+    mark: failed ? "failed" : "running",
     label: titleOf(job.command),
     background: true,
     ...(job.lingering && { now: "lingering" }),
+    ...(failed && {
+      why: job.exitCode === undefined ? "failed" : `exit ${job.exitCode}`,
+    }),
     startedAt: job.startedAt,
   };
 }

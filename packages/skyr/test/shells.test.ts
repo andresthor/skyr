@@ -433,7 +433,7 @@ describe("a slow bash call in a session", () => {
       respond: script(call(slow(gateFile()), "c1")),
     });
     const [source] = attached;
-    const off = source!.subscribe(changes);
+    const off = source!.subscribe(changes, vi.fn());
     await rt.session.prompt("go");
     expect(changes).toHaveBeenCalled();
 
@@ -455,6 +455,30 @@ describe("a slow bash call in a session", () => {
 
     await rt.quit();
     expect(attached.size).toBe(0);
+  });
+
+  test("a job that exits non-zero is reported once, and a stopped one is not", async () => {
+    const { bar, attached } = recordingBar();
+    const { rt, gate, job } = await runningJob({ bar });
+    const failed = vi.fn();
+    const [source] = attached;
+    source!.subscribe(vi.fn(), failed);
+
+    const delivery = rt.nextDelivery();
+    writeFileSync(gate, "");
+    await delivery;
+    await rt.session.waitForIdle();
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed).toHaveBeenCalledWith(
+      expect.objectContaining({ id: job.id, mark: "failed", why: "exit 4" }),
+    );
+
+    const stopped = await runningJob({ bar });
+    const [, second] = attached;
+    const stoppedFailed = vi.fn();
+    second!.subscribe(vi.fn(), stoppedFailed);
+    await stopped.rt.session.prompt("/shells stop all");
+    expect(stoppedFailed).not.toHaveBeenCalled();
   });
 
   test("/shells lists and stops a job, telling the model without starting a turn", async () => {

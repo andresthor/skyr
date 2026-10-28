@@ -1,5 +1,6 @@
 /**
- * Subagents as lines. Running ones for the bar and the `/subagents` listing, sanitized; ended ones
+ * Subagents as lines. Running ones, and failed ones, for the bar; running ones for the `/subagents`
+ * listing, sanitized; ended ones
  * for a delivered answer and a call's row, sanitized and left for their rows to cut.
  */
 import type { BarRow } from "../chrome/bar.js";
@@ -8,7 +9,13 @@ import { glyphsOf, tierOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
 import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
-import { count, labelOf, progressOf, type RunSnapshot } from "./store.js";
+import {
+  count,
+  endedWithoutAnswer,
+  labelOf,
+  progressOf,
+  type RunSnapshot,
+} from "./store.js";
 
 const LISTING_WIDTH = 100;
 
@@ -35,8 +42,9 @@ export function listingLines(
   });
 }
 
-/** A live run as a bar row. */
+/** A live run as a bar row; a run that ended without an answer, as a failed one. */
 export function barRow(run: RunSnapshot): BarRow {
+  const failed = endedWithoutAnswer(run);
   const now =
     run.status === "queued"
       ? run.behind && `behind ${run.behind}`
@@ -45,10 +53,11 @@ export function barRow(run: RunSnapshot): BarRow {
         : run.tool;
   return {
     id: run.id,
-    mark: run.status === "queued" ? "queued" : "running",
+    mark: failed ? "failed" : run.status === "queued" ? "queued" : "running",
     label: sanitize(labelOf(run)),
     background: run.background === true,
     ...(now && { now: sanitize(now) }),
+    ...(failed && { why: sanitize(run.error ?? "failed") }),
     startedAt: run.startedAt,
   };
 }

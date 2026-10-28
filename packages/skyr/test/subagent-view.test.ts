@@ -37,6 +37,24 @@ test("a stalled run's bar row says stalled, and only while its activity is unkno
   expect(now("working")).toBe("grep");
 });
 
+test("a run that ended in failure or without an answer is a failed row with its reason; a stopped one is not", () => {
+  const ended = (fields: Partial<RunSnapshot>) =>
+    barRow({ ...running, endedAt: 4_000, ...fields });
+  expect(ended({ status: "failed", error: "429 rate limited" })).toMatchObject({
+    mark: "failed",
+    why: "429 rate limited",
+  });
+  expect(
+    ended({ status: "done", error: "ended without an answer" }),
+  ).toMatchObject({
+    mark: "failed",
+  });
+  expect(ended({ status: "aborted", error: "stopped by the user" }).mark).toBe(
+    "running",
+  );
+  expect(ended({ status: "done" }).why).toBeUndefined();
+});
+
 test("a queued run's bar row says who it waits behind, and a hostile label arrives inert", () => {
   const queued = barRow({
     ...running,

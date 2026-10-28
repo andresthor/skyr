@@ -37,6 +37,18 @@ test("a running job is a running, background bar row with its title", () => {
   });
 });
 
+test("a job that exited non-zero is a failed row with its exit code, and one with no code says failed", () => {
+  const failed = job("dddd0004", {
+    status: "failed",
+    exitCode: 2,
+    endedAt: 5_000,
+  });
+  expect(barRow(failed)).toMatchObject({ mark: "failed", why: "exit 2" });
+  expect(barRow({ ...failed, exitCode: undefined }).why).toBe("failed");
+  expect(barRow(done).mark).toBe("running");
+  expect(barRow(running).why).toBeUndefined();
+});
+
 test("a lingering job's row says lingering", () => {
   expect(barRow(lingering)).toMatchObject({
     label: "make watch",

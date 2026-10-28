@@ -269,7 +269,17 @@ export function wireShells(
     detachBar = bar.attach({
       tab: "shells",
       rows: () => own.jobs().filter(active).map(barRow),
-      subscribe: (changed) => own.subscribe(changed),
+      subscribe: (changed, failed) => {
+        const reported = new Set<string>();
+        return own.subscribe(() => {
+          for (const job of own.jobs())
+            if (job.status === "failed" && !reported.has(job.id)) {
+              reported.add(job.id);
+              failed(barRow(job));
+            }
+          changed();
+        });
+      },
     });
 
     pi.registerTool({

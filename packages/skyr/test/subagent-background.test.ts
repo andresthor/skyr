@@ -463,3 +463,44 @@ test("a reload stops every background lane and no answer reaches the next sessio
   await parent.session.waitForIdle();
   expect(parentTurns(parent)).toHaveLength(2);
 });
+
+/** A child that fails with a provider error, whatever its task. */
+const exploding: FauxResponseFactory = () =>
+  fauxAssistantMessage("", {
+    stopReason: "error",
+    errorMessage: "provider exploded",
+  });
+
+test("a background run that fails is reported to the bar once; a stopped one is not; a foreground failure is not", async () => {
+  const held = hold();
+  const parent = await parentSession({
+    mode: "tui",
+    respond: bgRouter(
+      [
+        call({ prompt: "boom", background: true }),
+        call({ prompt: "stopme", background: true }),
+        call({ prompt: "boom-fg" }),
+      ],
+      (context, ...rest) =>
+        taskOf(context) === "stopme"
+          ? held.step(context, ...rest)
+          : exploding(context, ...rest),
+    ),
+  });
+
+  const run = parent.session.prompt("go");
+  await held.entered;
+  const [stopme] = (await listing(parent)).flatMap(
+    (line) => /"run stopme".* ([0-9a-f]{8})$/.exec(line)?.[1] ?? [],
+  );
+  await parent.session.prompt(`/subagents stop ${stopme}`);
+  await run;
+  await delivered(parent);
+
+  // One failed background run leads; neither the stopped run nor the failed foreground one is here
+  const pulse = parent.widgets.at(-1)?.[0] ?? "";
+  expect(pulse).toMatch(/^× "run boom" · .*provider exploded.* · unseen/);
+  expect(pulse).not.toContain("+1");
+  expect(pulse).not.toContain("stopme");
+  expect(pulse).not.toContain("boom-fg");
+});

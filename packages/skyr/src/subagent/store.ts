@@ -47,6 +47,14 @@ export interface RunSnapshot {
   error?: string;
 }
 
+/** Ended in failure, or finished without an answer; a stopped run is neither. */
+export function endedWithoutAnswer(run: RunSnapshot): boolean {
+  return (
+    run.status === "failed" ||
+    (run.status === "done" && run.error !== undefined)
+  );
+}
+
 /** Whether `details` has every field of a run that anything here reads. */
 export function isRun(details: unknown): details is RunSnapshot {
   if (typeof details !== "object" || details === null) return false;

@@ -8,7 +8,7 @@ import { type Mark, tierOf } from "../ui/caps.js";
 import { everySecond } from "../ui/clock.js";
 import { guard } from "../ui/guard.js";
 import { oneLine } from "../ui/text.js";
-import { barLines } from "./bar-view.js";
+import { barLines, type FailedRow } from "./bar-view.js";
 
 const WIDGET_KEY = "skyr.bar";
 
@@ -23,6 +23,8 @@ export interface BarRow {
   readonly background: boolean;
   /** What the row is doing: an agent's latest tool, "stalled", "behind <label>"; a shell's "lingering". */
   readonly now?: string;
+  /** Why a failed row failed: "429 rate limited", "exit 1". */
+  readonly why?: string;
   /** Epoch ms. */
   readonly startedAt: number;
 }
@@ -31,8 +33,11 @@ export interface BarSource {
   readonly tab: BarTab;
   /** The live rows, oldest first; read at every render, so cheap. */
   rows(): readonly BarRow[];
-  /** Calls `changed` after every change to rows(). Returns the unsubscribe. */
-  subscribe(changed: () => void): () => void;
+  /**
+   * Calls `changed` after every change to rows() and `failed` once for each row that ended
+   * failed, which has left rows() by then. Returns the unsubscribe.
+   */
+  subscribe(changed: () => void, failed: (row: BarRow) => void): () => void;
 }
 
 export interface BarHandle {
@@ -43,7 +48,7 @@ export interface BarHandle {
 export interface Bar extends BarHandle {
   /** Mounts the bar once under "skyr.bar"; `notify` reports a render failure once. */
   start(ui: Pick<ExtensionUIContext, "setWidget" | "notify">): void;
-  /** Stops repainting; never calls Pi's UI, and is idempotent. */
+  /** Stops repainting and forgets failures; never calls Pi's UI, and is idempotent. */
   stop(): void;
 }
 
@@ -60,6 +65,7 @@ export function createBar(): Bar {
   const sources = new Set<BarSource>();
   let ui: Pick<ExtensionUIContext, "setWidget" | "notify"> | undefined;
   let reported = false;
+  let failed: FailedRow[] = [];
   let mounted:
     | { tui: { requestRender(): void }; offClock?: () => void }
     | undefined;
@@ -116,7 +122,10 @@ export function createBar(): Bar {
   return {
     attach(source) {
       sources.add(source);
-      const off = source.subscribe(changed);
+      const off = source.subscribe(changed, (row) => {
+        failed.push({ row, seen: false });
+        changed();
+      });
       return () => {
         if (!sources.delete(source)) return;
         off();
@@ -139,7 +148,11 @@ export function createBar(): Bar {
                 broken
                   ? []
                   : barLines(
-                      { agents: rowsOf("agents"), shells: rowsOf("shells") },
+                      {
+                        agents: rowsOf("agents"),
+                        shells: rowsOf("shells"),
+                        failed,
+                      },
                       { theme, mode: tierOf(process.env) },
                       width,
                       Date.now(),
@@ -161,6 +174,7 @@ export function createBar(): Bar {
     stop() {
       mounted?.offClock?.();
       mounted = undefined;
+      failed = [];
     },
   };
 }

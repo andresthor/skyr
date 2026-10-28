@@ -25,6 +25,7 @@ import { runnerFor, spawnCheck } from "./runner.js";
 import {
   count,
   createRunStore,
+  endedWithoutAnswer,
   labelOf,
   type RunSnapshot,
   type RunStatus,
@@ -128,6 +129,11 @@ interface Runs {
   start(tasks: readonly Static<typeof Task>[], ctx: CallContext): RunSnapshot[];
   /** Sends every pending background answer as one message; `agent_settled`. */
   flush(): void;
+  /**
+   * Calls `listener` with the final snapshot of each background run of this session that ends
+   * failed or without an answer, not stopped. Returns the unsubscribe.
+   */
+  onFailed(listener: (run: RunSnapshot) => void): () => void;
   /** `/subagents stop <id|all>`: the notice. */
   stop(target: string): { text: string; level: "info" | "warning" };
   /**
@@ -372,6 +378,7 @@ export function createRuns(
   // Finished background answers waiting for the parent to be idle. Never Pi's steer or followUp
   // queues: Esc clears those.
   let pending: LaneOutcome[] = [];
+  const failureListeners = new Set<(run: RunSnapshot) => void>();
   // Children that can be continued, for `continue`: finished ones, and after a reload those it
   // carried over. Cleared with the store.
   const records = new Map<string, ChildRecord>();
@@ -960,6 +967,13 @@ export function createRuns(
       return launch(tasks, ctx, true).map(({ started, settled }) => {
         void settled.then((outcome) => {
           if (born !== generation) return;
+          if (endedWithoutAnswer(outcome.run))
+            for (const listener of failureListeners)
+              try {
+                listener(outcome.run);
+              } catch {
+                // A listener's throw must not cost the delivery
+              }
           pending.push(outcome);
           let idle: boolean;
           try {
@@ -975,6 +989,10 @@ export function createRuns(
       });
     },
     flush,
+    onFailed(listener) {
+      failureListeners.add(listener);
+      return () => void failureListeners.delete(listener);
+    },
     stop(target) {
       const hits = [...children].filter(
         ([id]) => target === "all" || (target && id.startsWith(target)),

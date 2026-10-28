@@ -126,7 +126,15 @@ export function registerSubagent(pi: ExtensionAPI, bar: BarHandle): void {
   bar.attach({
     tab: "agents",
     rows: () => store.running().map(barRow),
-    subscribe: (changed) => store.subscribe(changed),
+    subscribe: (changed, failed) => {
+      const offs = [
+        store.subscribe(changed),
+        runs.onFailed((run) => failed(barRow(run))),
+      ];
+      return () => {
+        for (const off of offs) off();
+      };
+    },
   });
 
   pi.registerTool({

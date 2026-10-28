@@ -157,10 +157,11 @@ arrive together. Esc does not stop a background subagent; `/subagents` lists the
 `/subagents stop <id|all>` stops them, one task at a time or all. A `/reload` stops background
 subagents; the reloaded session receives one message naming each, so the model knows their answers
 will not come. A bar above the editor shows what runs: nothing at rest; while subagents or shells
-run, one line with a mark per run, the latest action and the longest running time. The bar is
-drawn only in Pi's terminal UI; rpc clients and print mode get none. A delivered message shows one line per subagent,
-naming why any of them gave no answer; expand it to read the answers. A background subagent's token
-usage is in the delivered message, not in the footer.
+run, one line with a mark per run, the latest action and the longest running time; a failed
+background subagent or shell leads it, with its reason. The bar is drawn only in Pi's terminal UI;
+rpc clients and print mode get none. A delivered message shows one line per subagent, naming why
+any of them gave no answer; expand it to read the answers. A background subagent's token usage is
+in the delivered message, not in the footer.
 
 The model reads each answer inside a `<subagent-answer>` block, foreground or delivered, whose
 attributes carry the run's status, tokens and 8-char `id`; the subagent's own text can't open or

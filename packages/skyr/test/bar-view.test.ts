@@ -8,7 +8,7 @@ import { keyLabel } from "../src/ui/hint.js";
 import { sanitize } from "../src/ui/text.js";
 import { plainTheme } from "./session.js";
 import { CORPUS, WIDTHS_SWEEP } from "./ui.js";
-import { testPaint } from "./voice.js";
+import { styledRuns, testPaint } from "./voice.js";
 
 const TIERS: Tier[] = ["color", "mono", "ascii"];
 const plain = (mode: Tier = "color") => ({ theme: plainTheme, mode });
@@ -25,7 +25,15 @@ const row = (fields: Partial<BarRow> = {}): BarRow => ({
 /** The key hint, as a pattern. */
 const HINT = keyLabel("alt+a").replace("+", "\\+");
 
-const none: BarView = { agents: [], shells: [] };
+/** A view of `rows`, with nothing left that is not named. */
+const view = (rows: Partial<BarView>): BarView => ({
+  agents: [],
+  shells: [],
+  failed: [],
+  ...rows,
+});
+
+const none = view({});
 
 /** The pulse's text, as a terminal shows it. */
 const textOf = (lines: string[]) => lines.map(stripTerminalSequences);
@@ -37,7 +45,7 @@ test("the bar is absent at rest: no rows draw no lines", () => {
 
 test("a pulse is one row plus the bar's own trailing blank", () => {
   const lines = barLines(
-    { agents: [row({ now: "read" })], shells: [] },
+    view({ agents: [row({ now: "read" })] }),
     plain(),
     100,
     64_000,
@@ -51,14 +59,14 @@ test("a pulse is one row plus the bar's own trailing blank", () => {
   expect(visibleWidth(lines[0] ?? "")).toBe(100);
 });
 
-const THREE: BarView = {
+const THREE = view({
   agents: [
     row({ now: "pnpm test --filter auth", startedAt: 0 }),
     row({ mark: "queued", startedAt: 5_000 }),
     row({ now: "read", startedAt: 10_000 }),
   ],
   shells: [row({ startedAt: 20_000, background: true })],
-};
+});
 
 test("the pulse shows a group per tab with a pip per row, the newest action, the oldest elapsed and the key", () => {
   const [pulse] = textOf(barLines(THREE, plain(), 120, 64_000));
@@ -76,18 +84,17 @@ test("groups sit 3 spaces apart, 2 under 100 columns", () => {
 });
 
 test("more than eight rows show eight pips and a count of the rest", () => {
-  const many: BarView = {
+  const many = view({
     agents: Array.from({ length: 11 }, (_, i) => row({ id: `id${i}` })),
-    shells: [],
-  };
+  });
   const [pulse] = textOf(barLines(many, plain(), 120, 0));
   expect(pulse).toContain("11 agents • • • • • • • • +3");
 });
 
 /** The widest pane at which `part` is gone, scanning down from 150 columns. */
-function goneAt(view: BarView, part: RegExp): number {
+function goneAt(shown: BarView, part: RegExp): number {
   for (let width = 150; width >= 1; width--) {
-    const [pulse = ""] = textOf(barLines(view, plain(), width, 64_000));
+    const [pulse = ""] = textOf(barLines(shown, plain(), width, 64_000));
     if (!part.test(pulse)) return width;
   }
   return 0;
@@ -108,14 +115,13 @@ test("the pulse drops its lead, then its pips, then elapsed, then the hint as th
 });
 
 test("a lead that cannot show whole is cut to at least eight columns, ending in the ellipsis", () => {
-  const view: BarView = {
+  const long = view({
     agents: [
       row({ now: "pnpm test --filter @scope/package-with-a-long-name" }),
     ],
-    shells: [],
-  };
+  });
   const cut = Array.from({ length: 100 }, (_, i) => i + 20).flatMap((width) => {
-    const [pulse = ""] = textOf(barLines(view, plain(), width, 0));
+    const [pulse = ""] = textOf(barLines(long, plain(), width, 0));
     const lead = /› (\S.*?)(?: {2,}|$)/.exec(pulse)?.[1];
     return lead?.endsWith("…") ? [visibleWidth(`› ${lead}`)] : [];
   });
@@ -132,12 +138,18 @@ const HOSTILE_NOWS = [
 test("the pulse fits every width 0-200 for hostile labels in every tier", () => {
   for (const mode of TIERS)
     for (const now of HOSTILE_NOWS) {
-      const view: BarView = {
+      const failure = { ...row({ label: now, mark: "failed" }), why: now };
+      const hostile = view({
         agents: [row({ now }), row({ now: "x", mark: "queued" })],
         shells: [row({ label: now, now })],
-      };
+        failed: [
+          { row: failure, seen: true },
+          { row: failure, seen: false },
+          { row: failure, seen: false },
+        ],
+      });
       for (const width of WIDTHS_SWEEP)
-        for (const line of barLines(view, testPaint(mode), width, 3_700_000))
+        for (const line of barLines(hostile, testPaint(mode), width, 3_700_000))
           expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
 });
@@ -155,18 +167,81 @@ test("the ascii tier draws the pulse with no escape and no non-ASCII character",
 });
 
 test("states stay distinct with colour stripped: queued, running and failed have their own marks", () => {
-  const view: BarView = {
+  const marks = view({
     agents: [
       row({ mark: "queued" }),
       row({ mark: "running" }),
       row({ mark: "failed" }),
     ],
-    shells: [],
-  };
-  expect(textOf(barLines(view, testPaint("mono"), 120, 0))[0]).toContain(
+  });
+  expect(textOf(barLines(marks, testPaint("mono"), 120, 0))[0]).toContain(
     "3 agents □ • ×",
   );
-  expect(textOf(barLines(view, testPaint("ascii"), 120, 0))[0]).toContain(
+  expect(textOf(barLines(marks, testPaint("ascii"), 120, 0))[0]).toContain(
     "3 agents o * x",
   );
+});
+
+const FAILED = row({
+  id: "dead0001",
+  label: '"Data review"',
+  mark: "failed",
+  why: "429 rate limited",
+});
+
+test("an unseen failure leads the pulse, its reason in bold", () => {
+  const led = view({
+    agents: [row({ now: "read" }), row()],
+    failed: [
+      { row: FAILED, seen: false },
+      { row: { ...FAILED, id: "dead0002" }, seen: false },
+    ],
+  });
+
+  const [pulse] = textOf(barLines(led, plain(), 140, 64_000));
+  expect(pulse).toMatch(
+    /^ × "Data review" · 429 rate limited · unseen {2}\+1 {3}2 agents • • {2,}1m04s {2}/,
+  );
+  expect(pulse).not.toContain("› read");
+  const reason = styledRuns(barLines(led, testPaint(), 140, 0)[0] ?? "").find(
+    (run) => run.text === "429 rate limited",
+  );
+  expect(reason).toMatchObject({ bold: true });
+});
+
+test("a failure the user has seen no longer leads", () => {
+  const seen = view({
+    agents: [row({ now: "read" })],
+    failed: [{ row: FAILED, seen: true }],
+  });
+  expect(textOf(barLines(seen, plain(), 140, 0))[0]).toContain("› read");
+  expect(
+    barLines(view({ failed: [{ row: FAILED, seen: true }] }), plain(), 140, 0),
+  ).toEqual([]);
+});
+
+test("with only unseen failures the pulse still shows", () => {
+  const lines = barLines(
+    view({ failed: [{ row: FAILED, seen: false }] }),
+    plain(),
+    100,
+    0,
+  );
+
+  expect(lines).toHaveLength(2);
+  expect(textOf(lines)[0]).toMatch(
+    new RegExp(`^ × "Data review" · 429 rate limited · unseen +${HINT} $`),
+  );
+});
+
+test("a failure keeps its reason and 'unseen' as the pane narrows, cutting its label first", () => {
+  const led = view({
+    agents: [row()],
+    failed: [
+      { row: { ...FAILED, label: '"A very long review name"' }, seen: false },
+    ],
+  });
+  const [pulse = ""] = textOf(barLines(led, plain(), 60, 0));
+  expect(pulse).toContain("429 rate limited · unseen");
+  expect(pulse).toContain("…");
 });

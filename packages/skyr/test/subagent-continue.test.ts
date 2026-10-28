@@ -22,6 +22,7 @@ import {
   textOf,
   toolsSeen,
 } from "./session.js";
+import { shellRuntime } from "./shells-runtime.js";
 
 const SCOUT = {
   "scout.md": agentFile("Finds things", "model: faux-2\n"),
@@ -209,7 +210,9 @@ test("an unknown or blank id is refused with the rule spelled out", async () => 
   expect(textOf(dead!)).toContain("start a fresh subagent");
   const blank = await vi.waitFor(() => results(parent.session).get("blank"));
   expect(blank?.isError).toBe(true);
-  expect(textOf(blank!)).toContain("pass the 8-char id of a finished subagent");
+  expect(textOf(blank!)).toContain(
+    "pass the 8-char id of a finished or stopped subagent",
+  );
   expect([...seen.keys()]).toEqual(["look"]);
 });
 
@@ -273,34 +276,31 @@ test("a new session clears the records: ids from before it are refused", async (
   const { seen, child } = childLog({ look: "RUN1-ANSWER" });
   // The tag of the run-1 child, stashed by the continue-ok factory for the second prompt.
   let tag = "";
-  const parent = await parentSession({
-    userAgents: SCOUT,
+  const rt = await shellRuntime({
     respond: scriptTurns(
       child,
-      () => fauxAssistantMessage([call({ agent: "scout", prompt: "look" })]),
+      () => fauxAssistantMessage([call({ prompt: "look" })]),
       (context) => {
         tag = childIds(context)[0]!;
         return fauxAssistantMessage([cont("ok", tag)]);
       },
       // pi re-requests after every tool result: a filler "done" turn closes prompt 1, so the
-      // continue "late" is issued by prompt 2, after the reload reset the extension state.
+      // continue "late" is issued by prompt 2, in the new session.
       () => fauxAssistantMessage("round one done"),
       () => fauxAssistantMessage([cont("late", tag)]),
     ),
   });
 
   // Prompt 1: run 1, then a continue that works while the record is live.
-  await parent.session.prompt("go");
-  await parent.session.waitForIdle();
-  const ok = results(parent.session).get("ok");
+  await rt.session.prompt("go");
+  await rt.session.waitForIdle();
+  const ok = results(rt.session).get("ok");
   expect(ok?.isError).toBe(false);
 
-  // A fresh session: pi's reload gives skyr a fresh extension state.
-  await parent.session.reload();
-  await parent.session.waitForIdle();
-  await parent.session.prompt("go");
-  await parent.session.waitForIdle();
-  const late = results(parent.session).get("late");
+  await rt.newSession();
+  await rt.session.prompt("go");
+  await rt.session.waitForIdle();
+  const late = results(rt.session).get("late");
   expect(late?.isError).toBe(true);
   expect(textOf(late!)).toContain("no subagent matches");
   // "late" never spent a child run.

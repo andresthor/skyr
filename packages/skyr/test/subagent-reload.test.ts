@@ -1,5 +1,6 @@
-// A reload stops the background subagents; the reloaded session is told, once, without a turn.
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+// A reload stops the background subagents and tells the reloaded session, once, without a turn;
+// the ids of children that finished or were stopped still continue.
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   type FauxResponseFactory,
@@ -7,17 +8,26 @@ import {
   fauxToolCall,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import {
   call,
+  childIds,
   hold,
   lanes,
   type Parent,
   parentSession,
   results,
+  scratchDir,
+  scriptTurns,
   taskOf,
   textOf,
 } from "./session.js";
+
+/** A continue call: tool-call id = its task, so results are looked up by task. */
+const cont = (task: string, id: string) =>
+  lanes(task, [
+    { description: `continue ${task}`, continue: id, prompt: `again ${task}` },
+  ]);
 
 /** The parent's turns: `calls` first, then "done", then "noted" for every later prompt. */
 function parentThen(
@@ -319,4 +329,204 @@ test("a stopped worktree writer's message names the worktree and its branch", as
   expect(path).toBeDefined();
   expect(existsSync(path!)).toBe(true);
   expect(text).toContain(`To merge them: git -C ${path}`);
+});
+
+test("a finished child can be continued after a reload", async () => {
+  const histories: string[][] = [];
+  const parent = await parentSession({
+    respond: scriptTurns(
+      (context) => {
+        histories.push(context.messages.map(textOf));
+        return fauxAssistantMessage("answer");
+      },
+      () => fauxAssistantMessage([call({ prompt: "look" })]),
+      () => fauxAssistantMessage("round one"),
+      (context) => fauxAssistantMessage([cont("again", childIds(context)[0]!)]),
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await parent.session.reload();
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  expect(results(parent.session).get("again")?.isError).toBe(false);
+  // The second run saw the first one's session.
+  expect(histories).toHaveLength(2);
+  expect(histories[1]).toEqual(
+    expect.arrayContaining(["look", "answer", "again again"]),
+  );
+});
+
+test("a child the reload stopped can be continued once it has settled, and the message gives its id", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  const held = hold();
+  const histories: string[][] = [];
+  let notice = "";
+  const parent = await parentSession({
+    respond: scriptTurns(
+      (context, ...rest) => {
+        const texts = context.messages.map(textOf);
+        if (!texts.includes("again bg")) return held.step(context, ...rest);
+        histories.push(texts);
+        return fauxAssistantMessage("resumed");
+      },
+      () => fauxAssistantMessage([call({ prompt: "bg", background: true })]),
+      () => fauxAssistantMessage("round one"),
+      (context) => {
+        notice =
+          context.messages
+            .map(textOf)
+            .find((text) => text.startsWith("Background subagent answers.")) ??
+          "";
+        return fauxAssistantMessage([cont("early", childIds(context)[0]!)]);
+      },
+      // The dying child's kill grace has run out by the retry.
+      (context) => {
+        vi.setSystemTime(Date.now() + 60_000);
+        return fauxAssistantMessage([cont("bg", childIds(context)[0]!)]);
+      },
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await held.entered;
+  const [, id] =
+    /\(id ([0-9a-f]{8})\)/.exec(textOf(results(parent.session).get("bg")!)) ??
+    [];
+  await parent.session.reload();
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  expect(id).toBeDefined();
+  expect(notice).toContain(`a task with continue: ${id} resumes it`);
+  // Straight after the reload the child may still be writing its session.
+  const early = results(parent.session).get("early")!;
+  expect(early.isError).toBe(true);
+  expect(textOf(early)).toMatch(
+    /may still be writing its session; call again in \d+s/,
+  );
+  const res = results(parent.session).get("bg")!;
+  expect(res.isError).toBe(false);
+  expect(textOf(res)).toContain("resumed");
+  // The aborted first run is in the session the second one resumed.
+  expect(histories[0]).toEqual(expect.arrayContaining(["bg", "again bg"]));
+});
+
+test("a child whose directory vanished before the reload is no longer restorable", async () => {
+  const workdir = scratchDir("work");
+  let id: string | undefined;
+  const parent = await parentSession({
+    respond: scriptTurns(
+      () => fauxAssistantMessage("answer"),
+      () => fauxAssistantMessage([call({ prompt: "look", cwd: workdir })]),
+      (context) => {
+        id = childIds(context)[0];
+        return fauxAssistantMessage("round one");
+      },
+      () => fauxAssistantMessage([cont("again", id!)]),
+    ),
+  });
+
+  await parent.session.prompt("go");
+  rmSync(workdir, { recursive: true });
+  await parent.session.reload();
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  const res = results(parent.session).get("again")!;
+  expect(res.isError).toBe(true);
+  expect(textOf(res)).toContain(`no subagent matches "${id}"`);
+});
+
+test("a queued run a reload stopped before it began is not offered for continuing", async () => {
+  const { child, entered } = heldChildren("a");
+  let notice = "";
+  const parent = await parentSession({
+    respond: scriptTurns(
+      child,
+      () =>
+        fauxAssistantMessage([
+          lanes(
+            "bg",
+            [
+              { prompt: "a", tools: ["edit"], cwd: "." },
+              { prompt: "b", tools: ["edit"], cwd: "." },
+            ],
+            { background: true },
+          ),
+        ]),
+      () => fauxAssistantMessage("round one"),
+      (context) => {
+        notice =
+          context.messages
+            .map(textOf)
+            .find((text) => text.startsWith("Background subagent answers.")) ??
+          "";
+        const ids = [
+          ...textOf(results(parent.session).get("bg")!).matchAll(
+            /\(id ([0-9a-f]{8})\)/g,
+          ),
+        ];
+        return fauxAssistantMessage([cont("queued", ids[1]![1]!)]);
+      },
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await entered();
+  const ids = [
+    ...textOf(results(parent.session).get("bg")!).matchAll(
+      /\(id ([0-9a-f]{8})\)/g,
+    ),
+  ].map((m) => m[1]);
+  await parent.session.reload();
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  expect(notice).toContain(`continue: ${ids[0]} resumes it`);
+  expect(notice).not.toContain(`continue: ${ids[1]}`);
+  const res = results(parent.session).get("queued")!;
+  expect(res.isError).toBe(true);
+  expect(textOf(res)).toContain(`no subagent matches "${ids[1]}"`);
+});
+
+test("a continue the reload stopped cannot be continued again until it has settled", async () => {
+  const held = hold();
+  let id: string | undefined;
+  const parent = await parentSession({
+    respond: scriptTurns(
+      (context, ...rest) =>
+        context.messages.some((m) => textOf(m) === "again look")
+          ? held.step(context, ...rest)
+          : fauxAssistantMessage("answer"),
+      () => fauxAssistantMessage([call({ prompt: "look" })]),
+      (context) => {
+        id = childIds(context)[0];
+        return fauxAssistantMessage("round one");
+      },
+      () =>
+        fauxAssistantMessage([
+          lanes(
+            "again",
+            [{ description: "again", continue: id!, prompt: "again look" }],
+            { background: true },
+          ),
+        ]),
+      () => fauxAssistantMessage("running"),
+      () => fauxAssistantMessage([cont("early", id!)]),
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await parent.session.prompt("go");
+  await held.entered;
+  await parent.session.reload();
+  await parent.session.prompt("go");
+  await parent.session.waitForIdle();
+
+  const early = results(parent.session).get("early")!;
+  expect(early.isError).toBe(true);
+  expect(textOf(early)).toMatch(/may still be writing its session/);
 });

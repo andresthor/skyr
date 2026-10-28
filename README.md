@@ -168,7 +168,8 @@ attributes carry the run's status, tokens and 8-char `id`; the subagent's own te
 close a block, and harness notes (a spill file, a worktree) follow it. A background start names
 the same id. A task with `continue: <id>` starts a second run on a finished subagent's
 saved session — same agent, tools, model and directory, a fresh prompt. The ids are valid in the
-current session only; ongoing and other sessions can't continue from them.
+current session only, and survive a `/reload`, a background subagent it stopped included; other
+sessions can't continue from them.
 
 A subagent runs in-process by default, but runs as its own process when (a) the child entry can
 load (a jiti-backed TypeScript child, checked by a one shot smoke probe per session) and (b) the

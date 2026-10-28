@@ -4,7 +4,7 @@
  * belongs to one session; the unit itself lives as long as the extension.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import type {
@@ -18,7 +18,7 @@ import { DEFAULT_TOOLS, type loadAgents, parseTools } from "./agents.js";
 import { GRACE_MS } from "./child/proc-runner.js";
 import { readStoredResult } from "./child/protocol.js";
 import { registerChildTools } from "./child/tools.js";
-import { leaveStopped, takeStopped } from "./handoff.js";
+import { type ChildRecord, leaveStopped, takeStopped } from "./handoff.js";
 import { answer, delivery, type LaneOutcome, noAnswer } from "./result.js";
 import { runnerFor, spawnCheck } from "./runner.js";
 import {
@@ -84,7 +84,7 @@ export const Task = Type.Object(
     continue: Type.Optional(
       Type.String({
         description:
-          "ID (8 chars) of a finished subagent, from the `id` on its answer: its saved session gets another run with the same tools, model and directory. Give description and a fresh prompt only; omit agent, role, tools, model and cwd.",
+          "ID (8 chars) of a finished or stopped subagent, from the `id` on its answer: its saved session gets another run with the same tools, model and directory. Give description and a fresh prompt only; omit agent, role, tools, model and cwd.",
       }),
     ),
   },
@@ -130,14 +130,15 @@ interface Runs {
   /** `/subagents stop <id|all>`: the notice. */
   stop(target: string): { text: string; level: "info" | "warning" };
   /**
-   * Session start: forget the last session, sweep crashed job dirs, deliver what they hold. The
-   * background runs a reload of this session file stopped are delivered too, as a message that
-   * starts no turn of its own.
+   * Session start: forget the last session, sweep crashed job dirs, deliver what they hold. A
+   * reload of this session file also restores the children it could continue, and delivers the
+   * background runs it stopped as a message that starts no turn of its own.
    */
   open(parentFile: string | undefined): Promise<void>;
   /**
    * Session shutdown: stop every child with `reason`; forget records and pending answers. The
-   * background runs it stops are left for the next session on the same file.
+   * background runs it stops and the children it could continue are left for the next session on
+   * the same file.
    */
   close(reason: string): void;
 }
@@ -168,22 +169,6 @@ interface Call {
   continueOf?: ChildRecord;
 }
 
-/** A finished child's calling facts, for a second run through its saved session. */
-interface ChildRecord {
-  id: string;
-  agent?: string;
-  description: string;
-  model: string;
-  tools: string[];
-  cwd: string;
-  key: string;
-  trusted: boolean;
-  systemPrompt: string;
-  sessionFile: string;
-  /** A bare writer's worktree: a continued run writes the same tree again. */
-  worktree?: WorktreePlan;
-}
-
 /** A writer's place in its directory's queue. */
 interface Slot {
   chain: Promise<void>;
@@ -210,6 +195,7 @@ const STOP_SETTLE_MS = GRACE_MS + 1_000;
 async function stoppedOutcome(
   run: RunSnapshot,
   reason: string,
+  continuable: boolean,
 ): Promise<LaneOutcome> {
   const { body, error } = noAnswer(labelOf(run), {
     stoppedBy: sessionStop(reason),
@@ -229,11 +215,14 @@ async function stoppedOutcome(
         : await worktreeState(plan);
   return {
     body,
-    notes:
-      plan === undefined || state === "absent"
+    notes: [
+      ...(plan === undefined || state === "absent"
         ? []
         : [
-            { kind: "line", text: worktreeNote(plan, state === "writes") },
+            {
+              kind: "line" as const,
+              text: worktreeNote(plan, state === "writes"),
+            },
             ...(settling
               ? [
                   {
@@ -242,7 +231,16 @@ async function stoppedOutcome(
                   },
                 ]
               : []),
-          ],
+          ]),
+      ...(continuable
+        ? [
+            {
+              kind: "line" as const,
+              text: `Its session is saved; a task with continue: ${run.id.slice(0, 8)} resumes it`,
+            },
+          ]
+        : []),
+    ],
     run: { ...run, status: "aborted", endedAt: Date.now(), error },
   };
 }
@@ -252,6 +250,25 @@ function childSessionDir(parentFile: string | undefined): string | undefined {
   return parentFile === undefined
     ? undefined
     : join(dirname(parentFile), basename(parentFile, ".jsonl"));
+}
+
+/**
+ * The session file of a child that has begun, or undefined. The parent learns the name only
+ * from a finished run's result; Pi names the file `<timestamp>_<child id>.jsonl` in the dir
+ * the child was given.
+ */
+function savedSessionOf(
+  parentFile: string | undefined,
+  id: string,
+): string | undefined {
+  const dir = childSessionDir(parentFile);
+  if (dir === undefined) return undefined;
+  try {
+    const name = readdirSync(dir).find((file) => file.endsWith(`_${id}.jsonl`));
+    return name === undefined ? undefined : join(dir, name);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -354,8 +371,11 @@ export function createRuns(
   // Finished background answers waiting for the parent to be idle. Never Pi's steer or followUp
   // queues: Esc clears those.
   let pending: LaneOutcome[] = [];
-  // Finished children (this session only), for `continue`; cleared with the store.
+  // Children that can be continued, for `continue`: finished ones, and after a reload those it
+  // carried over. Cleared with the store.
   const records = new Map<string, ChildRecord>();
+  // The calling facts of each fresh child while it runs, for the record its stop leaves.
+  const live = new Map<string, Omit<ChildRecord, "sessionFile">>();
   // Child ids whose continued run is live: set synchronously in claim, so two same-turn
   // continues on one child cannot both resolve (and both append one session file).
   const runningContinues = new Set<string>();
@@ -540,7 +560,7 @@ export function createRuns(
       );
     if (prefix === "")
       throw new Error(
-        "continue: pass the 8-char id of a finished subagent, from the `id` on its answer",
+        "continue: pass the 8-char id of a finished or stopped subagent, from the `id` on its answer",
       );
     const matches = [...records.entries()].filter(([id]) =>
       id.startsWith(prefix),
@@ -553,11 +573,16 @@ export function createRuns(
       );
     if (matches.length > 1)
       throw new Error(
-        `"${clip(prefix)}" matches more than one finished subagent (${matches.map(([, r]) => labelOf(r)).join(", ")}); give its whole 8-char id or start a fresh subagent`,
+        `"${clip(prefix)}" matches more than one finished or stopped subagent (${matches.map(([, r]) => labelOf(r)).join(", ")}); give its whole 8-char id or start a fresh subagent`,
       );
     const [match] = matches;
     if (!match) throw new Error(`no subagent matches "${clip(prefix)}"`);
     const record = match[1];
+    // A second writer on the session file would interleave its entries with the dying child's.
+    if (record.settledAt !== undefined && Date.now() < record.settledAt)
+      throw new Error(
+        `subagent ${record.id.slice(0, 8)} was stopped moments ago and may still be writing its session; call again in ${Math.ceil((record.settledAt - Date.now()) / 1000)}s`,
+      );
     const entry = statSync(record.cwd, { throwIfNoEntry: false });
     if (entry === undefined)
       throw new Error(
@@ -823,6 +848,20 @@ export function createRuns(
             resumed !== undefined
               ? resumed.trusted
               : await trustFor(key, call.parentKey, ctx.isProjectTrusted());
+          const facts: Omit<ChildRecord, "sessionFile"> = {
+            id,
+            agent: call.agent,
+            description: call.description,
+            model: call.model,
+            tools: call.tools,
+            cwd: call.cwd,
+            key,
+            trusted,
+            systemPrompt: call.systemPrompt,
+            worktree: call.worktree,
+          };
+          // A continued child already has its record.
+          if (resumed === undefined) live.set(id, facts);
           began = true;
           const result = await runnerFor(
             ctx.modelRegistry,
@@ -861,19 +900,7 @@ export function createRuns(
             result.status === "done" ||
             (await worktreeState(fresh)) === "writes";
           if (result.sessionFile !== undefined && result.sessionFile !== "")
-            records.set(id, {
-              id,
-              agent: call.agent,
-              description: call.description,
-              model: call.model,
-              tools: call.tools,
-              cwd: call.cwd,
-              key,
-              trusted,
-              systemPrompt: call.systemPrompt,
-              sessionFile: result.sessionFile,
-              worktree: call.worktree,
-            });
+            records.set(id, { ...facts, sessionFile: result.sessionFile });
           return {
             ...ended(result.status, body, {
               sessionFile: result.sessionFile,
@@ -903,6 +930,7 @@ export function createRuns(
         } finally {
           slot?.release();
           children.delete(id);
+          live.delete(id);
           runningContinues.delete(id);
           store.apply(id, { type: "end" });
         }
@@ -974,13 +1002,23 @@ export function createRuns(
       sessionFile = parentFile;
       const recovered = await sweepJobs(parentFile);
       const stopped = takeStopped(parentFile);
+      for (const record of stopped?.records ?? []) {
+        // A record is only as good as the directory and session it names.
+        if (
+          existsSync(record.sessionFile) &&
+          statSync(record.cwd, { throwIfNoEntry: false })?.isDirectory()
+        )
+          records.set(record.id, record);
+      }
       // A SIGTERMed process child can finish its result before the sweep reads it; that answer
       // is the run's, and a notice that it was stopped would contradict it.
       const notices = stopped
         ? await Promise.all(
             stopped.runs
               .filter((run) => !recovered.some((r) => r.run.id === run.id))
-              .map((run) => stoppedOutcome(run, stopped.reason)),
+              .map((run) =>
+                stoppedOutcome(run, stopped.reason, records.has(run.id)),
+              ),
           )
         : [];
       pending.push(...recovered, ...notices);
@@ -989,12 +1027,33 @@ export function createRuns(
     },
     close(reason) {
       generation += 1;
+      const settledAt = Date.now() + STOP_SETTLE_MS;
       // Before the abort, which can end children synchronously and empty the store.
       leaveStopped(
         sessionFile,
         reason,
         store.running().filter((run) => run.background),
+        [
+          // A continued run is stopped too, and still writes its record's session.
+          ...[...records.values()].map((record) =>
+            runningContinues.has(record.id) ? { ...record, settledAt } : record,
+          ),
+          // A child that had begun saved a session, which the stop leaves resumable.
+          ...[...live].flatMap(([id, facts]) => {
+            const file = savedSessionOf(sessionFile, id);
+            return file === undefined
+              ? []
+              : [
+                  {
+                    ...facts,
+                    sessionFile: file,
+                    settledAt,
+                  },
+                ];
+          }),
+        ],
       );
+      live.clear();
       // the reason lets a stopped child say whether Pi reloaded or the session ended
       sessionAbort.abort(reason);
       store.clear();

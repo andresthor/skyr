@@ -105,6 +105,44 @@ test("with a working indicator a line above the top rule shows the glyph, Pi's m
   expect(rows[1]).toBe("─".repeat(60));
 });
 
+/** The glyph the line leads with, after any padding. */
+const glyphOf = (line = "") => stripTerminalSequences(line).trim().charAt(0);
+
+test("the glyph is the line while bash runs and the star pulse after it ends", () => {
+  const working = createWorking();
+  working.agentStart();
+  const ed = lineEditor(CustomEditor, { working });
+  ed.setWorkingStatusIndicator(skyrIndicator());
+  expect(glyphOf(ed.render(60)[0])).toBe("·");
+
+  working.toolStart("a", "bash", { command: "pnpm lint" });
+  for (const glyph of ["-", "\\", "|", "/"]) {
+    expect(glyphOf(ed.render(60)[0])).toBe(glyph);
+    vi.advanceTimersByTime(80);
+  }
+
+  working.toolEnd("a");
+  expect(stripTerminalSequences(ed.render(60)[0] ?? "")).toMatch(
+    /^[·✧✦] Working /,
+  );
+});
+
+test("the glyph is sand while only a subagent call runs", () => {
+  const working = createWorking();
+  working.agentStart();
+  const ed = lineEditor(CustomEditor, { working });
+  ed.setWorkingStatusIndicator(skyrIndicator());
+
+  working.toolStart("a", "subagent", {});
+  const braille = /^[\u2800-\u28ff]$/;
+  expect(glyphOf(ed.render(60)[0])).toMatch(braille);
+  vi.advanceTimersByTime(80);
+  expect(glyphOf(ed.render(60)[0])).toMatch(braille);
+
+  working.toolStart("b", "bash", {});
+  expect(glyphOf(ed.render(60)[0])).toMatch(/^[-\\|/]$/);
+});
+
 test("retry, compaction and branch-summary indicators draw Pi's own text after skyr's glyph, with no elapsed time of skyr's", () => {
   const paint = testPaint();
   const { warning, accent, text } = paint.theme.colors;

@@ -178,7 +178,7 @@ export function withWorkingLine<B extends EditorClass>(
       const text =
         (isWorking ? state.action : undefined) ?? sanitize(rest).trim();
       const glyph = frameAt(
-        variantFor(situationOf(held.kind), paint.mode),
+        variantFor(situationOf(held.kind, state.tools), paint.mode),
         now - this.heldSince,
       );
       const pad = " ".repeat(

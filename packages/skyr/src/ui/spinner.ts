@@ -17,8 +17,8 @@ export type StatusKind = NonNullable<
   Parameters<CustomEditor["setWorkingStatusIndicator"]>[0]
 >["kind"];
 
-/** What the spinner shows: the agent's own work, or one of Pi's retry, compaction and branch-summary statuses. */
-export type Situation = "thinking" | "retry";
+/** What the spinner shows: what the main agent is doing, or one of Pi's retry, compaction and branch-summary statuses. */
+export type Situation = "thinking" | "tool" | "subagents" | "retry";
 
 interface SpinnerVariant {
   readonly frames: readonly string[];
@@ -29,6 +29,13 @@ interface SpinnerVariant {
 const THINKING: SpinnerVariant = {
   frames: ["·", "✧", "✦", "✦", "✧", "·"],
   intervalMs: 240,
+};
+
+/** Sand filling a glass, while the agent only waits on subagents (cli-spinners `sand`). */
+const SAND: SpinnerVariant = {
+  // Each frame is one braille cell
+  frames: [..."⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁"],
+  intervalMs: TICK_MS,
 };
 
 const SPARKLE: SpinnerVariant = {
@@ -42,13 +49,31 @@ const LINE: SpinnerVariant = {
   intervalMs: TICK_MS,
 };
 
-/** A status other than the main agent working is Pi's own: a retry, a compaction or a summary. */
-export const situationOf = (kind: StatusKind): Situation =>
-  kind === "working" ? "thinking" : "retry";
+/**
+ * A status other than the main agent working is retry; no main-agent tool running is thinking;
+ * only `subagent` calls running is subagents; any other tool running is tool.
+ */
+export function situationOf(
+  kind: StatusKind,
+  tools: readonly string[],
+): Situation {
+  if (kind !== "working") return "retry";
+  if (tools.length === 0) return "thinking";
+  return tools.every((name) => name === "subagent") ? "subagents" : "tool";
+}
 
 export function variantFor(situation: Situation, tier: Tier): SpinnerVariant {
   if (tier === "ascii") return LINE;
-  return situation === "retry" ? SPARKLE : THINKING;
+  switch (situation) {
+    case "thinking":
+      return THINKING;
+    case "tool":
+      return LINE;
+    case "subagents":
+      return SAND;
+    case "retry":
+      return SPARKLE;
+  }
 }
 
 /** The frame `sinceMs` after the indicator appeared; a boundary sits half a tick off Pi's ticks, so a tick that comes less than half a tick early or late shows the same frame. */

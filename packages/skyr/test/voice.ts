@@ -26,6 +26,7 @@ import { type Mock, onTestFinished, vi } from "vitest";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { registerSkyr } from "../src/index.js";
 import type { Tier } from "../src/ui/caps.js";
+import type { Paint, ThemeLike } from "../src/ui/palette.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
 import {
   createVoiceEditorClass,
@@ -33,7 +34,6 @@ import {
 } from "../src/voice/editor.js";
 import { type VoiceDeps, wireVoice } from "../src/voice/index.js";
 import type { VoiceKeys, VoiceSnapshot } from "../src/voice/indicator.js";
-import type { Paint, VoiceTheme } from "../src/voice/palette.js";
 import { scratchDir } from "./session.js";
 
 /** A real Pi editor, focused, with voice's subclass on top. */
@@ -169,11 +169,11 @@ const CORTI_DARK = {
  */
 export function testTheme(
   o: {
-    colors?: Partial<VoiceTheme["colors"]>;
-    appearance?: VoiceTheme["appearance"];
+    colors?: Partial<ThemeLike["colors"]>;
+    appearance?: ThemeLike["appearance"];
     colorMode?: TerminalColorMode;
   } = {},
-): VoiceTheme {
+): ThemeLike {
   const colorMode = o.colorMode ?? "truecolor";
   return {
     colors: { ...CORTI_DARK, ...o.colors },
@@ -185,7 +185,7 @@ export function testTheme(
 /** What voice draws with: `theme` on a terminal that shows `mode`. */
 export const testPaint = (
   mode: Tier = "color",
-  theme: VoiceTheme = testTheme(),
+  theme: ThemeLike = testTheme(),
 ): Paint => ({ theme, mode });
 
 /** A stretch of rendered text and the SGR state a terminal draws it in. */
@@ -262,7 +262,7 @@ interface VoiceUi {
   getEditorComponent: Mock<() => unknown>;
   getEditorText: Mock<() => string>;
   setEditorText: Mock<(text: string) => void>;
-  theme: VoiceTheme;
+  theme: ThemeLike;
 }
 
 interface VoiceCtx {
@@ -276,7 +276,7 @@ export function voiceCtx(
   o: {
     mode?: VoiceCtx["mode"];
     hasUI?: boolean;
-    theme?: VoiceTheme;
+    theme?: ThemeLike;
     installed?: unknown;
   } = {},
 ): VoiceCtx {
@@ -285,7 +285,7 @@ export function voiceCtx(
   let installed = o.installed;
   // like Pi's, the theme handle is one live view: a switch reaches whoever holds it
   let theme = o.theme ?? testTheme();
-  const live: VoiceTheme = {
+  const live: ThemeLike = {
     get colors() {
       return theme.colors;
     },

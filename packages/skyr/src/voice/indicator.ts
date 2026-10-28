@@ -15,8 +15,8 @@ import {
 } from "@earendil-works/pi-tui";
 import { glyphsOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
+import { clamp01, type Paint, styled } from "../ui/palette.js";
 import { type DictationFacts, SPEECH_DBFS } from "./dictation.js";
-import { clamp01, type Paint, styled } from "./palette.js";
 
 /** One smoothed bar cell per this many ms of recording. */
 const BAR_MS = 100;

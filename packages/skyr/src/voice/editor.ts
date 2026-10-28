@@ -22,10 +22,10 @@ import type {
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { keyName } from "../ui/hint.js";
+import type { Paint } from "../ui/palette.js";
 import type { DictationSink } from "./dictation.js";
 import { DRY_MS, spliceGhost } from "./ghost.js";
 import { renderRule, type VoiceKeys, type VoiceSnapshot } from "./indicator.js";
-import type { Paint } from "./palette.js";
 
 /** The text to insert so a segment reads naturally between what is before and after the cursor. */
 function spacedSegment(before: string, after: string, segment: string): string {

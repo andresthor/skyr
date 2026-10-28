@@ -11,6 +11,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { ThemeLike } from "../src/ui/palette.js";
 import {
   createVoiceEditorClass,
   editorSink,
@@ -18,7 +19,6 @@ import {
   type VoiceEditorOptions,
 } from "../src/voice/editor.js";
 import { DRY_MS } from "../src/voice/ghost.js";
-import type { VoiceTheme } from "../src/voice/palette.js";
 import {
   CURSOR_CELL,
   editorRows,
@@ -265,7 +265,7 @@ describe("render", () => {
   test("a mid-session theme switch through Pi's live theme handle reaches ghost and firm colours", () => {
     let theme = testTheme({ colors: { dim: parseColor("#767676") } });
     // like Pi's theme proxy: one handle, reading whichever theme is current
-    const live: VoiceTheme = {
+    const live: ThemeLike = {
       get colors() {
         return theme.colors;
       },

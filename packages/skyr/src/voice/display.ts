@@ -5,6 +5,7 @@
  */
 
 import type { Tier } from "../ui/caps.js";
+import type { ThemeLike } from "../ui/palette.js";
 import type { DictationFacts } from "./dictation.js";
 import type { VoiceEditorLike } from "./editor.js";
 import {
@@ -12,7 +13,6 @@ import {
   renderStatus,
   type VoiceSnapshot,
 } from "./indicator.js";
-import type { VoiceTheme } from "./palette.js";
 
 const TICK_MS = 50;
 const VOICE_STATUS_KEY = "skyr.voice";
@@ -20,7 +20,7 @@ const VOICE_STATUS_KEY = "skyr.voice";
 interface StatusUI {
   setStatus(key: string, text: string | undefined): void;
   /** Pi's live theme handle: read per row, so the row follows theme switches. */
-  readonly theme: VoiceTheme;
+  readonly theme: ThemeLike;
 }
 
 interface VoiceDisplayOptions {

@@ -1,22 +1,21 @@
 /**
- * The colour side of voice's display: the slice of Pi's theme voice draws with, and what the
- * terminal can show of it, bundled in one `Paint` that every drawing surface takes and styles
- * through `styled`.
+ * The slice of Pi's theme skyr draws with and what the terminal can show of it, as one `Paint`
+ * that every drawing surface takes and styles through `styled`.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TextStyle } from "@earendil-works/pi-tui";
-import type { Tier } from "../ui/caps.js";
+import type { Tier } from "./caps.js";
 
-type VoiceToken = "accent" | "text" | "muted" | "dim" | "error" | "warning";
+type Token = "accent" | "text" | "muted" | "dim" | "error" | "warning";
 
 /**
- * The part of Pi's Theme voice draws with. Colours reach `style` as values from `colors`, never
+ * The part of Pi's Theme skyr draws with. Colours reach `style` as values from `colors`, never
  * as token names: a token the theme draws faint would come out in its own colour plus SGR 2,
  * not in the mixed colour `colors` holds for it.
  */
-export interface VoiceTheme {
-  readonly colors: Pick<Theme["colors"], VoiceToken>;
+export interface ThemeLike {
+  readonly colors: Pick<Theme["colors"], Token>;
   /** The background the theme is designed for; the meter shades away from it. */
   readonly appearance: Theme["appearance"];
   style(text: string, style: TextStyle): string;
@@ -24,7 +23,7 @@ export interface VoiceTheme {
 
 /** The theme and what the terminal can show of it. */
 export interface Paint {
-  theme: VoiceTheme;
+  theme: ThemeLike;
   mode: Tier;
 }
 

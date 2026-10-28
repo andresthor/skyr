@@ -19,6 +19,7 @@ import type {
 import { readSkyrSection } from "../config.js";
 import { loadPi } from "../pi.js";
 import { type Tier, tierOf } from "../ui/caps.js";
+import type { Paint } from "../ui/palette.js";
 import { quoted } from "../ui/text.js";
 import { prewarmToken } from "./client.js";
 import { parseVoiceSection } from "./config.js";
@@ -31,7 +32,6 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
-import type { Paint } from "./palette.js";
 
 const VOICE_SHORTCUT = "ctrl+space";
 

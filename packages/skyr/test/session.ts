@@ -30,7 +30,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { expect, onTestFinished } from "vitest";
 import { registerSkyr } from "../src/index.js";
-import type { VoiceTheme } from "../src/voice/palette.js";
+import type { ThemeLike } from "../src/ui/palette.js";
 
 const tmp = (name: string) => mkdtempSync(join(tmpdir(), `skyr-test-${name}-`));
 
@@ -50,7 +50,7 @@ type Widget = Component & { dispose?(): void };
  * The theme a widget factory is handed: real colour values, and a `style` that returns the text
  * unchanged so a frame reads as plain text.
  */
-export const plainTheme: VoiceTheme = {
+export const plainTheme: ThemeLike = {
   colors: {
     accent: parseColor("#B8F818"),
     text: parseColor("#d4d4d4"),
@@ -98,7 +98,7 @@ export function widgetHost() {
       key: string,
       content:
         | string[]
-        | ((tui: WidgetTui, theme: VoiceTheme) => Widget)
+        | ((tui: WidgetTui, theme: ThemeLike) => Widget)
         | undefined,
     ) {
       widgetSets.push(key);

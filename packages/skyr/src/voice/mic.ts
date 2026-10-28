@@ -7,7 +7,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { PassThrough, type Readable } from "node:stream";
-import { errnoOf } from "../tools/render.js";
+import { errnoOf } from "../errno.js";
 import { micFailed, VoiceError } from "./errors.js";
 
 /** The capture rate: the recorder arguments, the PCM format string and the chunk size derive from it. */

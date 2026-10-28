@@ -15,7 +15,7 @@ import {
 import { type FileHandle, open, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
-import { errnoOf } from "../tools/render.js";
+import { errnoOf } from "../errno.js";
 import {
   adoptMoved,
   capLog,

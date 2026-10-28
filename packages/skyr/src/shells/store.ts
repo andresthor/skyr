@@ -3,7 +3,7 @@
  * (epoch ms, nothing rendered or derived), so a snapshot can be drawn or published as it is.
  */
 import type { TaskItem } from "../tengi.js";
-import { oneLine } from "../tools/render.js";
+import { oneLine } from "../ui/text.js";
 
 type ShellStatus = "running" | "done" | "failed" | "aborted" | "unknown";
 /** `pi`: stopped by a later session's cleanup after the Pi that started the job was gone. */

@@ -5,7 +5,7 @@
  * the user's own words beside a question with options. Pure: no extension API, no bus, no side
  * effects.
  */
-import { sanitize } from "../tools/render.js";
+import { sanitize } from "../ui/text.js";
 import { type Answers, shortHeader } from "./dialog.js";
 import type { FormRequest } from "./host.js";
 import type { AskQuestion } from "./index.js";

@@ -8,7 +8,7 @@
  * replacements differing only in case are CONFIG_DENIED — this validator owns that rule.
  */
 
-import { quoted } from "../tools/render.js";
+import { quoted } from "../ui/text.js";
 import type { Formatting, Replacement, SttConfig } from "./client.js";
 
 /** Case-sensitive written forms; Corti caps each at 50 chars / 5 words. */

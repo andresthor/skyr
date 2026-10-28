@@ -18,7 +18,8 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { cutToWidth, keyName, sanitize } from "../tools/render.js";
+import { cutToWidth, keyName } from "../tools/render.js";
+import { sanitize } from "../ui/text.js";
 import type { AskQuestion } from "./index.js";
 
 /** One question's answer: the picked labels as the model wrote them, and the user's own words. */

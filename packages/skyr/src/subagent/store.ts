@@ -3,7 +3,7 @@
  * name a run and its progress.
  */
 import type { TaskItem } from "../tengi.js";
-import { clip } from "../tools/render.js";
+import { clip } from "../ui/text.js";
 import type { ChildEvent } from "./runner.js";
 import type { WorktreePlan } from "./worktree.js";
 

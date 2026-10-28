@@ -4,7 +4,7 @@
  * request holds no tool blocks for a provider to reject.
  */
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { oneLine } from "../tools/render.js";
+import { oneLine } from "../ui/text.js";
 
 type Pi = typeof import("@earendil-works/pi-coding-agent");
 type AgentMessage = Parameters<Pi["convertToLlm"]>[0][number];

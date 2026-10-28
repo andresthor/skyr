@@ -17,7 +17,7 @@ import {
   stripTerminalSequences,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { sanitize } from "../tools/render.js";
+import { sanitize } from "../ui/text.js";
 import { clamp01, type Paint, styled } from "./palette.js";
 
 export const DRY_MS = 300;

@@ -12,8 +12,9 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { errnoOf } from "../errno.js";
 import { loadPi } from "../pi.js";
-import { clip, errnoOf, quoted, sanitize } from "../tools/render.js";
+import { clip, quoted, sanitize } from "../ui/text.js";
 import { DEFAULT_TOOLS, type loadAgents, parseTools } from "./agents.js";
 import { GRACE_MS } from "./child/proc-runner.js";
 import { readStoredResult } from "./child/protocol.js";

@@ -9,8 +9,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { errnoOf } from "./errno.js";
 import { loadPi } from "./pi.js";
-import { clip, errnoOf, quoted } from "./tools/render.js";
+import { clip, quoted } from "./ui/text.js";
 
 /** One key per module that reads the file; a section is added with the code that reads it. */
 const SECTIONS = ["voice", "advisor"] as const;

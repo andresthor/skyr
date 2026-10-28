@@ -4,8 +4,9 @@
  * background start.
  */
 import { loadPi } from "../pi.js";
-import { clip, oneLine, stripInvisible, tokens } from "../tools/render.js";
+import { tokens } from "../tools/render.js";
 import { spill } from "../tools/spill.js";
+import { clip, oneLine, stripInvisible } from "../ui/text.js";
 import type { ChildResult } from "./runner.js";
 import { count, labelOf, type RunSnapshot } from "./store.js";
 

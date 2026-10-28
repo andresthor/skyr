@@ -18,7 +18,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { readSkyrSection } from "../config.js";
 import { loadPi } from "../pi.js";
-import { quoted } from "../tools/render.js";
+import { quoted } from "../ui/text.js";
 import { prewarmToken } from "./client.js";
 import { parseVoiceSection } from "./config.js";
 import { credentialsNotice, resolveSttCredentials } from "./credentials.js";

@@ -7,7 +7,8 @@
  */
 import type { Readable } from "node:stream";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { errnoOf, oneLine, stripInvisible } from "../tools/render.js";
+import { errnoOf } from "../errno.js";
+import { oneLine, stripInvisible } from "../ui/text.js";
 import type { SttCredentials } from "./credentials.js";
 import { micFailed, VoiceError } from "./errors.js";
 import { pcmDbfs, SAMPLE_RATE_HZ } from "./mic.js";

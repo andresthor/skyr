@@ -1,8 +1,9 @@
 /** Agent files: markdown whose frontmatter defines a subagent and whose body is its prompt. */
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { errnoOf } from "../errno.js";
 import { loadPi } from "../pi.js";
-import { errnoOf, quoted, sanitize } from "../tools/render.js";
+import { quoted, sanitize } from "../ui/text.js";
 
 export interface AgentDef {
   name: string;

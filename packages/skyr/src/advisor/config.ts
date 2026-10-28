@@ -1,5 +1,5 @@
 /** The `advisor` section of `skyr.json`: which model reviews the session. */
-import { quoted } from "../tools/render.js";
+import { quoted } from "../ui/text.js";
 
 export interface AdvisorModel {
   provider: string;

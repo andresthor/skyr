@@ -20,7 +20,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { errnoOf } from "../tools/render.js";
+import { errnoOf } from "../errno.js";
 import type { StopReason } from "./store.js";
 
 const KILL_WAIT_MS = 1_000;

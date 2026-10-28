@@ -9,7 +9,7 @@
  * whose dir is removed is still watched by its group, and ends as `unknown`.
  */
 import { existsSync } from "node:fs";
-import { errnoOf } from "../tools/render.js";
+import { errnoOf } from "../errno.js";
 import {
   groupAlive,
   type JobRecord,

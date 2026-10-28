@@ -11,17 +11,11 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import TurndownService from "turndown";
 import { Type } from "typebox";
+import { errnoOf } from "../errno.js";
 import { loadPi } from "../pi.js";
+import { clip, stripInvisible } from "../ui/text.js";
 import { isPrivateAddress, redactUrl, withTimeout } from "./net.js";
-import {
-  clip,
-  elapsed,
-  errnoOf,
-  errorRow,
-  stripInvisible,
-  took,
-  toolRow,
-} from "./render.js";
+import { elapsed, errorRow, took, toolRow } from "./render.js";
 import { spill } from "./spill.js";
 
 const TIMEOUT_MS = 30_000;

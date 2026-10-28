@@ -2,7 +2,7 @@
  * The jobs as lines: the widget above the editor and the `/shells` listing. Lines are sanitized
  * but not cut to a width; the caller fits them to its surface.
  */
-import { sanitize } from "../tools/render.js";
+import { sanitize } from "../ui/text.js";
 import { active, duration, type ShellSnapshot, titleOf } from "./store.js";
 
 /** One line per running or lingering job, `$ <title> · <elapsed> · <id>`; undefined when none. */

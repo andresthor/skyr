@@ -6,7 +6,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { PiModule } from "../pi.js";
-import { oneLine, quoted } from "../tools/render.js";
+import { oneLine, quoted } from "../ui/text.js";
 import { logError } from "./exec.js";
 import {
   claimDelivery,

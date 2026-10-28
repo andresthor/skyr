@@ -4,12 +4,8 @@
  * delivered answer and a call's row, sanitized and left for their rows to cut.
  */
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import {
-  type Segment,
-  sanitize,
-  secondsText,
-  tokens,
-} from "../tools/render.js";
+import { type Segment, secondsText, tokens } from "../tools/render.js";
+import { sanitize } from "../ui/text.js";
 import { count, labelOf, progressOf, type RunSnapshot } from "./store.js";
 
 const WIDGET_WIDTH = 100;

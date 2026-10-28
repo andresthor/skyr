@@ -11,17 +11,8 @@ import type {
 import { Container, TruncatedText } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { hostCapabilities } from "../tengi.js";
-import {
-  clip,
-  errorRow,
-  firstLine,
-  oneLine,
-  quoted,
-  sanitize,
-  styled,
-  took,
-  toolRow,
-} from "../tools/render.js";
+import { errorRow, firstLine, styled, took, toolRow } from "../tools/render.js";
+import { clip, oneLine, quoted, sanitize } from "../ui/text.js";
 import {
   type Answers,
   alignHeaders,

@@ -16,14 +16,11 @@ import {
   elapsed,
   errorRow,
   firstLine,
-  oneLine,
-  quoted,
-  sanitize,
-  stripInvisible,
   tokens,
   took,
   toolRow,
 } from "../tools/render.js";
+import { oneLine, quoted, sanitize, stripInvisible } from "../ui/text.js";
 import { type AdvisorModel, parseAdvisorSection } from "./config.js";
 import { adviceTokens, advisorContext } from "./dialogue.js";
 

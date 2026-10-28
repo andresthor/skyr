@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
@@ -14,6 +14,22 @@ test("skyr imports nothing from its host", () => {
       /(?:from|import\()\s*"(\.[^"]+)"/g,
     )) {
       if (!resolve(dirname(join(KIT, f)), spec).startsWith(KIT))
+        offenders.push(`${f} → ${spec}`);
+    }
+  }
+  expect(offenders).toEqual([]);
+});
+
+test("nothing under src/ui imports from src outside src/ui", () => {
+  const UI = join(KIT, "ui");
+  const offenders: string[] = [];
+  for (const f of readdirSync(UI, { recursive: true }) as string[]) {
+    if (!f.endsWith(".ts")) continue;
+    const src = readFileSync(join(UI, f), "utf8");
+    for (const [, spec = ""] of src.matchAll(
+      /(?:from|import\()\s*"(\.[^"]+)"/g,
+    )) {
+      if (!resolve(dirname(join(UI, f)), spec).startsWith(UI + sep))
         offenders.push(`${f} → ${spec}`);
     }
   }

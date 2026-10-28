@@ -6,15 +6,9 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { oneLine, sanitize } from "../ui/text.js";
 import { redactUrl, withTimeout } from "./net.js";
-import {
-  elapsed,
-  errorRow,
-  oneLine,
-  sanitize,
-  took,
-  toolRow,
-} from "./render.js";
+import { elapsed, errorRow, took, toolRow } from "./render.js";
 
 const TIMEOUT_MS = 15_000;
 const DEFAULT_RESULTS = 8;

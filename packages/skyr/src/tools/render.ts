@@ -1,6 +1,6 @@
 /**
- * Text that reaches a terminal or a model. Tool rows, key names for hints, and the one set of
- * invisible characters stripped from anything a model, a web page or a server produced.
+ * Text that reaches a terminal or a model. Tool rows, key names for hints, and the cut that keeps a
+ * row inside its width.
  */
 import type {
   KeybindingsManager,
@@ -11,76 +11,13 @@ import type {
 import {
   Box,
   sliceByColumn,
-  stripTerminalSequences,
   Text,
   TruncatedText,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { sanitize } from "../ui/text.js";
 
 export type Segment = [color: ThemeColor, text: string, bold?: boolean];
-
-/**
- * Characters that take no width but change what text means: C0 and C1 controls other than
- * newline and tab, the soft hyphen, bidi marks, overrides and isolates, zero-widths, the
- * byte-order mark, interlinear annotation marks, tag characters, and lone surrogates (measured
- * as zero columns, printed as a one-column U+FFFD). ZWJ and ZWNJ are left out on purpose, since
- * they carry meaning in emoji sequences and in Persian and Indic text.
- */
-const INVISIBLE =
-  /(?![\n\t])[\p{Cc}\p{Cs}\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u206F\uFEFF\uFFF9-\uFFFB\u{E0000}-\u{E007F}]/gu;
-
-/** Strips invisible characters, keeping newlines and tabs so a page's markdown survives. */
-export function stripInvisible(text: string): string {
-  return text.replace(INVISIBLE, "");
-}
-
-/**
- * One-line row text: drops whole terminal sequences, collapses whitespace, then strips
- * invisible characters. Newlines become spaces, so this is not for body text a model reads.
- */
-export function sanitize(raw: string): string {
-  // Whole sequences first: dropping the escape byte alone leaves the payload as visible text.
-  return stripInvisible(stripTerminalSequences(raw).replace(/\s+/g, " "));
-}
-
-/**
- * The errno of a failed call ("ENOENT", …), or undefined when it has none. Looks down the cause
- * chain too: undici wraps the real error (DNS, TLS) at a depth that varies by Node version, and
- * groups some of them in `errors`.
- */
-export function errnoOf(error: unknown): string | undefined {
-  for (let e: unknown = error, hops = 0; hops < 4; hops++) {
-    if (typeof e !== "object" || e === null) return undefined;
-    if ("code" in e && typeof e.code === "string") return e.code;
-    const wrapped = e as { cause?: unknown; errors?: unknown[] };
-    e = wrapped.cause ?? wrapped.errors?.[0];
-  }
-  return undefined;
-}
-
-/** Model-supplied text bound for an error message: its length is unbounded, so keep it readable. */
-export function clip(text: string, max = 120): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
-}
-
-/** Server- or vendor-written text bound for a one-line message: sanitized, trimmed, clipped. */
-export function oneLine(text: string, max: number): string {
-  return clip(sanitize(text).trim(), max);
-}
-
-/**
- * Echoed user input in a message: clipped, then JSON-quoted, so controls, quotes and
- * backslashes show as escapes, and so does every other invisible character, as `\uXXXX`
- * (a tag character as its two surrogates).
- */
-export function quoted(text: string, max: number): string {
-  return JSON.stringify(clip(text, max)).replace(INVISIBLE, (c) =>
-    Array.from(
-      { length: c.length },
-      (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, "0")}`,
-    ).join(""),
-  );
-}
 
 /**
  * The first key bound to `id`, spelled as Pi spells a key (`option` for `alt` on macOS); empty

@@ -1,53 +1,13 @@
-/**
- * Text that reaches a terminal or a model. Tool rows, key names for hints, and the cut that keeps a
- * row inside its width.
- */
+/** Tool rows: segments in their colours, a running row's clock, and the text message renderer. */
 import type {
-  KeybindingsManager,
   MessageRenderer,
   Theme,
   ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Box,
-  sliceByColumn,
-  Text,
-  TruncatedText,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { Box, Text, TruncatedText } from "@earendil-works/pi-tui";
 import { sanitize } from "../ui/text.js";
 
 export type Segment = [color: ThemeColor, text: string, bold?: boolean];
-
-/**
- * The first key bound to `id`, spelled as Pi spells a key (`option` for `alt` on macOS); empty
- * when unbound. Not Pi's `keyText`: that reads the global bindings instead of `keys`, names
- * every bound key, and lives in pi-coding-agent, which a render path cannot load synchronously.
- */
-export function keyName(
-  keys: Pick<KeybindingsManager, "getKeys">,
-  id: Parameters<KeybindingsManager["getKeys"]>[0],
-): string {
-  const key = keys.getKeys(id)[0] ?? "";
-  return process.platform === "darwin"
-    ? key.replace(/\balt\b/g, "option")
-    : key;
-}
-
-/**
- * `text` whole when it fits in `cols` columns, else cut by whole columns to end in `ellipsis`,
- * with no escape added: unlike `truncateToWidth`, whose SGR reset around the ellipsis ends the
- * colour or background the text is drawn in, and puts escapes into a TERM=dumb row.
- */
-export function cutToWidth(
-  text: string,
-  cols: number,
-  ellipsis: string,
-): string {
-  return visibleWidth(text) <= cols
-    ? text
-    : `${sliceByColumn(text, 0, cols - visibleWidth(ellipsis), true)}${ellipsis}`;
-}
 
 /** Segments in their colours, as given: the caller has made their text safe to draw. */
 export function styled(

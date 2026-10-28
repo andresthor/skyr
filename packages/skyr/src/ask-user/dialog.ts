@@ -18,7 +18,8 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { cutToWidth, keyName } from "../tools/render.js";
+import { fitToWidth } from "../ui/fit.js";
+import { keyName } from "../ui/hint.js";
 import { sanitize } from "../ui/text.js";
 import type { AskQuestion } from "./index.js";
 
@@ -46,7 +47,7 @@ export const HEADER_WIDTH = 12;
 
 /** A question's header as every ask_user surface draws it: sanitized, cut to `HEADER_WIDTH` columns. */
 export function shortHeader(raw: string): string {
-  return cutToWidth(sanitize(raw).trim(), HEADER_WIDTH, "…");
+  return fitToWidth(sanitize(raw).trim(), HEADER_WIDTH, "…");
 }
 
 /**

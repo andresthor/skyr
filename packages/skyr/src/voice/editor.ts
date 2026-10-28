@@ -21,7 +21,7 @@ import type {
   CustomEditor,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { keyName } from "../tools/render.js";
+import { keyName } from "../ui/hint.js";
 import type { DictationSink } from "./dictation.js";
 import { DRY_MS, spliceGhost } from "./ghost.js";
 import { renderRule, type VoiceKeys, type VoiceSnapshot } from "./indicator.js";

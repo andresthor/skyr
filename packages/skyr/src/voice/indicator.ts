@@ -13,7 +13,7 @@ import {
   oklchColor,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { cutToWidth } from "../tools/render.js";
+import { fitToWidth } from "../ui/fit.js";
 import { type DictationFacts, SPEECH_DBFS } from "./dictation.js";
 import { clamp01, type Paint, styled } from "./palette.js";
 
@@ -146,7 +146,7 @@ function marks(paint: Paint) {
   const ellipsis = ascii ? "..." : "…";
   return {
     sep: ascii ? ", " : fg(T.dim, " · "),
-    cut: (text: string, cols: number) => cutToWidth(text, cols, ellipsis),
+    cut: (text: string, cols: number) => fitToWidth(text, cols, ellipsis),
     discarded: fg(T.muted, "discarded"),
     /** The error mark, then `text`: the error's message, clipped to the display's room. */
     cause: (text: string) =>

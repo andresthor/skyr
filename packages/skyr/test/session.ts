@@ -253,6 +253,16 @@ export async function parentSession(o: {
   };
 }
 
+/**
+ * The lines `/subagents` lists for the parent right now, one per running child; `[]` when none
+ * runs. A point in time, unlike a widget frame, and the same in every run mode.
+ */
+export async function listing(parent: Parent): Promise<string[]> {
+  await parent.session.prompt("/subagents");
+  const text = parent.notices.at(-1) ?? "";
+  return text === "subagent: none running" ? [] : text.split("\n");
+}
+
 /** A temp directory, removed when the test ends. */
 export function scratchDir(name: string): string {
   const dir = tmp(name);

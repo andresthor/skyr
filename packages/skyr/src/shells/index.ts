@@ -21,6 +21,7 @@ import type { PiModule } from "../pi.js";
 import { publishTasks, type TaskRef } from "../tengi.js";
 import { textMessageRenderer } from "../tools/render.js";
 import { liveWidget } from "../tools/widget.js";
+import { canDraw } from "../ui/caps.js";
 import { Moved, movingOperations } from "./exec.js";
 import { identify } from "./job.js";
 import { createShellSession, snapshotOf, stopHandedOver } from "./session.js";
@@ -266,7 +267,7 @@ export function wireShells(
     own.subscribe(publish);
     stopWidget?.();
     stopWidget = undefined;
-    if (ctx.hasUI)
+    if (canDraw(ctx))
       stopWidget = liveWidget(ctx, WIDGET_KEY, {
         subscribe: own.subscribe,
         lines: () => widgetLines(own.jobs(), Date.now()),

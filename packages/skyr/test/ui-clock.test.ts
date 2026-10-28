@@ -61,15 +61,19 @@ test("an unsubscribe is idempotent, and one made inside a tick does not skip the
   expect(tick).toHaveBeenCalledTimes(1);
 });
 
-test("a throwing subscriber is dropped and the others keep ticking", () => {
+test("a throwing subscriber is dropped, its cause reported once, and the others keep ticking", () => {
+  const cause = new Error("stale");
   const bad = vi.fn(() => {
-    throw new Error("stale");
+    throw cause;
   });
+  const reported = vi.fn();
   const good = vi.fn();
-  sub(bad);
+  stops.push(everySecond(bad, reported));
   sub(good);
 
   vi.advanceTimersByTime(3_000);
   expect(bad).toHaveBeenCalledTimes(1);
   expect(good).toHaveBeenCalledTimes(3);
+  expect(reported).toHaveBeenCalledTimes(1);
+  expect(reported).toHaveBeenCalledWith(cause);
 });

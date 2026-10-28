@@ -19,6 +19,7 @@ import {
   toolRow,
 } from "../tools/render.js";
 import { liveWidget } from "../tools/widget.js";
+import { canDraw } from "../ui/caps.js";
 import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { addUsage } from "./child/protocol.js";
@@ -298,7 +299,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
 
     stopWidget?.();
     stopWidget = undefined;
-    if (!ctx.hasUI) return;
+    if (!canDraw(ctx)) return;
     stopWidget = liveWidget(ctx, WIDGET_KEY, {
       subscribe: store.subscribe,
       lines: () => widgetLines(store.running(), Date.now()),

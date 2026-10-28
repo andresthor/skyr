@@ -12,6 +12,7 @@ import {
   call,
   hold,
   lanes,
+  listing,
   parentSession,
   results,
   router,
@@ -21,18 +22,18 @@ import {
   textOf,
 } from "./session.js";
 
-/** Passes once the latest widget frame shows `task`'s ad-hoc child queued, with what follows. */
+/** Passes once the listing shows `task`'s ad-hoc child queued, with what follows. */
 const queued =
   (
     parent: Awaited<ReturnType<typeof parentSession>>,
     task: string,
     rest = "",
   ) =>
-  () =>
+  async () =>
     expect(
-      parent.widgets
-        .at(-1)
-        ?.some((l) => l.startsWith(`○ queued "run ${task}"${rest}`)),
+      (await listing(parent)).some((l) =>
+        l.startsWith(`○ queued "run ${task}"${rest}`),
+      ),
     ).toBe(true);
 
 test("writers in one cwd run one at a time in call order, from an agent file's tools or the tools param, and the status counts queued children", async () => {
@@ -60,12 +61,9 @@ test("writers in one cwd run one at a time in call order, from an agent file's t
   const run = parent.session.prompt("go");
   await holds.get("w1")!.entered;
   await vi.waitFor(queued(parent, "w3", ' · behind "run w2" · '));
-  expect(
-    parent.widgets.some(
-      (w) =>
-        w?.length === 3 && w.filter((l) => l.includes("queued")).length === 2,
-    ),
-  ).toBe(true);
+  const waiting = await listing(parent);
+  expect(waiting).toHaveLength(3);
+  expect(waiting.filter((l) => l.includes("queued"))).toHaveLength(2);
 
   released.add("w1");
   holds.get("w1")!.release();
@@ -80,7 +78,7 @@ test("writers in one cwd run one at a time in call order, from an agent file's t
   expect(order).toEqual(["w1", "w2", "w3"]);
   for (const task of holds.keys())
     expect(results(parent.session).get(task)?.isError).toBe(false);
-  expect(parent.widgets.at(-1)).toBeUndefined();
+  expect(await listing(parent)).toEqual([]);
 });
 
 test("a writer and a reader in the same cwd run concurrently, and bash does not make a writer", async () => {
@@ -98,8 +96,8 @@ test("a writer and a reader in the same cwd run concurrently, and bash does not 
 
   const run = parent.session.prompt("go");
   await Promise.all([...holds.values()].map((h) => h.entered));
-  expect(parent.widgets.at(-1)).toHaveLength(3);
-  expect(parent.widgets.at(-1)?.some((l) => l.includes("queued"))).toBe(false);
+  expect(await listing(parent)).toHaveLength(3);
+  expect((await listing(parent)).some((l) => l.includes("queued"))).toBe(false);
   for (const h of holds.values()) h.release();
   await run;
   for (const task of holds.keys())
@@ -166,8 +164,8 @@ test("a writer in a subdirectory queues behind a writer in the directory above i
 
   const run = parent.session.prompt("go");
   await holds.get("root")!.entered;
-  await vi.waitFor(() =>
-    expect(parent.widgets.at(-1)?.some((l) => l.startsWith("○ queued"))).toBe(
+  await vi.waitFor(async () =>
+    expect((await listing(parent)).some((l) => l.startsWith("○ queued"))).toBe(
       true,
     ),
   );
@@ -231,9 +229,9 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
   const run = parent.session.prompt("go");
   await h1.entered;
   await vi.waitFor(queued(parent, "w2"));
-  expect(parent.widgets.at(-1)).toHaveLength(2);
+  expect(await listing(parent)).toHaveLength(2);
   expect(
-    parent.widgets.at(-1)?.filter((l) => l.includes("queued")),
+    (await listing(parent)).filter((l) => l.includes("queued")),
   ).toHaveLength(1);
 
   const started = Date.now();
@@ -252,7 +250,7 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
   ]);
   expect(w2?.details).not.toHaveProperty([0, "sessionFile"]);
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
-  expect(parent.widgets.at(-1)).toBeUndefined();
+  expect(await listing(parent)).toEqual([]);
 });
 
 test("a reload aborts queued children, and their result says Pi reloaded", async () => {
@@ -284,7 +282,7 @@ test("a reload aborts queued children, and their result says Pi reloaded", async
   );
   expect(textOf(byTask.get("w2")!)).toMatch(/ id="[0-9a-f]{8}">\n/);
   expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
-  expect(parent.widgets.at(-1)).toBeUndefined();
+  expect(await listing(parent)).toEqual([]);
 });
 
 test("writer lanes in one directory run one at a time: call order, then lane order, across two calls in one message", async () => {
@@ -436,19 +434,19 @@ test("a stopped queued writer keeps the directory locked until the writer ahead 
   });
   await parent.session.prompt(`/subagents stop ${w2}`);
   await noticed;
-  await vi.waitFor(() =>
-    expect(parent.widgets.at(-1)).toEqual([expect.stringContaining("run w1")]),
+  await vi.waitFor(async () =>
+    expect(await listing(parent)).toEqual([expect.stringContaining("run w1")]),
   );
   await parent.session.waitForIdle();
 
   await parent.session.prompt("again");
-  expect(parent.widgets.at(-1)).toContainEqual(
+  expect(await listing(parent)).toContainEqual(
     expect.stringMatching(/^○ queued "run w3" · behind "run w1" · /),
   );
   expect(parent.requests.some((r) => taskOf(r) === "w3")).toBe(false);
 
   w1.release();
-  await vi.waitFor(() => expect(parent.widgets.at(-1)).toBeUndefined());
+  await vi.waitFor(async () => expect(await listing(parent)).toEqual([]));
   await parent.session.waitForIdle();
 });
 
@@ -471,12 +469,12 @@ test("a foreground writer stopped by Esc while queued keeps the directory locked
   await run;
 
   await parent.session.prompt("again");
-  expect(parent.widgets.at(-1)).toContainEqual(
+  expect(await listing(parent)).toContainEqual(
     expect.stringMatching(/^○ queued "run w3" · behind /),
   );
   expect(parent.requests.some((r) => taskOf(r) === "w3")).toBe(false);
 
   w1.release();
-  await vi.waitFor(() => expect(parent.widgets.at(-1)).toBeUndefined());
+  await vi.waitFor(async () => expect(await listing(parent)).toEqual([]));
   await parent.session.waitForIdle();
 });

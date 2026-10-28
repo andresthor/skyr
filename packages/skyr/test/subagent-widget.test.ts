@@ -26,6 +26,7 @@ function fakeTicks(): void {
 async function writers(count: number) {
   const held = hold();
   const parent = await parentSession({
+    mode: "tui",
     respond: router(
       Array.from({ length: count }, (_, i) =>
         call({
@@ -61,6 +62,7 @@ async function parentTurns(parent: Parent, n: number): Promise<void> {
 test("the subagent widget is set once per appearance, not once per tick", async () => {
   const held = hold();
   const parent = await parentSession({
+    mode: "tui",
     respond: router([call({ prompt: "s" })], held.step),
   });
   fakeTicks();
@@ -128,6 +130,7 @@ test("with a host that never mounts the widget, no repaint tick runs and the wid
   ];
   const sets: string[] = [];
   const parent = await parentSession({
+    mode: "tui",
     respond: (context, ...rest) =>
       taskOf(context) === "go"
         ? (turns.shift() ?? fauxAssistantMessage("noted"))
@@ -165,6 +168,7 @@ test("with a host that never mounts the widget, no repaint tick runs and the wid
 test("after the host disposes the widget, the next run shows it again", async () => {
   const holds = new Map(["a", "b"].map((task) => [task, hold()]));
   const parent = await parentSession({
+    mode: "tui",
     respond: router(
       [...holds.keys()].map((task) =>
         call({ prompt: task, tools: ["write"], cwd: "." }),

@@ -17,6 +17,7 @@ import {
   childIds,
   hold,
   lanes,
+  listing,
   parentSession,
   results,
   router,
@@ -87,7 +88,7 @@ test("a call with one bad task among three runs nothing and names every bad task
     "- task 3: give a short description: 3-5 words for the user, in description",
   ]);
   expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);
-  expect(parent.widgets).toEqual([]);
+  expect(await listing(parent)).toEqual([]);
 });
 
 test("a refused call claims nothing: a later writer in that directory starts at once, and a continue it named can be continued again", async () => {
@@ -197,7 +198,7 @@ test("nine tasks fail Pi's validation before anything starts", async () => {
   expect(textOf(result)).toContain(
     "  - tasks: must not have more than 8 items",
   );
-  expect(parent.widgets).toEqual([]);
+  expect(await listing(parent)).toEqual([]);
 });
 
 test("a call is an error only when every task failed, stopped or ended empty", async () => {
@@ -279,7 +280,7 @@ test("Esc keeps every finished lane's answer; a running lane reads stopped befor
   const run = parent.session.prompt("go");
   await Promise.all([...holds.values()].map((h) => h.entered));
   // The fast lane has ended once only the other three are listed.
-  await vi.waitFor(() => expect(parent.widgets.at(-1)).toHaveLength(3));
+  await vi.waitFor(async () => expect(await listing(parent)).toHaveLength(3));
   await parent.session.abort();
   await run;
 

@@ -18,6 +18,7 @@ import {
   call,
   gitRepo,
   hold,
+  listing,
   type Parent,
   parentSession,
   results,
@@ -74,7 +75,7 @@ test("two bare writers in one turn run in their own worktrees without queueing",
   const done = parent.session.prompt("go");
   // Concurrent start: neither queued, no writer relationship between the two trees.
   await Promise.all([...holds.values()].map((h) => h.entered));
-  expect(parent.widgets.at(-1)?.some((l) => l.startsWith("○ queued"))).toBe(
+  expect((await listing(parent)).some((l) => l.startsWith("○ queued"))).toBe(
     false,
   );
 
@@ -113,11 +114,11 @@ test("a bare writer in a non-repo falls back in-tree, queues, and says so", asyn
   const done = parent.session.prompt("go");
   await holds.get("intree")!.entered;
   // Both writers share the parent's tree, so the bare one queues behind the in-tree writer.
-  await vi.waitFor(() =>
+  await vi.waitFor(async () =>
     expect(
-      parent.widgets
-        .at(-1)
-        ?.some((l) => l.startsWith("○ queued") && l.includes("behind")),
+      (await listing(parent)).some(
+        (l) => l.startsWith("○ queued") && l.includes("behind"),
+      ),
     ).toBe(true),
   );
   for (const h of holds.values()) h.release();
@@ -169,7 +170,7 @@ test("an aborted bare writer leaves its worktree on disk; nothing deletes it", a
   expect(tag).toBeDefined();
   await parent.session.prompt(`/subagents stop ${tag}`);
   await parent.session.waitForIdle();
-  await vi.waitFor(() => expect(parent.widgets.at(-1)).toBeUndefined());
+  await vi.waitFor(async () => expect(await listing(parent)).toEqual([]));
 
   // The worktree survives the aborted run: the plan's own refusal, nothing deletes it.
   const list = execFileSync("git", ["-C", parent.cwd, "worktree", "list"], {

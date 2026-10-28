@@ -5,6 +5,7 @@ import { expect, test } from "vitest";
 import {
   call,
   hold,
+  listing,
   parentSession,
   results,
   taskOf,
@@ -27,14 +28,15 @@ test("a quiet in-process child is never shown as stalled, and finishes once rele
 
   const run = parent.session.prompt("go");
   await held.entered;
-  // Past the widget's 1 s tick, so a mis-wired stall flag would surface.
+  // A second of quiet, so a mis-wired stall flag would surface.
   await new Promise<void>((resolve) => setTimeout(resolve, 1_200));
-  expect(parent.widgets.at(-1)).toHaveLength(1);
-  expect(parent.widgets.flat().join("\n")).not.toContain("stalled");
+  const lines = await listing(parent);
+  expect(lines).toHaveLength(1);
+  expect(lines.join("\n")).not.toContain("stalled");
 
   await held.release();
   await run;
   await parent.session.waitForIdle();
   expect(textOf(results(parent.session).get("quiet")!)).toContain("released");
-  expect(parent.widgets.at(-1)).toBeUndefined();
+  expect(await listing(parent)).toEqual([]);
 });

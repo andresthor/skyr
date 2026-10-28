@@ -157,11 +157,10 @@ arrive together. Esc does not stop a background subagent; `/subagents` lists the
 `/subagents stop <id|all>` stops them, one task at a time or all. A `/reload` stops background
 subagents; the reloaded session receives one message naming each, so the model knows their answers
 will not come. A widget above the editor shows every live subagent, running, queued or in the
-background; past ten, it shows nine and a count of the rest. Plain `pi --mode rpc` clients don't get
-the widget: Pi's RPC mode passes on widgets made of lines only, and this one is a component. A
-delivered message shows one line per subagent, naming why any of them gave no answer; expand it to
-read the answers. A background subagent's token usage is in the delivered message, not in the
-footer.
+background; past ten, it shows nine and a count of the rest. The widget is drawn only in Pi's
+terminal UI; rpc clients and print mode get none. A delivered message shows one line per subagent,
+naming why any of them gave no answer; expand it to read the answers. A background subagent's token
+usage is in the delivered message, not in the footer.
 
 The model reads each answer inside a `<subagent-answer>` block, foreground or delivered, whose
 attributes carry the run's status, tokens and 8-char `id`; the subagent's own text can't open or
@@ -203,8 +202,8 @@ is not lost to a timeout or a wait: it can keep running, and the model is told w
   `docker run -d`, `tmux`) are neither tracked nor stopped.
 - **`/shells`** lists this session's jobs, running first, with their state and log. `/shells stop
   <id|all>` stops them; the model is told, without a new turn. Running jobs also show in a
-  widget above the editor (past ten, nine and a count of the rest; not for plain `pi --mode rpc`
-  clients, as with the subagent widget), and in an ACP client's task list, where a moved call's
+  widget above the editor (past ten, nine and a count of the rest; in Pi's terminal UI only, as
+  with the subagent widget), and in an ACP client's task list, where a moved call's
   card points to its job's task instead of showing an exit code.
 - **Messages.** A job's end arrives when the session is idle and starts a turn: its exit code or
   how it was stopped, the last lines of output and the log path. After a `/compact` the model is

@@ -22,6 +22,7 @@ import {
   expectInert,
   HOSTILE,
   hold,
+  listing,
   parentSession,
   results,
   router,
@@ -469,7 +470,7 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
 
   const run = parent.session.prompt("go");
   await Promise.all([...holds.values()].map((h) => h.entered));
-  expect(parent.widgets.at(-1)).toHaveLength(3);
+  expect(await listing(parent)).toHaveLength(3);
 
   await parent.session.abort();
   await run;
@@ -481,7 +482,7 @@ test("parallel subagent calls in one turn run concurrently, and Esc stops them a
       /^subagent: 1 task · stopped · .*\nEach .*\n\n<subagent-answer task="1 of 1" agent="scout" description="run scout" status="stopped" .*>\nsubagent: scout "run scout" was stopped by the user before it answered\n<\/subagent-answer>$/,
     );
   }
-  expect(parent.widgets.at(-1)).toBeUndefined();
+  expect(await listing(parent)).toEqual([]);
 });
 
 test("a child gets exactly its agent file's tools or the default set (an ad-hoc call too), and the parent's model unless its agent file names one", async () => {
@@ -658,7 +659,7 @@ test("a missing cwd, or a file as cwd, fails before any child starts and names t
   expect(textOf(file!)).toContain(join(parent.cwd, "a-file"));
   expect(textOf(file!)).toContain("is not a directory");
   expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);
-  expect(parent.widgets).toEqual([]);
+  expect(await listing(parent)).toEqual([]);
 });
 
 test("a blank description is refused before any other check", async () => {
@@ -958,7 +959,7 @@ test("output past the cap ends with a pointer to a file holding the full answer,
   );
 });
 
-test("a running call's row is its call line alone, and the widget lists the run; a resumed session renders the row from saved details alone", async () => {
+test("a running call's row is its call line alone, and the listing shows the run; a resumed session renders the row from saved details alone", async () => {
   const held = hold();
   const parent = await parentSession({
     respond: router([call({ agent: "scout", prompt: "s" })], held.step),
@@ -973,16 +974,16 @@ test("a running call's row is its call line alone, and the widget lists the run;
   await held.entered;
   // No partial result, so Pi has nothing to draw but the call line.
   expect(updates).toBe(0);
-  const lines = parent.widgets.at(-1);
+  const lines = await listing(parent);
   expect(lines).toHaveLength(1);
   const id8 =
     /^● running scout "run scout" · 0 turns · 0 tools · \d+s · ([0-9a-f]{8})$/.exec(
-      lines?.[0] ?? "",
+      lines[0] ?? "",
     )?.[1];
   expect(id8).toBeDefined();
   held.release();
   await run;
-  expect(parent.widgets.at(-1)).toBeUndefined();
+  expect(await listing(parent)).toEqual([]);
 
   const reopened = SessionManager.open(parent.session.sessionFile!);
   const saved = reopened

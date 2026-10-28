@@ -4,7 +4,10 @@
  */
 
 /** One entry per subscription, so the same function twice is two subscriptions. */
-const entries = new Set<{ tick: () => void }>();
+const entries = new Set<{
+  tick: () => void;
+  onThrow?: (cause: unknown) => void;
+}>();
 let interval: ReturnType<typeof setInterval> | undefined;
 
 /** Clears the interval once nobody is subscribed. */
@@ -18,9 +21,9 @@ function run(): void {
   for (const entry of entries) {
     try {
       entry.tick();
-    } catch {
-      // One row's failing redraw must not stop the others
+    } catch (cause) {
       entries.delete(entry);
+      entry.onThrow?.(cause);
     }
   }
   idle();
@@ -28,10 +31,14 @@ function run(): void {
 
 /**
  * Calls `tick` once a second until the returned stop, which is idempotent. All callers share one
- * interval that runs only while one is subscribed; a throwing tick is dropped.
+ * interval that runs only while one is subscribed. A throwing tick is dropped, and its cause goes
+ * to `onThrow` once; without one the cause is dropped with it.
  */
-export function everySecond(tick: () => void): () => void {
-  const entry = { tick };
+export function everySecond(
+  tick: () => void,
+  onThrow?: (cause: unknown) => void,
+): () => void {
+  const entry = { tick, onThrow };
   entries.add(entry);
   interval ??= setInterval(run, 1000);
   return () => {

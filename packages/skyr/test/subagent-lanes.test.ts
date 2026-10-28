@@ -5,11 +5,8 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
-import {
-  SessionManager,
-  type Theme,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { expect, test, vi } from "vitest";
 import {
   agentFile,
@@ -25,6 +22,7 @@ import {
   taskOf,
   textOf,
 } from "./session.js";
+import { toolRowHost } from "./ui.js";
 
 /** Input tokens a call's children spent, each read from its own saved transcript. */
 const spentBy = (details: unknown) =>
@@ -38,14 +36,6 @@ const spentBy = (details: unknown) =>
           : 0),
       0,
     );
-
-const plain = {
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as unknown as Theme;
-
-type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 
 const nobody = () => {
   throw new Error("a child started");
@@ -577,14 +567,19 @@ test("a shimmed call's row renders its lanes from the raw arguments", async () =
   );
   expect(typeof saved.get("string")?.tasks).toBe("string");
   const tool = parent.session.extensionRunner.getToolDefinition("subagent");
-  const line = (id: string, isPartial: boolean) =>
-    tool
-      ?.renderCall?.(saved.get(id), plain, { isPartial } as RenderContext)
-      .render(200)[0]
-      ?.trimEnd();
-  expect(line("string", true)).toBe('subagent 2 tasks · scout "a", "b"');
-  expect(line("string", false)).toBe("subagent 2 tasks · scout");
-  expect(line("lone", false)).toBe('subagent scout "a"');
+  if (!tool) throw new Error("no subagent tool");
+  const line = (id: string) => {
+    const host = toolRowHost(tool, saved.get(id));
+    return stripTerminalSequences(host.lines(200)[1] ?? "")
+      .trim()
+      .split(/ {2,}/);
+  };
+  expect(line("string")).toEqual([
+    "• agent",
+    'scout "a" "b"',
+    "2 lanes · live below",
+  ]);
+  expect(line("lone")).toEqual(["• agent", 'scout "a"', "live below"]);
 });
 
 test("an old flat task call is refused, naming its keys", async () => {

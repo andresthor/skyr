@@ -3,8 +3,9 @@ import { failureLine } from "../src/chrome/bar-view.js";
 import type { RunSnapshot } from "../src/subagent/store.js";
 import {
   barRow,
+  headRecord,
   laneLine,
-  laneTree,
+  laneRecord,
   listingLines,
 } from "../src/subagent/view.js";
 
@@ -68,7 +69,7 @@ test("a queued run's bar row says who it waits behind, and a hostile label arriv
   expect(barRow(running)).toMatchObject({ mark: "running", background: false });
 });
 
-test("a run past a quarter of an hour reads 18m58s in the listing, a lane and a tree, never 1138s", () => {
+test("a run past a quarter of an hour reads 18m58s in the listing, a delivered line and a lane record, never 1138s", () => {
   const ended = {
     ...running,
     status: "done" as const,
@@ -79,7 +80,80 @@ test("a run past a quarter of an hour reads 18m58s in the listing, a lane and a 
   const text = (segments: [string, string, boolean?][]) =>
     segments.map(([, s]) => s).join("");
   expect(text(laneLine(ended))).toContain(" · 18m58s · ");
-  expect(laneTree([ended]).map(text).join("\n")).toContain(" · 18m58s");
+  expect(laneRecord(ended).facts.map((f) => f.text)).toContain("18m58s");
+});
+
+test("a lane record carries its label, reason, counters, tokens, time and id, in the order they drop", () => {
+  const record = laneRecord({
+    ...running,
+    status: "failed",
+    error: "boom",
+    startedAt: 1_000,
+    endedAt: 4_000,
+    turns: 2,
+    toolCalls: 3,
+    tokens: 31_000,
+  });
+  expect(record).toMatchObject({
+    mark: "failed",
+    subject: ['scout "look around"'],
+    handle: "abcdef01",
+  });
+  expect(record.facts).toEqual([
+    { text: "boom", kind: "explain" },
+    { text: "2 turns", kind: "measure" },
+    { text: "3 tools", kind: "measure" },
+    { text: "31k tok", kind: "measure" },
+    { text: "3.0s", kind: "measure" },
+  ]);
+});
+
+test("a recovered lane says so instead of counters and time, and a hostile label arrives inert", () => {
+  const record = laneRecord({
+    ...running,
+    status: "done",
+    recovered: true,
+    description: "x\u001b]52;c;aGk=\u0007\nsecond",
+    endedAt: 9_000,
+  });
+  expect(record.subject).toEqual(['scout "x second"']);
+  expect(record.facts.map((f) => f.text)).toEqual([
+    "recovered after a restart",
+    "0 tok",
+  ]);
+});
+
+test("a lane stopped by the user is stopped, an empty answer is a failure", () => {
+  const mark = (over: Partial<RunSnapshot>) =>
+    laneRecord({ ...running, ...over }).mark;
+  expect(mark({ status: "done" })).toBe("done");
+  expect(mark({ status: "done", error: "ended without an answer" })).toBe(
+    "failed",
+  );
+  expect(mark({ status: "aborted", error: "stopped by the user" })).toBe(
+    "stopped",
+  );
+  expect(mark({ status: "failed", error: "x" })).toBe("failed");
+});
+
+test("a head record is the lanes' shared mark, or mixed for a mix, and leaves out the wall of a recovered call", () => {
+  const done = {
+    ...running,
+    status: "done" as const,
+    startedAt: 1_000,
+    endedAt: 3_000,
+  };
+  expect(headRecord([done, done]).mark).toBe("done");
+  expect(headRecord([done, { ...done, status: "aborted" }]).mark).toBe("mixed");
+  expect(headRecord([done, done]).facts.map((f) => f.kind)).toEqual([
+    "extra",
+    "explain",
+    "measure",
+    "measure",
+  ]);
+  expect(
+    headRecord([done, { ...done, recovered: true }]).facts.map((f) => f.kind),
+  ).toEqual(["extra", "explain", "measure"]);
 });
 
 test("under TERM=dumb the listing and a failure notice use the tier's glyphs and separator", () => {

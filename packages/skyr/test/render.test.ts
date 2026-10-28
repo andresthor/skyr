@@ -8,7 +8,7 @@ import {
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { RunSnapshot } from "../src/subagent/store.js";
 import { laneLine } from "../src/subagent/view.js";
-import { type Segment, segmentRow, toolRow } from "../src/tools/render.js";
+import { type Segment, segmentRow } from "../src/tools/render.js";
 import { CORPUS, piScreen, WIDTHS_SWEEP } from "./ui.js";
 
 const plain = {
@@ -16,7 +16,7 @@ const plain = {
   bold: (text: string) => text,
 } as unknown as Theme;
 
-describe("toolRow", () => {
+describe("segmentRow", () => {
   describe("cut to the width", () => {
     // Real escapes, so a reset inside the row would show
     const painting = {
@@ -30,7 +30,7 @@ describe("toolRow", () => {
 
     test("stays within the width for wide characters, with an ellipsis", () => {
       vi.stubEnv("TERM", "xterm-256color");
-      const [line = ""] = toolRow(plain, [
+      const [line = ""] = segmentRow(plain, [
         ["muted", "日本語のテキスト🙂🙂🙂"],
       ]).render(10);
       expect(visibleWidth(line)).toBeLessThanOrEqual(10);
@@ -39,7 +39,7 @@ describe("toolRow", () => {
 
     test("a cut row ends in … and puts no reset inside its colours", () => {
       vi.stubEnv("TERM", "xterm-256color");
-      const [line = ""] = toolRow(painting, [
+      const [line = ""] = segmentRow(painting, [
         ["toolTitle", "web_fetch ", true],
         ["muted", text],
       ]).render(30);
@@ -52,7 +52,7 @@ describe("toolRow", () => {
 
     test("under TERM=dumb a cut row ends in ...", () => {
       vi.stubEnv("TERM", "dumb");
-      const [line = ""] = toolRow(plain, [["muted", text]]).render(20);
+      const [line = ""] = segmentRow(plain, [["muted", text]]).render(20);
       expect(line).toBe("https://example.t...");
     });
 
@@ -62,7 +62,7 @@ describe("toolRow", () => {
         vi.stubEnv("TERM", term);
         for (const width of WIDTHS_SWEEP)
           for (const s of CORPUS) {
-            const [line = ""] = toolRow(painting, [
+            const [line = ""] = segmentRow(painting, [
               ["toolTitle", s, true],
               ["muted", s],
             ]).render(width);
@@ -89,7 +89,7 @@ describe("toolRow", () => {
         };
         const card = new Box(1, 1, (t) => `\x1b[48;5;17m${t}\x1b[49m`);
         card.addChild(segmentRow(painting, laneLine(run)));
-        const row = toolRow(painting, [
+        const row = segmentRow(painting, [
           ["toolTitle", "web_fetch ", true],
           ["muted", text],
         ]);
@@ -109,7 +109,7 @@ describe("toolRow", () => {
       const before = new TruncatedText(
         `${painting.fg("toolTitle", painting.bold("web_fetch "))}${painting.fg("muted", "x.dev")}`,
       );
-      expect(toolRow(painting, row).render(40)).toEqual(before.render(40));
+      expect(segmentRow(painting, row).render(40)).toEqual(before.render(40));
     });
   });
 
@@ -118,7 +118,7 @@ describe("toolRow", () => {
       fg: (color: string, text: string) => `<${color}>${text}`,
       bold: (text: string) => `*${text}*`,
     } as unknown as Theme;
-    const [line = ""] = toolRow(theme, [
+    const [line = ""] = segmentRow(theme, [
       ["toolTitle", "web_fetch ", true],
       ["muted", "x.dev"],
     ]).render(200);

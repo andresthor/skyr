@@ -5,9 +5,10 @@
  */
 import type { BarRow } from "../chrome/bar.js";
 import type { Segment } from "../tools/render.js";
-import { glyphsOf, tierOf } from "../ui/caps.js";
+import { glyphsOf, type Mark, tierOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
 import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
+import type { Fact, RecordSpec } from "../ui/record.js";
 import { sanitize } from "../ui/text.js";
 import {
   count,
@@ -107,50 +108,97 @@ export function laneLine(run: RunSnapshot): Segment[] {
   ];
 }
 
+const OUTCOME_MARK = {
+  done: "done",
+  empty: "failed",
+  failed: "failed",
+  stopped: "stopped",
+} as const satisfies Record<keyof typeof MARKS, Mark>;
+
+/** The 8 characters of a run's id that a record, a frame and a lookup share. */
+const idOf = (run: RunSnapshot) => sanitize(run.id.slice(0, 8));
+
+/** A recovered run has no counters or start time. */
+const recoveredRun = (run: RunSnapshot) => run.recovered || run.startedAt === 0;
+
 /**
- * A call's ended runs as rows: a header, then one line per run in call order, each a `laneLine`.
- * The header's mark is the runs' shared one, or ◐ for a mix. A background call's runs had only
- * started, so they show as such, with their ids.
+ * One ended run as a ledger record: its label, why it gave no answer if it gave none, its
+ * counters, tokens and time, and its id. A recovered run says so in place of counters and time.
  */
-export function laneTree(runs: readonly RunSnapshot[]): Segment[][] {
-  const branch = (i: number): Segment => [
-    "muted",
-    i === runs.length - 1 ? "└ " : "├ ",
+export function laneRecord(
+  run: RunSnapshot,
+  branch?: RecordSpec["branch"],
+): RecordSpec {
+  const recovered = recoveredRun(run);
+  const facts: Fact[] = [
+    ...(run.error ? [fact(run.error, "explain")] : []),
+    ...(recovered
+      ? [fact("recovered after a restart", "measure")]
+      : [
+          fact(count(run.turns, "turn"), "measure"),
+          fact(count(run.toolCalls, "tool"), "measure"),
+        ]),
+    fact(formatTokens(run.tokens), "measure"),
+    ...(!recovered && run.endedAt !== undefined
+      ? [fact(formatDuration(run.endedAt - run.startedAt), "measure")]
+      : []),
   ];
-  if (runs.some((run) => run.background))
-    return [
-      [
-        ["accent", `↗ ${count(runs.length, "task")} in the background`],
-        ["muted", " · answers arrive as messages"],
-      ],
-      ...runs.map((run, i): Segment[] => [
-        branch(i),
-        ["accent", "↗"],
-        ["text", ` ${sanitize(`${labelOf(run)} · ${run.id.slice(0, 8)}`)}`],
-      ]),
-    ];
+  return {
+    mark: OUTCOME_MARK[outcomeOf(run)],
+    ...(branch && { branch }),
+    subject: [sanitize(labelOf(run))],
+    subjectKind: "text",
+    facts,
+    handle: idOf(run),
+  };
+}
+
+/** A call's ended runs as the head of its lane tree: the shared mark or `mixed`, and the totals. */
+export function headRecord(runs: readonly RunSnapshot[]): RecordSpec {
   const outcomes = runs.map(outcomeOf);
   const counts = Object.keys(MARKS).flatMap((outcome) => {
     const n = outcomes.filter((o) => o === outcome).length;
     return n > 0 ? [`${n} ${outcome}`] : [];
   });
-  const [first, ...rest] = runs.map(markOf);
-  const mark: Segment =
-    first !== undefined && rest.every(([, glyph]) => glyph === first[1])
-      ? first
-      : ["warning", "◐"];
-  const total = runs.reduce((sum, run) => sum + run.tokens, 0);
-  const wall =
-    Math.max(...runs.map((run) => run.endedAt ?? run.startedAt)) -
-    Math.min(...runs.map((run) => run.startedAt));
-  return [
-    [
-      mark,
-      [
-        "muted",
-        ` ${counts.join(", ")} · ${formatTokens(total)} · ${formatDuration(wall)}`,
-      ],
+  const marks = new Set(outcomes.map((o) => OUTCOME_MARK[o]));
+  const [only] = marks;
+  const agents = [...new Set(runs.flatMap((run) => run.agent ?? []))];
+  const tokens = runs.reduce((sum, run) => sum + run.tokens, 0);
+  const wall = runs.some(recoveredRun)
+    ? undefined
+    : Math.max(...runs.map((run) => run.endedAt ?? run.startedAt)) -
+      Math.min(...runs.map((run) => run.startedAt));
+  return {
+    mark: marks.size === 1 && only ? only : "mixed",
+    subject: [count(runs.length, "lane")],
+    subjectKind: "text",
+    facts: [
+      ...(agents.length > 0
+        ? [fact(sanitize(agents.join(", ")), "extra")]
+        : []),
+      ...counts.map((count) => fact(count, "explain")),
+      fact(formatTokens(tokens), "measure"),
+      ...(wall === undefined ? [] : [fact(formatDuration(wall), "measure")]),
     ],
-    ...runs.map((run, i): Segment[] => [branch(i), ...laneLine(run)]),
-  ];
+  };
 }
+
+/** A background run as the call that started it shows it: queued or running, with its id. */
+export function startedRecord(
+  run: RunSnapshot,
+  branch?: RecordSpec["branch"],
+): RecordSpec {
+  return {
+    mark: run.status === "queued" ? "queued" : "running",
+    ...(branch && { branch }),
+    subject: [sanitize(labelOf(run))],
+    subjectKind: "text",
+    facts: [],
+    handle: idOf(run),
+  };
+}
+
+const fact = (text: string, kind: Fact["kind"]): Fact => ({
+  text: sanitize(text),
+  kind,
+});

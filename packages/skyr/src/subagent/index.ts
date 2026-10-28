@@ -4,30 +4,42 @@
  * loads no extensions, so it never gets this tool itself.
  */
 import { join } from "node:path";
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Text } from "@earendil-works/pi-tui";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import type { BarHandle } from "../chrome/bar.js";
 import { failureLine } from "../chrome/bar-view.js";
 import { loadPi } from "../pi.js";
 import { isRecord, publishTasks } from "../tengi.js";
 import {
-  firstLine,
   messageLines,
-  type Segment,
   segmentRow,
   textMessageRenderer,
-  timeFact,
-  toolRow,
 } from "../tools/render.js";
 import { canDraw } from "../ui/caps.js";
-import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
+import type { Fact } from "../ui/record.js";
+import {
+  type Row,
+  reasonOf,
+  restOf,
+  type Settled,
+  type ToolView,
+  toolRenderers,
+} from "../ui/row.js";
+import { sanitize } from "../ui/text.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { addUsage } from "./child/protocol.js";
 import { resultText, startedText } from "./result.js";
 import { createRuns, MESSAGE_TYPE, Task } from "./runs.js";
 import { count, isRun, labelOf, type RunSnapshot, taskOf } from "./store.js";
-import { barRow, laneLine, laneTree, listingLines } from "./view.js";
+import {
+  barRow,
+  headRecord,
+  laneLine,
+  laneRecord,
+  listingLines,
+  startedRecord,
+} from "./view.js";
 import { repoRoot } from "./worktree.js";
 
 const TASK_SOURCE = "skyr/subagents";
@@ -113,6 +125,137 @@ function tasksOf(
   });
 }
 
+/** The names a running multi-lane call shows, all of them, then two and a count, then none. */
+function nameLists(names: readonly string[]): string[] {
+  const rest = names.length - 2;
+  return [
+    names.join(" "),
+    ...(rest > 0 ? [`${names.slice(0, 2).join(" ")} +${rest}`] : []),
+    "",
+  ];
+}
+
+/** What a call that has not returned says it started, from its arguments as far as they streamed. */
+function startingRow(args: Partial<Static<typeof Params>>): Row {
+  const tasks = tasksOf(args);
+  const background = args.background === true;
+  const head = {
+    mark: "running",
+    verb: "agent",
+    background,
+    subjectKind: "text",
+  } as const;
+  // Foreground runs are on the bar; a background call returns before there is anything to point at
+  const live: Fact[] = background
+    ? []
+    : [{ text: "live below", kind: "explain" }];
+  if (tasks.length > 1) {
+    const names = tasks.flatMap(({ agent, description }) =>
+      description === undefined
+        ? []
+        : [sanitize(labelOf({ agent, description }))],
+    );
+    return {
+      head: {
+        ...head,
+        subject: nameLists(names),
+        facts: [
+          { text: count(tasks.length, "lane"), kind: "measure" },
+          ...live,
+        ],
+      },
+    };
+  }
+  const [only] = tasks;
+  const label =
+    only?.description === undefined
+      ? (only?.agent ?? "")
+      : labelOf({ agent: only.agent, description: only.description });
+  return {
+    head: {
+      ...head,
+      subject: [sanitize(label)],
+      facts: [
+        ...(only?.cwd
+          ? [{ text: `in ${sanitize(only.cwd)}`, kind: "extra" } as const]
+          : []),
+        ...live,
+      ],
+    },
+  };
+}
+
+/** A call refused or thrown before any run: its cause, and the problems the validator listed. */
+function refusedRow(settled: Settled): Row {
+  const rest = restOf(settled.content);
+  // Pi's validator echoes the arguments after the problems
+  const end = rest.findIndex((line) => line.startsWith("Received arguments"));
+  const problems = rest
+    .slice(0, end < 0 ? undefined : end)
+    .filter((line) => line.startsWith("- "));
+  return {
+    head: {
+      mark: settled.isError ? "failed" : "done",
+      verb: "agent",
+      subject: [reasonOf(settled.content, "subagent")],
+      subjectKind: "text",
+      facts: [],
+    },
+    rail: { lines: problems, collapsed: 3, ink: "muted" },
+  };
+}
+
+/** The ledger record of a subagent call, and under it the lane of each run once there are several. */
+function callRow({ args, settled }: ToolView<Static<typeof Params>>): Row {
+  if (!settled) return startingRow(args);
+  const lanes = lanesOf(settled.details);
+  const [only] = lanes ?? [];
+  if (!lanes || !only) return refusedRow(settled);
+  const branchOf = (i: number) => (i === lanes.length - 1 ? "last" : "mid");
+  if (lanes.length > 1)
+    return lanes.some((run) => run.background)
+      ? {
+          head: {
+            mark: "running",
+            verb: "agent",
+            background: true,
+            subject: [count(lanes.length, "lane")],
+            subjectKind: "text",
+            facts: [
+              { text: "background · answers arrive here", kind: "explain" },
+            ],
+          },
+          children: lanes.map((run, i) => startedRecord(run, branchOf(i))),
+        }
+      : {
+          head: { ...headRecord(lanes), verb: "agent" },
+          children: lanes.map((run, i) => laneRecord(run, branchOf(i))),
+        };
+  if (only.background)
+    return {
+      head: {
+        ...startedRecord(only),
+        verb: "agent",
+        background: true,
+        facts: [{ text: "background · answer arrives here", kind: "explain" }],
+      },
+    };
+  const record = laneRecord(only);
+  return {
+    head: {
+      ...record,
+      verb: "agent",
+      facts:
+        settled.isError && only.error === undefined
+          ? [
+              { text: reasonOf(settled.content, "subagent"), kind: "explain" },
+              ...record.facts,
+            ]
+          : record.facts,
+    },
+  };
+}
+
 export function registerSubagent(pi: ExtensionAPI, bar: BarHandle): void {
   let loaded: Awaited<ReturnType<typeof loadAgents>> = {
     agents: new Map(),
@@ -183,70 +326,7 @@ export function registerSubagent(pi: ExtensionAPI, bar: BarHandle): void {
         details: started,
       };
     },
-    renderCall(args, theme, context) {
-      const tasks = tasksOf(args);
-      const [only] = tasks;
-      if (tasks.length <= 1)
-        return toolRow(theme, [
-          ["toolTitle", "subagent", true],
-          ["accent", only?.agent ? ` ${only.agent}` : ""],
-          ["muted", only?.description ? ` "${only.description}"` : ""],
-          ["muted", only?.cwd ? ` in ${only.cwd}` : ""],
-        ]);
-      // While the call runs, its row is all there is to say what it started; once it ends, the
-      // result's lines name every task.
-      const named = context.isPartial
-        ? tasks.flatMap(({ agent, description }) =>
-            description === undefined ? [] : [labelOf({ agent, description })],
-          )
-        : [...new Set(tasks.flatMap(({ agent }) => agent ?? []))];
-      return toolRow(theme, [
-        ["toolTitle", "subagent", true],
-        ["muted", ` ${count(tasks.length, "task")}`],
-        [
-          context.isPartial ? "muted" : "accent",
-          named.length > 0 ? ` · ${named.join(", ")}` : "",
-        ],
-      ]);
-    },
-    renderResult(result, _options, theme, context) {
-      // Saved details only: Pi draws a running call from renderCall alone.
-      const lanes = lanesOf(result.details);
-      if (lanes && lanes.length > 1) return rows(theme, laneTree(lanes));
-      const run = lanes?.[0];
-      if (!run) {
-        // Refused or thrown: Pi draws no content beside a renderer, so the row carries the cause
-        // and each problem line, but not the arguments Pi's validator echoes after them.
-        const [head = "", ...rest] = messageLines(result);
-        const end = rest.findIndex((line) =>
-          line.startsWith("Received arguments"),
-        );
-        const problems = rest
-          .slice(0, end < 0 ? undefined : end)
-          .filter((line) => line.trimStart().startsWith("- "));
-        return rows(theme, [
-          [["error", head]],
-          ...problems.map((line): Segment[] => [["muted", line.trimStart()]]),
-        ]);
-      }
-      if (context.isError)
-        return toolRow(theme, [
-          ["error", run.error ?? firstLine(result.content)],
-          ...summary(run),
-          ...runTime(run),
-        ]);
-      if (run.background)
-        return toolRow(theme, [
-          ["accent", "↗ background"],
-          ["muted", ` · ${labelOf(run)} · ${run.id.slice(0, 8)}`],
-        ]);
-      return toolRow(theme, [
-        ["success", "✓ done"],
-        ...summary(run),
-        ["muted", ` · ${formatTokens(run.tokens)}`],
-        ...runTime(run),
-      ]);
-    },
+    ...toolRenderers<Static<typeof Params>>(callRow),
   });
 
   const asText = textMessageRenderer(PREVIEW_LINES);
@@ -328,29 +408,4 @@ export function registerSubagent(pi: ExtensionAPI, bar: BarHandle): void {
   pi.on("session_shutdown", (event) => {
     runs.close(event.reason);
   });
-}
-
-function summary(run: RunSnapshot): Segment[] {
-  return [
-    [
-      "muted",
-      ` · ${count(run.turns, "turn")} · ${count(run.toolCalls, "tool")}`,
-    ],
-  ];
-}
-
-// From the snapshot, not the web rows' row-state clock: a resumed row has only its details.
-function runTime(run: RunSnapshot): Segment[] {
-  return timeFact(
-    run.endedAt === undefined
-      ? formatElapsed(Date.now() - run.startedAt)
-      : formatDuration(run.endedAt - run.startedAt),
-  );
-}
-
-/** One tool row per line. */
-function rows(theme: Theme, lines: Segment[][]): Container {
-  const box = new Container();
-  for (const line of lines) box.addChild(toolRow(theme, line));
-  return box;
 }

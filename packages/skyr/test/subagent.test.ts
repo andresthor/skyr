@@ -14,6 +14,7 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { expect, test, vi } from "vitest";
 import { registerSkyr } from "../src/index.js";
 import {
@@ -32,14 +33,13 @@ import {
   textOf,
   toolsSeen,
 } from "./session.js";
+import { toolRowHost } from "./ui.js";
 
 const plain = {
   fg: (_color: string, text: string) => text,
   bg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 } as unknown as Theme;
-
-type RenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
 
 const SCOUT = { "scout.md": agentFile("Finds things") };
 
@@ -92,27 +92,34 @@ function registered(): ToolDefinition & { message: MessageRenderer } {
   return { ...tool, message };
 }
 
+/** The row's lines at `width`, escapes stripped, the blank line Pi leads a row with dropped. */
+const linesOf = (host: ReturnType<typeof toolRowHost>, width: number) =>
+  host
+    .lines(width)
+    .slice(1)
+    .map((line) => stripTerminalSequences(line).trimEnd());
+
+/** The row of a call with its result in, as Pi draws it. */
 function resultRow(
   tool: ToolDefinition,
   details: unknown,
   o: { text?: string; isError?: boolean; width?: number; args?: unknown } = {},
 ): string[] {
-  const context = {
+  const host = toolRowHost(tool, o.args ?? { tasks: [{ prompt: "x" }] });
+  host.update({
+    content: o.text ? [{ type: "text", text: o.text }] : [],
+    details,
     isError: o.isError ?? false,
-    args: o.args,
-  } as RenderContext;
-  const content = o.text ? [{ type: "text" as const, text: o.text }] : [];
-  return (
-    tool
-      .renderResult?.(
-        { content, details },
-        { expanded: false, isPartial: false },
-        plain,
-        context,
-      )
-      .render(o.width ?? 200) ?? []
-  );
+  });
+  return linesOf(host, o.width ?? 200);
 }
+
+/** The row of a call that has not returned, from its arguments as far as they streamed. */
+const callRow = (tool: ToolDefinition, args: unknown, width = 200) =>
+  linesOf(toolRowHost(tool, args), width);
+
+/** A row's cells: its text split where it is spaced out into columns. */
+const cells = (line: string | undefined) => (line ?? "").trim().split(/ {2,}/);
 
 /** A delivered message's rendered lines, without the box's blank padding. */
 function messageRows(
@@ -208,73 +215,112 @@ test("a delivered message holding one unreadable run draws its sanitized text in
   expectInert(rows, 40);
 });
 
-test("a finished call of several tasks leads with their outcomes, then draws a line per task", () => {
+test("a finished call of several tasks leads with their outcomes, then draws a record per task", () => {
   const tool = registered();
   const rows = (details: unknown, o: Parameters<typeof resultRow>[2] = {}) =>
-    resultRow(tool, details, o).map((line) => line.trimEnd());
-  expect(
-    rows([
-      ended,
-      { ...ended, status: "failed", error: "boom" },
-      { ...ended, error: "ended without an answer" },
-      {
-        ...ended,
-        agent: "scout",
-        status: "aborted",
-        error: "stopped by the user",
-      },
-    ]),
-  ).toEqual([
-    "◐ 1 done, 1 empty, 1 failed, 1 stopped · 6k tok · 3.0s",
-    '├ ✓ "look" · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
-    '├ ✗ "look" · boom · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
-    '├ ✗ "look" · ended without an answer · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
-    '└ ■ scout "look" · stopped by the user · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
+    resultRow(tool, details, o);
+  const [head, ...lanes] = rows([
+    ended,
+    { ...ended, status: "failed", error: "boom" },
+    { ...ended, error: "ended without an answer" },
+    {
+      ...ended,
+      agent: "scout",
+      status: "aborted",
+      error: "stopped by the user",
+    },
+  ]);
+  expect(cells(head)).toEqual([
+    "! agent",
+    "4 lanes",
+    "scout · 1 done · 1 empty · 1 failed · 1 stopped · 6k tok · 3.0s",
+  ]);
+  expect(lanes.map(cells)).toEqual([
+    ['├ ✓ "look"', "1 turn · 2 tools · 2k tok · 3.0s", "abcdef01"],
+    ['├ × "look"', "boom · 1 turn · 2 tools · 2k tok · 3.0s", "abcdef01"],
+    [
+      '├ × "look"',
+      "ended without an answer · 1 turn · 2 tools · 2k tok · 3.0s",
+      "abcdef01",
+    ],
+    [
+      '└ ■ scout "look"',
+      "stopped by the user · 1 turn · 2 tools · 2k tok · 3.0s",
+      "abcdef01",
+    ],
   ]);
   const failed = { ...ended, status: "failed", error: "boom" };
   const empty = { ...ended, error: "ended without an answer" };
-  expect(rows([failed, empty], { isError: true })[0]).toBe(
-    "✗ 1 empty, 1 failed · 3k tok · 3.0s",
-  );
+  expect(cells(rows([failed, empty], { isError: true })[0])).toEqual([
+    "× agent",
+    "2 lanes",
+    "1 empty · 1 failed · 3k tok · 3.0s",
+  ]);
   const started = { ...ended, status: "running", background: true };
-  expect(rows([started, { ...started, agent: "scout" }])).toEqual([
-    "↗ 2 tasks in the background · answers arrive as messages",
-    '├ ↗ "look" · abcdef01',
-    '└ ↗ scout "look" · abcdef01',
+  const [startedHead, ...startedLanes] = rows([
+    started,
+    { ...started, agent: "scout" },
+  ]);
+  expect(cells(startedHead)).toEqual([
+    "• agent &",
+    "2 lanes",
+    "background · answers arrive here",
+  ]);
+  expect(startedLanes.map(cells)).toEqual([
+    ['├ • "look"', "abcdef01"],
+    ['└ • scout "look"', "abcdef01"],
   ]);
 });
 
-test("a refused call's row names its cause and each problem, but not the arguments Pi echoes", () => {
-  const row = (text: string) =>
-    resultRow(registered(), undefined, { text, isError: true }).map((line) =>
-      line.trimEnd(),
+test("a lane's explaining reason survives its tokens and time as the pane narrows, and no lane draws a number", () => {
+  const rows = (width: number) =>
+    resultRow(
+      registered(),
+      [ended, { ...ended, status: "failed", error: "provider exploded" }],
+      { width },
     );
+  // A lane leads with its branch and its mark; a saved slot would name another run later
   expect(
-    row(
-      'subagent: nothing ran; fix these and call again:\n- task 2 ("b"): no agent "x"; available: scout\nAgent files that failed to load: a.md: no description',
-    ),
+    rows(120)
+      .slice(1)
+      .map((line) => line.trim()),
   ).toEqual([
-    "subagent: nothing ran; fix these and call again:",
-    '- task 2 ("b"): no agent "x"; available: scout',
+    expect.stringMatching(/^├ ✓ "look"/),
+    expect.stringMatching(/^└ × "look"/),
   ]);
-  expect(
-    row(
-      'Validation failed for tool "subagent":\n  - tasks.0.background: schema is false\n  - tasks.0: must not have additional properties\n\nReceived arguments:\n{\n  "tasks": [\n    - not a problem\n  ]\n}',
-    ),
-  ).toEqual([
+  const narrow = rows(60)[2] ?? "";
+  expect(narrow).toContain("provider exploded");
+  expect(narrow).not.toContain("tok");
+});
+
+test("a refused call's row names its cause and each problem on a rail, but not the arguments Pi echoes", () => {
+  const row = (text: string) =>
+    resultRow(registered(), undefined, { text, isError: true });
+  const first = row(
+    'subagent: nothing ran; fix these and call again:\n- task 2 ("b"): no agent "x"; available: scout\nAgent files that failed to load: a.md: no description',
+  );
+  expect(cells(first[0])).toEqual([
+    "× agent",
+    "nothing ran; fix these and call again:",
+  ]);
+  expect(first.slice(1)).toEqual([
+    '   │ - task 2 ("b"): no agent "x"; available: scout',
+  ]);
+  const second = row(
+    'Validation failed for tool "subagent":\n  - tasks.0.background: schema is false\n  - tasks.0: must not have additional properties\n\nReceived arguments:\n{\n  "tasks": [\n    - not a problem\n  ]\n}',
+  );
+  expect(cells(second[0])).toEqual([
+    "× agent",
     'Validation failed for tool "subagent":',
-    "- tasks.0.background: schema is false",
-    "- tasks.0: must not have additional properties",
+  ]);
+  expect(second.slice(1)).toEqual([
+    "   │ - tasks.0.background: schema is false",
+    "   │ - tasks.0: must not have additional properties",
   ]);
 });
 
-test("a call's line names one task by its agent, description and cwd, and several by their agents, or by every label while it runs", () => {
+test("a running call names one task by its label and cwd, and several by their labels, then two and a count, then none as the pane narrows", () => {
   const tool = registered();
-  const line = (args: unknown, isPartial = false) =>
-    tool
-      .renderCall?.(args, plain, { isPartial } as RenderContext)
-      .render(200)[0]
-      ?.trimEnd();
   const three = {
     tasks: [
       { agent: "scout", description: "a", prompt: "x" },
@@ -282,22 +328,57 @@ test("a call's line names one task by its agent, description and cwd, and severa
       { agent: "scout", description: "c", prompt: "z" },
     ],
   };
-  expect(line(three)).toBe("subagent 3 tasks · scout");
-  expect(line(three, true)).toBe(
-    'subagent 3 tasks · scout "a", "b", scout "c"',
-  );
+  const at = (width: number) => callRow(tool, three, width)[0] ?? "";
+  expect(cells(at(200))).toEqual([
+    "• agent",
+    'scout "a" "b" scout "c"',
+    "3 lanes · live below",
+  ]);
+  const stage = (line: string) =>
+    line.includes('scout "a" "b" scout "c"')
+      ? "all"
+      : line.includes('"b" +1')
+        ? "two and a count"
+        : line.includes("3 lanes")
+          ? "count only"
+          : undefined;
+  const seen: string[] = [];
+  for (let width = 200; width >= 20; width--) {
+    const now = stage(at(width));
+    if (now && seen.at(-1) !== now) seen.push(now);
+  }
+  expect(seen).toEqual(["all", "two and a count", "count only"]);
   // A session saved before tasks existed holds one flat task.
   expect(
-    line({ agent: "scout", description: "a", prompt: "x", cwd: "pkg" }),
-  ).toBe('subagent scout "a" in pkg');
+    cells(
+      callRow(tool, {
+        agent: "scout",
+        description: "a",
+        prompt: "x",
+        cwd: "pkg",
+      })[0],
+    ),
+  ).toEqual(["• agent", 'scout "a"', "in pkg · live below"]);
   // Half-streamed arguments.
-  expect(line({ tasks: [{}] }, true)).toBe("subagent");
-  expect(line({ tasks: [{ agent: "scout" }, {}] }, true)).toBe(
-    "subagent 2 tasks",
-  );
+  expect(cells(callRow(tool, { tasks: [{}] })[0])).toEqual([
+    "• agent",
+    "live below",
+  ]);
+  expect(cells(callRow(tool, { tasks: [{ agent: "scout" }, {}] })[0])).toEqual([
+    "• agent",
+    "2 lanes · live below",
+  ]);
 });
 
-test("a background call's row renders from its saved details under its own marker", () => {
+test("a background call that has not returned says & and no live pointer", () => {
+  const row = callRow(registered(), {
+    background: true,
+    tasks: [{ description: "a", prompt: "x" }],
+  });
+  expect(cells(row[0])).toEqual(["• agent &", '"a"']);
+});
+
+test("a background call's row renders from its saved details with its id and no answer", () => {
   const started = {
     id: "abcdef0123",
     agent: "scout",
@@ -309,9 +390,12 @@ test("a background call's row renders from its saved details under its own marke
     tokens: 0,
     background: true,
   };
-  expect(resultRow(registered(), started)[0]?.trimEnd()).toBe(
-    '↗ background · scout "look" · abcdef01',
-  );
+  expect(cells(resultRow(registered(), started)[0])).toEqual([
+    "• agent &",
+    'scout "look"',
+    "background · answer arrives here",
+    "abcdef01",
+  ]);
 });
 
 test("a child never receives the subagent tool, nor any extension installed for the user or the repo", async () => {
@@ -344,7 +428,7 @@ test("a child never receives the subagent tool, nor any extension installed for 
   expect(sentinel.sentinelLoads).toBe(undefined);
 });
 
-test("a child's text and description cannot reach the terminal as escapes, the row fits 20 columns, and an ad-hoc row never says undefined", () => {
+test("a child's text and description cannot reach the terminal as escapes, the row fits 20 and 40 columns, and an ad-hoc row never says undefined", () => {
   const tool = registered();
   const run = {
     id: "1",
@@ -357,48 +441,50 @@ test("a child's text and description cannot reach the terminal as escapes, the r
     toolCalls: 2,
     tokens: 0,
   };
-  const callRow = (args: object, isPartial = false) =>
-    tool.renderCall?.(args, plain, { isPartial } as RenderContext).render(20) ??
-    [];
-  const row = (over: object, o: Parameters<typeof resultRow>[2] = {}) =>
-    resultRow(tool, [{ ...run, ...over }], { width: 20, ...o });
   const lanes = [
     { agent: HOSTILE, description: HOSTILE, prompt: "x" },
     { description: HOSTILE, prompt: "y" },
   ];
-  const lines = [
-    ...callRow({
-      tasks: [{ agent: "scout", description: HOSTILE, prompt: "x" }],
-    }),
-    ...callRow({
-      tasks: [{ description: HOSTILE, prompt: "x", cwd: HOSTILE }],
-    }),
-    ...callRow({ tasks: lanes }),
-    ...callRow({ tasks: lanes }, true),
-    ...row({}),
-    ...row({ agent: undefined, background: true }),
-    ...row(
-      { status: "failed", endedAt: Date.now() },
-      { text: `subagent: scout failed: ${HOSTILE}`, isError: true },
-    ),
-    ...resultRow(tool, [run, { ...run, error: HOSTILE }], { width: 20 }),
-    ...resultRow(
-      tool,
-      [
-        { ...run, background: true },
-        { ...run, background: true },
-      ],
-      { width: 20 },
-    ),
-    ...resultRow(tool, undefined, {
-      text: `subagent: nothing ran; fix these and call again:\n- task 1 ("x"): no agent "${HOSTILE}"; available: none`,
-      isError: true,
-      width: 20,
-    }),
-  ];
-  expect(lines).toHaveLength(15);
-  expectInert(lines, 20);
-  for (const line of lines) expect(line).not.toContain("undefined");
+  for (const width of [20, 40]) {
+    const row = (over: object, o: Parameters<typeof resultRow>[2] = {}) =>
+      resultRow(tool, [{ ...run, ...over }], { width, ...o });
+    const lines = [
+      ...callRow(
+        tool,
+        { tasks: [{ agent: "scout", description: HOSTILE, prompt: "x" }] },
+        width,
+      ),
+      ...callRow(
+        tool,
+        { tasks: [{ description: HOSTILE, prompt: "x", cwd: HOSTILE }] },
+        width,
+      ),
+      ...callRow(tool, { tasks: lanes }, width),
+      ...row({}),
+      ...row({ agent: undefined, background: true }),
+      ...row(
+        { status: "failed", endedAt: Date.now() },
+        { text: `subagent: scout failed: ${HOSTILE}`, isError: true },
+      ),
+      ...resultRow(tool, [run, { ...run, error: HOSTILE }], { width }),
+      ...resultRow(
+        tool,
+        [
+          { ...run, background: true },
+          { ...run, background: true },
+        ],
+        { width },
+      ),
+      ...resultRow(tool, undefined, {
+        text: `subagent: nothing ran; fix these and call again:\n- task 1 ("x"): no agent "${HOSTILE}"; available: none`,
+        isError: true,
+        width,
+      }),
+    ];
+    expect(lines.length).toBeGreaterThan(10);
+    expectInert(lines, width);
+    for (const line of lines) expect(line).not.toContain("undefined");
+  }
 });
 
 test("a delivered answer's text cannot reach the terminal as escapes, and is previewed in full only when expanded", () => {
@@ -817,7 +903,7 @@ test("a failed bare writer's row names its cause", async () => {
     text: result && textOf(result),
     isError: result?.isError,
   });
-  expect(row[0]).toMatch(/^provider exploded · /);
+  expect(row[0]).toMatch(/^ × agent +"run w" +provider exploded · /);
 });
 
 test("a run whose model does not resolve fails as a framed answer whose row names the cause", async () => {
@@ -844,7 +930,9 @@ test("a run whose model does not resolve fails as a framed answer whose row name
     text: result && textOf(result),
     isError: true,
   });
-  expect(row[0]).toMatch(/^model "nowhere\/none" is not available/);
+  expect(row[0]).toMatch(
+    /^ × agent +"run m" +model "nowhere\/none" is not available/,
+  );
 });
 
 test("Esc on a single call keeps its details and names the stop", async () => {
@@ -885,7 +973,7 @@ test("Esc on a single call keeps its details and names the stop", async () => {
     text: result && textOf(result),
     isError: true,
   });
-  expect(row[0]).toMatch(/^stopped by the user · /);
+  expect(row[0]).toMatch(/^ ■ agent +"run w" +stopped by the user · /);
 });
 
 test("a subagent's answer cannot close its own frame, even with a zero-width character in the tag", async () => {
@@ -998,7 +1086,7 @@ test("a running call's row is its call line alone, and the listing shows the run
   ]);
   expect(saved?.details).not.toHaveProperty([0, "activity"]);
   expect(resultRow(registered(), saved?.details)[0]).toMatch(
-    /^✓ done · 1 turn · 0 tools · \d+k? tok · \d+\.\ds/,
+    /^ ✓ agent +.*"[^"]+" +1 turn · 0 tools · \d+k? tok · \d+\.\ds +[0-9a-f]{8}$/,
   );
 });
 

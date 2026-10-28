@@ -164,7 +164,10 @@ arrive together. Esc does not stop a background subagent; `/subagents` opens the
 ones and `/subagents stop <id|slot|all>` stops them, one task at a time or all (a slot is the number
 the bar shows, and a stop names what it stopped). A `/reload` stops background
 subagents; the reloaded session receives one message naming each, so the model knows their answers
-will not come. A bar above the editor shows what runs: nothing at rest; while subagents or shells
+will not come. A call's row in the transcript is a record, `✓ agent "label"` with its turns, tokens,
+time and id; several tasks get a header with their shared mark (`!` for a mix) and one record each
+under it. An HTML export draws each finished skyr row with its running head above it, because Pi
+gives the export's call no sign of being finished. A bar above the editor shows what runs: nothing at rest; while subagents or shells
 run, one line with a mark per run, the latest action and the longest running time; a failed
 background subagent or shell leads it, with its reason, until you open the bar. `alt+a` opens and
 closes the bar and `alt+s` switches between its AGENTS and SHELLS tabs; `/subagents` and `/shells`

@@ -248,14 +248,14 @@ export function toolRenderers<Args>(view: (v: ToolView<Args>) => Row) {
  * The first line of a result's text, sanitized, with a leading `<tool>: ` removed: a record
  * already says which tool failed, and the model-facing message names it.
  */
-function reasonOf(content: Settled["content"], tool: string): string {
+export function reasonOf(content: Settled["content"], tool: string): string {
   const text = content.find((c) => c.type === "text")?.text ?? "";
   const first = sanitize(text.split("\n")[0] ?? "").trim();
   return first.startsWith(`${tool}: `) ? first.slice(tool.length + 2) : first;
 }
 
 /** The lines of a result's text after the first, sanitized, blank ones dropped: a failure's rail. */
-function restOf(content: Settled["content"]): string[] {
+export function restOf(content: Settled["content"]): string[] {
   const text = content.find((c) => c.type === "text")?.text ?? "";
   return text
     .split("\n")

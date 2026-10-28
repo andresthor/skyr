@@ -66,24 +66,6 @@ export function segmentRow(
   };
 }
 
-export function toolRow(theme: Theme, segments: Segment[]): Component {
-  return segmentRow(
-    theme,
-    segments.map(([color, raw, bold]) => [color, sanitize(raw), bold]),
-  );
-}
-
-/** The first line of a result's first text block; empty when it has none. */
-export function firstLine(content: { type: string; text?: string }[]): string {
-  const text = content.find((c) => c.type === "text")?.text ?? "";
-  return text.split("\n")[0] ?? "";
-}
-
-/** ` · <text>` in muted, the time fact of a row. */
-export function timeFact(text: string): Segment[] {
-  return [["muted", ` · ${text}`]];
-}
-
 /** A message's text, one sanitized line per line. */
 export function messageLines(
   message: Pick<Parameters<MessageRenderer>[0], "content">,

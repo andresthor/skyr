@@ -54,7 +54,7 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
   pi.on("session_info_changed", (_event, ctx) => footer.refresh(ctx));
   pi.on("turn_end", (_event, ctx) => footer.refresh(ctx));
   pi.on("tool_execution_start", (_event, ctx) => footer.refresh(ctx));
-  pi.on("agent_settled", (_event, ctx) => footer.refresh(ctx));
+  pi.on("agent_settled", (_event, ctx) => footer.settled(ctx));
   pi.on("session_compact", (_event, ctx) => footer.refresh(ctx));
   pi.on("session_tree", (_event, ctx) => footer.refresh(ctx));
   pi.on("model_select", (_event, ctx) => footer.refresh(ctx));

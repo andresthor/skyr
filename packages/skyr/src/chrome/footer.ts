@@ -6,6 +6,7 @@ import {
   basename,
   dirname,
   isAbsolute,
+  join,
   relative,
   resolve,
   sep,
@@ -19,8 +20,8 @@ import { loadPi } from "../pi.js";
 import { canDraw, tierOf } from "../ui/caps.js";
 import { everySecond } from "../ui/clock.js";
 import { formatClock, positiveOrZero } from "../ui/format.js";
-import { guard } from "../ui/guard.js";
-import { describeCause, oneLine } from "../ui/text.js";
+import { failureLatch, guard } from "../ui/guard.js";
+import { oneLine } from "../ui/text.js";
 import { readUiSettings } from "../ui-config.js";
 import {
   type ContextFacts,
@@ -29,6 +30,7 @@ import {
   statusesLine,
   type TokenFacts,
 } from "./footer-view.js";
+import { createSpend, type Spend } from "./spend.js";
 
 export interface Footer {
   /**
@@ -46,6 +48,8 @@ export interface Footer {
    * meanwhile, so the `ctx` is never read stale.
    */
   refreshSoon(ctx: ExtensionContext): void;
+  /** `refresh`, and a new look at what the session files say each provider spent. */
+  settled(ctx: ExtensionContext): void;
   /** Lets go of everything the footer holds; never calls Pi's UI, and is idempotent. */
   stop(): void;
 }
@@ -57,6 +61,7 @@ interface Mounted {
   readonly tui: { requestRender(): void };
   offBranch?: () => void;
   offClock?: () => void;
+  spend?: Spend;
 }
 
 /** The profile an agent dir belongs to: the name of its parent, without the dot of `~/.pi`. */
@@ -166,12 +171,17 @@ export function createFooter(): Footer {
   let mounted: Mounted | undefined;
   let facts: FooterFacts | undefined;
   // What `facts` is made of: the session's, written on events, and the footer's own
-  let held: Omit<FooterFacts, "branch" | "profile" | "clock"> | undefined;
+  let held:
+    | (Omit<FooterFacts, "branch" | "profile" | "clock" | "spend"> & {
+        provider?: string;
+      })
+    | undefined;
   let branch: string | undefined;
   let profile: string | undefined;
   let clock: string | undefined;
   let counted: Counted | undefined;
-  let reported = false;
+  const latch = failureLatch();
+  let spendReported = false;
   // Counts the starts and stops, so a start that was overtaken can tell
   let current = 0;
 
@@ -181,34 +191,47 @@ export function createFooter(): Footer {
    */
   const fail = (cause: unknown) => {
     const here = mounted;
-    if (!here || reported) return;
-    reported = true;
+    if (!here) return;
     const target = ui;
-    queueMicrotask(() => {
+    latch.trip(cause, (reason) => {
       if (mounted !== here) return;
       try {
         target?.setFooter(undefined);
       } catch {
         // The session that holds the slot may be gone
       }
-      try {
-        target?.notify(
-          `skyr: the footer stopped drawing after an error (${oneLine(describeCause(cause), 120)}); Pi's footer is back until /reload`,
-          "warning",
-        );
-      } catch {
-        // The session that would show it may be gone
-      }
+      target?.notify(
+        `skyr: the footer stopped drawing after an error (${reason}); Pi's footer is back until /reload`,
+        "warning",
+      );
     });
   };
 
   const publish = () => {
-    facts = held && { ...held, branch, profile, clock };
+    if (!held) {
+      facts = undefined;
+      return;
+    }
+    const { provider, ...rest } = held;
+    const figures =
+      provider === undefined
+        ? undefined
+        : mounted?.spend?.figures(provider, new Date());
+    facts = {
+      ...rest,
+      branch,
+      profile,
+      clock,
+      ...(provider !== undefined && figures
+        ? { spend: { provider: oneLine(provider, 60), ...figures } }
+        : {}),
+    };
   };
 
   const release = (here: Mounted) => {
     here.offBranch?.();
     here.offClock?.();
+    here.spend?.stop();
   };
 
   const teardown = () => {
@@ -259,7 +282,9 @@ export function createFooter(): Footer {
       turns: counted.turns,
       cost: counted.cost,
       tokens: counted.tokens,
-      ...(model ? { model: oneLine(model.id, 80) } : {}),
+      ...(model
+        ? { model: oneLine(model.id, 80), provider: model.provider }
+        : {}),
       ...(model?.reasoning && ctx.thinkingLevel
         ? { thinking: ctx.thinkingLevel }
         : {}),
@@ -291,7 +316,8 @@ export function createFooter(): Footer {
       if (settings.problems.length > 0)
         target.notify(settings.problems.join("\n"), "warning");
       if (!settings.footer) return;
-      reported = false;
+      latch.reset();
+      spendReported = false;
       ui = target;
       counted = undefined;
       held = factsOf(ctx);
@@ -318,9 +344,33 @@ export function createFooter(): Footer {
             return true;
           };
           tick();
+          // Publishing on each new minute also moves today's spend figure when the day turned between scans
           here.offClock = everySecond(() => {
             if (tick()) tui.requestRender();
           }, fail);
+          here.spend = createSpend(join(getAgentDir(), "sessions"), {
+            onChange() {
+              try {
+                publish();
+                tui.requestRender();
+              } catch (cause) {
+                fail(cause);
+              }
+            },
+            onProblem({ file, cause }) {
+              if (spendReported) return;
+              spendReported = true;
+              try {
+                target.notify(
+                  `skyr: spend could not read ${file === "." ? "the sessions folder" : oneLine(file, 80)} (${oneLine(cause, 60)}); its last figures stay until it reads again. Check its permissions`,
+                  "warning",
+                );
+              } catch {
+                // The session that would show it may be gone
+              }
+            },
+          });
+          void here.spend.refresh();
           here.offBranch = data.onBranchChange(() => {
             try {
               readBranch();
@@ -379,7 +429,10 @@ export function createFooter(): Footer {
         }
       });
     },
-    refresh,
+    settled(ctx) {
+      refresh(ctx);
+      void mounted?.spend?.refresh();
+    },
     refreshSoon(ctx) {
       if (!mounted) return;
       const generation = current;
@@ -388,6 +441,7 @@ export function createFooter(): Footer {
         if (generation === current) refresh(ctx);
       });
     },
+    refresh,
     stop() {
       current += 1;
       teardown();

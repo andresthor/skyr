@@ -25,6 +25,13 @@ export interface TokenFacts {
   readonly cacheHit?: number;
 }
 
+/** What one provider's calls cost: the provider, today and over the last 30 days. */
+interface SpendFacts {
+  readonly provider: string;
+  readonly day: number;
+  readonly month: number;
+}
+
 /** What the footer shows, every string already sanitized by its source. */
 export interface FooterFacts {
   readonly cwd: string;
@@ -32,6 +39,7 @@ export interface FooterFacts {
   readonly sessionName?: string;
   readonly context?: ContextFacts;
   readonly tokens: TokenFacts;
+  readonly spend?: SpendFacts;
   readonly turns: number;
   readonly cost: number;
   readonly model?: string;
@@ -68,12 +76,18 @@ function degrade<S>(
 interface Where {
   tokens: boolean;
   name: boolean;
+  label: boolean;
+  month: boolean;
+  spend: boolean;
   branch: boolean;
 }
 
 const WHERE_STEPS: readonly ((state: Where) => Where)[] = [
   (state) => ({ ...state, tokens: false }),
   (state) => ({ ...state, name: false }),
+  (state) => ({ ...state, label: false }),
+  (state) => ({ ...state, month: false }),
+  (state) => ({ ...state, spend: false }),
   (state) => ({ ...state, branch: false }),
 ];
 
@@ -109,6 +123,8 @@ const COARSE_CELLS = 4;
 const SINGLE_CELLS = 8;
 /** The fine cells measure this much of the window; a window no bigger than twice it is one bar. */
 const WORKING_ZONE = 256_000;
+/** The widest a provider's name is drawn. */
+const LABEL_COLS = 16;
 const WARN_AT = 70;
 const ERROR_AT = 90;
 
@@ -159,7 +175,7 @@ export function statusesLine(
  * column and fits the pane.
  * ```
  *  41% ▪▪▪▪▫▫ ▫▫▫▫ 412k/1M · 12 turns $1.82 · claude-sonnet-5-5 high
- *  ~/projects/skyr (feat-auth-refactor) • my session · ↑412k ↓38k R1.2M W96k CH94%
+ *  ~/projects/skyr (feat-auth-refactor) · my session · ↑412k ↓38k R1.2M W96k CH94% · anthropic Σ $4.12·day  $102·mo
  * ```
  */
 export function footerLines(
@@ -273,8 +289,32 @@ export function footerLines(
     return ink(parts.join(" "), "muted");
   };
 
+  /** `anthropic Σ $4.12·day  $102·mo`: one provider's spend, never a total across providers. */
+  const spend = (show: Where): string => {
+    if (!facts.spend) return "";
+    const dot = glyphs.sep.trim();
+    const text = [
+      ...(show.label
+        ? [fitToWidth(facts.spend.provider, LABEL_COLS, glyphs.ellipsis)]
+        : []),
+      glyphs.sum,
+      `${formatCost(facts.spend.day)}${dot}day`,
+    ].join(" ");
+    return ink(
+      show.month ? `${text}  ${formatCost(facts.spend.month)}${dot}mo` : text,
+      "muted",
+    );
+  };
+
   const where = degrade<Where>(
-    { tokens: true, name: true, branch: true },
+    {
+      tokens: true,
+      name: true,
+      label: true,
+      month: true,
+      spend: true,
+      branch: true,
+    },
     WHERE_STEPS,
     (show) => {
       const parts = [ink(facts.cwd, "muted")];
@@ -283,9 +323,10 @@ export function footerLines(
       const place = parts.join(" ");
       return joined([
         show.name && facts.sessionName
-          ? `${place} ${ink(glyphs.mark.running, "dim")} ${ink(facts.sessionName, "muted")}`
+          ? `${place} ${ink(glyphs.sep.trim(), "dim")} ${ink(facts.sessionName, "muted")}`
           : place,
         show.tokens ? totals() : "",
+        show.spend ? spend(show) : "",
       ]);
     },
     room,

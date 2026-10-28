@@ -31,6 +31,7 @@ const facts: FooterFacts = {
   thinking: "high",
   profile: "experimental",
   clock: "22:05",
+  spend: { provider: "anthropic", day: 4.123, month: 101.6 },
 };
 
 /** Facts with the context at `percent` of a `window` and nothing else that varies. */
@@ -217,17 +218,18 @@ test("line one fits widths 0-200 in every tier", () => {
         ).toBeLessThanOrEqual(width);
 });
 
-test("line two ends in the token totals and the cache hit rate", () => {
+test("line two reads where, the token totals and the cache hit rate, then the provider's spend", () => {
   expect(where(facts)).toBe(
-    " ~/projects/skyr (feat-auth-refactor) • my session · ↑412k ↓38k R1.2M W96k CH94%",
+    " ~/projects/skyr (feat-auth-refactor) · my session · ↑412k ↓38k R1.2M W96k CH94% · anthropic Σ $4.12·day  $102·mo",
   );
   expect(where(facts, 200, "ascii")).toContain(
-    " - ^412k v38k R1.2M W96k CH94%",
+    " - ^412k v38k R1.2M W96k CH94% - anthropic sum $4.12-day  $102-mo",
   );
 });
 
 test("the totals leave out what is zero, and CH needs cache use and a response to measure", () => {
-  const only = (tokens: FooterFacts["tokens"]) => where({ ...facts, tokens });
+  const only = (tokens: FooterFacts["tokens"]) =>
+    where({ ...facts, tokens, spend: undefined });
   expect(only({ input: 5, output: 0, cacheRead: 0, cacheWrite: 0 })).toMatch(
     / · ↑5$/,
   );
@@ -251,4 +253,37 @@ test("the token group is the first thing line two drops", () => {
   expect(tokens).toBeGreaterThan(name);
   expect(name).toBeGreaterThan(branch);
   expect(where(facts, name)).not.toContain("↑");
+});
+
+test("the spend group is absent without figures, and a long provider is cut to 16 columns", () => {
+  expect(where({ ...facts, spend: undefined })).not.toContain("Σ");
+  const spend = { provider: "p".repeat(40), day: 1, month: 2 };
+  expect(where({ ...facts, spend })).toContain(
+    `${"p".repeat(15)}… Σ $1.00·day  $2.00·mo`,
+  );
+});
+
+test("line two gives up the tokens, then the name, the provider, the month, the spend and the branch, in that order", () => {
+  const narrowest = (needle: string) =>
+    Math.min(...WIDTHS_SWEEP.filter((w) => where(facts, w).includes(needle)));
+  const order = [
+    "CH94%",
+    "my session",
+    "anthropic Σ",
+    "$102·mo",
+    "$4.12·day",
+    "(feat-auth",
+  ].map(narrowest);
+  expect(order).toEqual([...order].sort((a, b) => b - a));
+  expect(new Set(order).size).toBe(order.length);
+  // The provider's name goes before the month does
+  expect(where(facts, order[3])).not.toContain("anthropic");
+});
+
+test("line two fits widths 0-200 in every tier with a spend group", () => {
+  for (const mode of TIERS)
+    for (const width of WIDTHS_SWEEP)
+      expect(visibleWidth(where(facts, width, mode))).toBeLessThanOrEqual(
+        width,
+      );
 });

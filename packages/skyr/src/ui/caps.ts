@@ -46,6 +46,8 @@ export interface Glyphs {
   readonly sep: string;
   /** A horizontal rule. */
   readonly rule: string;
+  /** Marks a sum over time. */
+  readonly sum: string;
   /** Tokens sent to the model and received from it. */
   readonly flow: { readonly up: string; readonly down: string };
   /** The cells of a gauge, filled and empty. */
@@ -69,6 +71,7 @@ const UNICODE: Glyphs = {
   branch: { mid: "├", last: "└" },
   sep: " · ",
   rule: "─",
+  sum: "Σ",
   flow: { up: "↑", down: "↓" },
   meter: { on: "▪", off: "▫" },
 };
@@ -90,6 +93,7 @@ const ASCII: Glyphs = {
   branch: { mid: "|", last: "`" },
   sep: " - ",
   rule: "-",
+  sum: "sum",
   flow: { up: "^", down: "v" },
   meter: { on: "#", off: "-" },
 };

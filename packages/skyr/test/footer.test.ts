@@ -1,5 +1,7 @@
 // The footer skyr puts in Pi's slot: a component mounted once per terminal session whose frames
 // are built from facts computed when events fire.
+
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -7,7 +9,7 @@ import type {
   ExtensionContext,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { createFooter } from "../src/chrome/footer.js";
 import { stopClock } from "../src/ui/clock.js";
 import {
@@ -19,6 +21,10 @@ import {
   scratchDir,
 } from "./session.js";
 import { piScreen, recordingUi } from "./ui.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 /** A tui session whose footer is held as Pi holds it. */
 async function tuiSession(
@@ -33,7 +39,7 @@ async function tuiSession(
     ui: host.ui,
     skyr,
   });
-  const lines = (width = 100) => host.footer()?.render(width) ?? [];
+  const lines = (width = 200) => host.footer()?.render(width) ?? [];
   const sets = () => host.calls.filter(({ method }) => method === "setFooter");
   const notices = () => host.calls.filter(({ method }) => method === "notify");
   return { ...host, parent, lines, sets, notices };
@@ -66,7 +72,7 @@ test("in tui the footer is set once per session", async () => {
 test("the directory shows under ~ and the branch follows a branch change without a repaint of anything else", async () => {
   vi.stubEnv("HOME", tmpdir());
   const { lines, setBranch, renders } = await tuiSession();
-  expect(lines()[1]).toMatch(/^ ~\/skyr-test-cwd-\S+ \(main\)$/);
+  expect(lines()[1]).toMatch(/^ ~\/skyr-test-cwd-\S+ \(main\)( ·|$)/);
 
   const before = renders();
   setBranch("feat-x");
@@ -83,7 +89,7 @@ test("a rename shows on the line", async () => {
 
   const before = renders();
   parent.session.setSessionName("my session");
-  expect(lines()[1]).toMatch(/ • my session$/);
+  expect(lines()[1]).toMatch(/ · my session( ·|$)/);
   expect(renders()).toBe(before + 1);
 });
 
@@ -446,17 +452,6 @@ test("the model follows model_select", async () => {
   expect(lines()[0]).toContain("/60k");
 });
 
-test("a message's turn shows when its message ends, not when the turn does", async () => {
-  const held = hold();
-  const { parent, lines, nextRender } = await tuiSession(undefined, held.step);
-  const run = parent.session.prompt("go");
-  await held.entered;
-  // The model has not answered: only the prompt's message has ended
-  while (!lines()[0]?.includes("1 turns")) await nextRender();
-  held.release();
-  await run;
-});
-
 test("the totals sum Pi's four sources over every entry, and a delivered run adds none", async () => {
   const { parent, lines } = await tuiSession();
   const manager = parent.session.sessionManager;
@@ -521,11 +516,19 @@ test("CH is the latest assistant's cache read over its prompt tokens and absent 
   expect(lines()[1]).not.toContain("CH");
 });
 
-/** Fakes the clock the footer reads and ticks on; setTimeout stays real, as Pi's own waits need it. */
+/** Fakes the clock the footer reads and ticks on; no session may be running that waits on a timer. */
 function fakeClock(at: Date): void {
   // An earlier test's session may still hold the shared interval, which would then be a real one
   stopClock();
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.useFakeTimers({
+    toFake: [
+      "setInterval",
+      "clearInterval",
+      "setTimeout",
+      "clearTimeout",
+      "Date",
+    ],
+  });
   vi.setSystemTime(at);
   onTestFinished(() => {
     stopClock();
@@ -573,4 +576,192 @@ test("the profile is the agent dir's parent name, and pi for ~/.pi/agent", async
       new RegExp(`${profile} \\d\\d:\\d\\d$`),
     );
   }
+});
+
+/** A session file under `<agentDir>/sessions` charging `provider` `cost` today. */
+function spent(
+  agentDir: string,
+  name: string,
+  provider: string,
+  cost: number,
+  daysAgo = 0,
+) {
+  const now = new Date();
+  const at = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() - daysAgo,
+    12,
+  );
+  mkdirSync(join(agentDir, "sessions", "--x--"), { recursive: true });
+  writeFileSync(
+    join(agentDir, "sessions", "--x--", `${name}.jsonl`),
+    `${JSON.stringify({
+      type: "message",
+      timestamp: at.toISOString(),
+      message: {
+        role: "assistant",
+        provider,
+        usage: { cost: { total: cost } },
+      },
+    })}\n`,
+  );
+}
+
+/** Waits for the footer's repaints until `done` holds. */
+async function until(
+  run: { nextRender(): Promise<void> },
+  done: () => boolean,
+): Promise<void> {
+  while (!done()) await run.nextRender();
+}
+
+/** A footer over the agent dir `agentDir`, started on a context whose model belongs to `provider`. */
+async function spendFooter(agentDir: string, provider: string) {
+  vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+  const host = recordingUi();
+  const footer = createFooter();
+  const model = (name: string) => ({
+    provider: name,
+    id: "m",
+    reasoning: false,
+  });
+  const ctx = (name: string) =>
+    stubContext(host.ui, { model: model(name) }).ctx;
+  await footer.start(ctx(provider));
+  return {
+    ...host,
+    footer: host.footer,
+    started: footer,
+    ctx,
+    line2: () => host.footer()?.render(200)[1] ?? "",
+  };
+}
+
+test("the spend group names the current provider and shows the owner's form: anthropic Σ $4.12·day  $102·mo", async () => {
+  const agentDir = scratchDir("agent");
+  spent(agentDir, "a", "anthropic", 4.12);
+  spent(agentDir, "b", "anthropic", 98, 5);
+  const run = await spendFooter(agentDir, "anthropic");
+  await until(run, () =>
+    run.line2().includes("anthropic Σ $4.12·day  $102·mo"),
+  );
+});
+
+test("the ascii tier writes sum and -", async () => {
+  vi.stubEnv("TERM", "dumb");
+  const agentDir = scratchDir("agent");
+  spent(agentDir, "a", "anthropic", 4.12);
+  const run = await spendFooter(agentDir, "anthropic");
+  await until(run, () =>
+    run.line2().includes("anthropic sum $4.12-day  $4.12-mo"),
+  );
+  expect(run.line2()).toMatch(/^[\x20-\x7e]*$/);
+});
+
+test("two providers' files give each model its own figures and no total, and a model switch re-picks without a rescan", async () => {
+  const agentDir = scratchDir("agent");
+  spent(agentDir, "a", "anthropic", 1);
+  spent(agentDir, "b", "corti", 20);
+  const run = await spendFooter(agentDir, "anthropic");
+  await until(run, () => run.line2().includes("anthropic Σ $1.00·day"));
+  expect(run.line2()).not.toContain("$21");
+
+  // A rescan would find nothing now
+  rmSync(join(agentDir, "sessions"), { recursive: true });
+  run.started.refresh(run.ctx("corti"));
+  expect(run.line2()).toContain("corti Σ $20.00·day");
+  expect(run.line2()).not.toContain("anthropic");
+});
+
+test("no spend shows before the first scan ends", async () => {
+  const agentDir = scratchDir("agent");
+  spent(agentDir, "a", "anthropic", 1);
+  const run = await spendFooter(agentDir, "anthropic");
+  expect(run.line2()).not.toContain("Σ");
+  await until(run, () => run.line2().includes("Σ"));
+});
+
+test("roots come from getAgentDir(), never a literal path", async () => {
+  const home = scratchDir("home");
+  vi.stubEnv("HOME", home);
+  spent(join(home, ".pi", "agent"), "elsewhere", "anthropic", 1000);
+  const agentDir = scratchDir("agent");
+  spent(agentDir, "a", "anthropic", 1);
+  const run = await spendFooter(agentDir, "anthropic");
+  await until(run, () => run.line2().includes("Σ $1.00·day"));
+  expect(run.line2()).not.toContain("$1001");
+});
+
+test("a scan runs at start and after agent_settled and on no timer", async () => {
+  fakeClock(new Date());
+  const agentDir = scratchDir("agent");
+  spent(agentDir, "a", "anthropic", 1);
+  const run = await spendFooter(agentDir, "anthropic");
+  await until(run, () => run.line2().includes("Σ $1.00·day"));
+
+  spent(agentDir, "b", "anthropic", 2);
+  // The clock's interval is the only timer, before the time passes and after
+  expect(vi.getTimerCount()).toBe(1);
+  vi.advanceTimersByTime(30 * 60_000);
+  expect(vi.getTimerCount()).toBe(1);
+  expect(run.line2()).toContain("Σ $1.00·day");
+
+  run.started.settled(run.ctx("anthropic"));
+  await until(run, () => run.line2().includes("Σ $3.00·day"));
+});
+
+test("a session file spend cannot read is reported once", async () => {
+  if (process.getuid?.() === 0) return;
+  const agentDir = scratchDir("agent");
+  spent(agentDir, "a", "anthropic", 1);
+  spent(agentDir, "b", "anthropic", 2);
+  chmodSync(join(agentDir, "sessions", "--x--", "b.jsonl"), 0o000);
+  const run = await spendFooter(agentDir, "anthropic");
+  await until(run, () => run.line2().includes("Σ $1.00·day"));
+  const first = run.calls.filter(({ method }) => method === "notify");
+  expect(first).toHaveLength(1);
+  expect(first[0]?.args[0]).toContain(
+    "spend could not read --x--/b.jsonl (EACCES)",
+  );
+
+  // The second scan fails the same way and stays quiet
+  const second = run.nextRender();
+  run.started.settled(run.ctx("anthropic"));
+  await second;
+  expect(run.calls.filter(({ method }) => method === "notify")).toHaveLength(1);
+});
+
+test("an unreadable sessions root is named as the sessions folder, with permissions as the fix", async () => {
+  if (process.getuid?.() === 0) return;
+  const agentDir = scratchDir("agent");
+  spent(agentDir, "a", "anthropic", 1);
+  const root = join(agentDir, "sessions");
+  const run = await spendFooter(agentDir, "anthropic");
+  await until(run, () => run.line2().includes("Σ $1.00·day"));
+  chmodSync(root, 0o000);
+  try {
+    run.started.settled(run.ctx("anthropic"));
+    await until(run, () => run.calls.some(({ method }) => method === "notify"));
+    const notice = run.calls.find(({ method }) => method === "notify");
+    expect(notice?.args[0]).toContain(
+      "spend could not read the sessions folder",
+    );
+    expect(notice?.args[0]).toContain("Check its permissions");
+    expect(notice?.args[0]).not.toContain("remove");
+    expect(run.line2()).toContain("Σ $1.00·day");
+  } finally {
+    chmodSync(root, 0o700);
+  }
+});
+
+test("a message's turn shows when its message ends, not when the turn does", async () => {
+  const held = hold();
+  const { parent, lines, nextRender } = await tuiSession(undefined, held.step);
+  const run = parent.session.prompt("go");
+  await held.entered;
+  // The model has not answered: only the prompt's message has ended
+  while (!lines()[0]?.includes("1 turns")) await nextRender();
+  held.release();
+  await run;
 });

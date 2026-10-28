@@ -6,6 +6,7 @@ import {
   formatDuration,
   formatElapsed,
   formatTokens,
+  plural,
   positiveOrZero,
 } from "../src/ui/format.js";
 
@@ -99,6 +100,11 @@ test("a negative or non-finite span prints zero, never NaN", () => {
   }
 });
 
+test("the clock is local and zero-padded", () => {
+  const date = new Date(2026, 0, 5, 3, 7);
+  expect(formatClock(date)).toBe("03:07");
+});
+
 test("positiveOrZero keeps only finite numbers above zero", () => {
   expect(
     [3, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, "5", undefined].map(
@@ -107,6 +113,12 @@ test("positiveOrZero keeps only finite numbers above zero", () => {
   ).toEqual([3, 0, 0, 0, 0, 0, 0]);
 });
 
-test("the clock is local and zero-padded", () => {
-  expect(formatClock(new Date(2026, 0, 5, 3, 7))).toBe("03:07");
+test("plural counts with the noun's own form, and only one is singular", () => {
+  expect([0, 1, 2].map((n) => plural(n, "turn"))).toEqual([
+    "0 turns",
+    "1 turn",
+    "2 turns",
+  ]);
+  expect(plural(1, "entry", "entries")).toBe("1 entry");
+  expect(plural(3, "entry", "entries")).toBe("3 entries");
 });

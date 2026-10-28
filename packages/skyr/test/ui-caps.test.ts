@@ -46,6 +46,7 @@ test("the glyph table: unicode in colour and mono, ASCII under TERM=dumb", () =>
     branch: { mid: "├", last: "└" },
     sep: " · ",
     rule: "─",
+    sum: "Σ",
     flow: { up: "↑", down: "↓" },
     meter: { on: "▪", off: "▫" },
   };
@@ -68,6 +69,7 @@ test("the glyph table: unicode in colour and mono, ASCII under TERM=dumb", () =>
     branch: { mid: "|", last: "`" },
     sep: " - ",
     rule: "-",
+    sum: "sum",
     flow: { up: "^", down: "v" },
     meter: { on: "#", off: "-" },
   });

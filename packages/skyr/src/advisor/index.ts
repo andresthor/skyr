@@ -16,10 +16,10 @@ import {
   elapsed,
   errorRow,
   firstLine,
-  tokens,
   took,
   toolRow,
 } from "../tools/render.js";
+import { formatTokens } from "../ui/format.js";
 import { oneLine, quoted, sanitize, stripInvisible } from "../ui/text.js";
 import { type AdvisorModel, parseAdvisorSection } from "./config.js";
 import { adviceTokens, advisorContext } from "./dialogue.js";
@@ -204,7 +204,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         ]);
       const row = toolRow(theme, [
         ["success", "✓ advice"],
-        ["muted", ` · ${d.model} · ${tokens(d.tokens)}`],
+        ["muted", ` · ${d.model} · ${formatTokens(d.tokens)}`],
         ...took(context),
       ]);
       if (!options.expanded) return row;

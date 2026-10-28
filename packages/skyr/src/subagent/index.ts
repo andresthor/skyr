@@ -16,11 +16,10 @@ import {
   segmentRow,
   textMessageRenderer,
   timeFact,
-  tokens,
   toolRow,
 } from "../tools/render.js";
 import { liveWidget } from "../tools/widget.js";
-import { formatDuration, formatElapsed } from "../ui/format.js";
+import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { addUsage } from "./child/protocol.js";
 import { resultText, startedText } from "./result.js";
@@ -231,7 +230,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
       return toolRow(theme, [
         ["success", "✓ done"],
         ...summary(run),
-        ["muted", ` · ${tokens(run.tokens)}`],
+        ["muted", ` · ${formatTokens(run.tokens)}`],
         ...runTime(run),
       ]);
     },

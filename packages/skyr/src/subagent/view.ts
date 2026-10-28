@@ -3,10 +3,10 @@
  * sanitized and cut to a hundred columns, which the widget fits to its pane; ended ones for a
  * delivered answer and a call's row, sanitized and left for their rows to cut.
  */
-import { type Segment, tokens } from "../tools/render.js";
+import type { Segment } from "../tools/render.js";
 import { glyphsOf, tierOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
-import { formatDuration, formatElapsed } from "../ui/format.js";
+import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
 import { count, labelOf, progressOf, type RunSnapshot } from "./store.js";
 
@@ -64,7 +64,7 @@ export function laneLine(run: RunSnapshot): Segment[] {
     ...(recovered
       ? ["recovered after a restart"]
       : [count(run.turns, "turn"), count(run.toolCalls, "tool")]),
-    tokens(run.tokens),
+    formatTokens(run.tokens),
     !recovered &&
       run.endedAt !== undefined &&
       formatDuration(run.endedAt - run.startedAt),
@@ -117,7 +117,7 @@ export function laneTree(runs: readonly RunSnapshot[]): Segment[][] {
       mark,
       [
         "muted",
-        ` ${counts.join(", ")} · ${tokens(total)} · ${formatDuration(wall)}`,
+        ` ${counts.join(", ")} · ${formatTokens(total)} · ${formatDuration(wall)}`,
       ],
     ],
     ...runs.map((run, i): Segment[] => [branch(i), ...laneLine(run)]),

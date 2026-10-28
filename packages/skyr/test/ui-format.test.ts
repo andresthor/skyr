@@ -1,5 +1,22 @@
 import { expect, test } from "vitest";
-import { formatDuration, formatElapsed } from "../src/ui/format.js";
+import {
+  formatDuration,
+  formatElapsed,
+  formatTokens,
+} from "../src/ui/format.js";
+
+test("tokens are exact under a thousand, rounded thousands under a million, then millions to one decimal", () => {
+  expect(
+    [999, 1_000, 61_499, 999_499, 999_500, 1_234_567].map(formatTokens),
+  ).toEqual([
+    "999 tok",
+    "1k tok",
+    "61k tok",
+    "999k tok",
+    "1.0M tok",
+    "1.2M tok",
+  ]);
+});
 
 test("a finished span prints tenths under 10 s, whole seconds under a minute, then minutes and hours", () => {
   expect(

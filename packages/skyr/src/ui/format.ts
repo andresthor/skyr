@@ -25,3 +25,12 @@ export function formatElapsed(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "0s";
   return clock(Math.floor(ms / 1000));
 }
+
+/** `850 tok`, `61k tok`, `1.2M tok`. */
+export function formatTokens(n: number): string {
+  if (n < 1000) return `${n} tok`;
+  // The cut-over is where thousands would round up to 1000k
+  return n < 999_500
+    ? `${Math.round(n / 1000)}k tok`
+    : `${(n / 1e6).toFixed(1)}M tok`;
+}

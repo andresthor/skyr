@@ -97,11 +97,6 @@ export interface Timing {
   redraw?: () => void;
 }
 
-/** A token count: exact below a thousand, else rounded to thousands. */
-export function tokens(n: number): string {
-  return n < 1000 ? `${n} tok` : `${Math.round(n / 1000)}k tok`;
-}
-
 /** ` · <text>` in muted, the time fact of a row. */
 export function timeFact(text: string): Segment[] {
   return [["muted", ` · ${text}`]];

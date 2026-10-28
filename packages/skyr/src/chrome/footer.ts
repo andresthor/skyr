@@ -6,12 +6,19 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type {
   ExtensionContext,
   ExtensionUIContext,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { canDraw, tierOf } from "../ui/caps.js";
+import { positiveOrZero } from "../ui/format.js";
 import { guard } from "../ui/guard.js";
 import { describeCause, oneLine } from "../ui/text.js";
 import { readUiSettings } from "../ui-config.js";
-import { type FooterFacts, footerLines, statusesLine } from "./footer-view.js";
+import {
+  type ContextFacts,
+  type FooterFacts,
+  footerLines,
+  statusesLine,
+} from "./footer-view.js";
 
 export interface Footer {
   /**
@@ -22,6 +29,13 @@ export interface Footer {
   start(ctx: ExtensionContext): Promise<void>;
   /** Recomputes the facts from `ctx`, which is not kept; a no-op while nothing is mounted. */
   refresh(ctx: ExtensionContext): void;
+  /**
+   * `refresh` once the message that is ending has been saved, which a `message_end` handler runs
+   * before: a later extension's handler that awaits can delay the save past this, and the next
+   * `tool_execution_start` or `turn_end` then catches up. Does nothing if the session ended
+   * meanwhile, so the `ctx` is never read stale.
+   */
+  refreshSoon(ctx: ExtensionContext): void;
   /** Lets go of everything the footer holds; never calls Pi's UI, and is idempotent. */
   stop(): void;
 }
@@ -45,19 +59,58 @@ function homeRelative(cwd: string): string {
   return outside ? cwd : `~${sep}${inside}`;
 }
 
-/** The facts `ctx` holds, as plain values. */
-function factsOf(ctx: ExtensionContext): Omit<FooterFacts, "branch"> {
-  const name = ctx.sessionManager.getSessionName();
-  return {
-    cwd: oneLine(homeRelative(ctx.sessionManager.getCwd()), 400),
-    ...(name ? { sessionName: oneLine(name, 200) } : {}),
-  };
+/** A usage record's cost, or 0 when it is not a finite, non-negative number. */
+function costOf(usage: unknown): number {
+  if (typeof usage !== "object" || usage === null || !("cost" in usage))
+    return 0;
+  const { cost } = usage;
+  if (typeof cost !== "object" || cost === null || !("total" in cost)) return 0;
+  return positiveOrZero(cost.total);
+}
+
+/**
+ * The cost of runs delivered into a session as a custom message whose details list objects with
+ * a usage, which Pi leaves out of its total. Read by shape, so chrome names no feature.
+ */
+function deliveredCost(details: unknown): number {
+  if (!Array.isArray(details)) return 0;
+  let total = 0;
+  for (const run of details)
+    if (typeof run === "object" && run !== null && "usage" in run)
+      total += costOf(run.usage);
+  return total;
+}
+
+/** The session's cost over every entry, abandoned branches included, as Pi's footer sums it. */
+function costOfEntries(entries: readonly SessionEntry[]): number {
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.type === "usage") total += costOf(entry.usage);
+    else if (entry.type === "message") {
+      const message = entry.message;
+      if (message.role === "assistant") total += costOf(message.usage);
+      else if (message.role === "toolResult") total += costOf(message.usage);
+    } else if (entry.type === "branch_summary" || entry.type === "compaction")
+      total += costOf(entry.usage);
+    else if (entry.type === "custom_message")
+      total += deliveredCost(entry.details);
+  }
+  return total;
+}
+
+/** What a pass over the session found, valid while its key holds. */
+interface Counted {
+  readonly key: string;
+  readonly cost: number;
+  readonly turns: number;
+  readonly context: ContextFacts | undefined;
 }
 
 export function createFooter(): Footer {
   let ui: FooterUi | undefined;
   let mounted: Mounted | undefined;
   let facts: FooterFacts | undefined;
+  let counted: Counted | undefined;
   let reported = false;
   // Counts the starts and stops, so a start that was overtaken can tell
   let current = 0;
@@ -94,6 +147,62 @@ export function createFooter(): Footer {
     mounted = undefined;
     ui = undefined;
     facts = undefined;
+    counted = undefined;
+  };
+
+  /**
+   * The facts `ctx` holds, as plain values. The passes over the session run only when its leaf
+   * or the model moved: every append moves the leaf, so the key is as fine as the data.
+   */
+  const factsOf = (ctx: ExtensionContext): Omit<FooterFacts, "branch"> => {
+    const manager = ctx.sessionManager;
+    const model = ctx.model;
+    const key = [
+      manager.getSessionId(),
+      manager.getLeafId(),
+      model?.provider,
+      model?.id,
+    ].join("\0");
+    if (counted?.key !== key) {
+      const usage = ctx.getContextUsage();
+      counted = {
+        key,
+        cost: costOfEntries(manager.getEntries()),
+        turns: manager
+          .getBranch()
+          .filter(
+            (entry) =>
+              entry.type === "message" && entry.message.role === "user",
+          ).length,
+        context: usage && {
+          tokens: usage.tokens,
+          percent: usage.percent,
+          window: usage.contextWindow,
+        },
+      };
+    }
+    const name = manager.getSessionName();
+    return {
+      cwd: oneLine(homeRelative(manager.getCwd()), 400),
+      ...(name ? { sessionName: oneLine(name, 200) } : {}),
+      context: counted.context,
+      turns: counted.turns,
+      cost: counted.cost,
+      ...(model ? { model: oneLine(model.id, 80) } : {}),
+      ...(model?.reasoning && ctx.thinkingLevel
+        ? { thinking: ctx.thinkingLevel }
+        : {}),
+    };
+  };
+
+  const refresh = (ctx: ExtensionContext) => {
+    if (!mounted) return;
+    try {
+      if (facts) facts = { ...factsOf(ctx), branch: facts.branch };
+      mounted.tui.requestRender();
+    } catch (cause) {
+      fail(cause);
+    }
   };
 
   return {
@@ -109,6 +218,7 @@ export function createFooter(): Footer {
       if (!settings.footer) return;
       reported = false;
       ui = target;
+      counted = undefined;
       facts = factsOf(ctx);
       target.setFooter((tui, theme, data) => {
         const here: Mounted = { tui };
@@ -177,14 +287,14 @@ export function createFooter(): Footer {
         }
       });
     },
-    refresh(ctx) {
+    refresh,
+    refreshSoon(ctx) {
       if (!mounted) return;
-      try {
-        if (facts) facts = { ...facts, ...factsOf(ctx) };
-        mounted.tui.requestRender();
-      } catch (cause) {
-        fail(cause);
-      }
+      const generation = current;
+      // Pi saves the message right after the handlers return, so the next macrotask sees it
+      setImmediate(() => {
+        if (generation === current) refresh(ctx);
+      });
     },
     stop() {
       current += 1;

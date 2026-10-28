@@ -46,6 +46,8 @@ export interface Glyphs {
   readonly sep: string;
   /** A horizontal rule. */
   readonly rule: string;
+  /** The cells of a gauge, filled and empty. */
+  readonly meter: { readonly on: string; readonly off: string };
 }
 
 const UNICODE: Glyphs = {
@@ -65,6 +67,7 @@ const UNICODE: Glyphs = {
   branch: { mid: "├", last: "└" },
   sep: " · ",
   rule: "─",
+  meter: { on: "▪", off: "▫" },
 };
 
 const ASCII: Glyphs = {
@@ -84,6 +87,7 @@ const ASCII: Glyphs = {
   branch: { mid: "|", last: "`" },
   sep: " - ",
   rule: "-",
+  meter: { on: "#", off: "-" },
 };
 
 export const glyphsOf = (tier: Tier): Glyphs =>

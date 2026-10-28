@@ -2,12 +2,16 @@
 // are built from facts computed when events fire.
 import { tmpdir } from "node:os";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionContext,
+  ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
 import { expect, test, vi } from "vitest";
 import { createFooter } from "../src/chrome/footer.js";
 import {
   expectInert,
   HOSTILE,
+  hold,
   parentSession,
   plainTheme,
   scratchDir,
@@ -15,10 +19,14 @@ import {
 import { piScreen, recordingUi } from "./ui.js";
 
 /** A tui session whose footer is held as Pi holds it. */
-async function tuiSession(skyr?: unknown) {
+async function tuiSession(
+  skyr?: unknown,
+  respond: Parameters<typeof parentSession>[0]["respond"] = () =>
+    fauxAssistantMessage("ok"),
+) {
   const host = recordingUi();
   const parent = await parentSession({
-    respond: () => fauxAssistantMessage("ok"),
+    respond,
     mode: "tui",
     ui: host.ui,
     skyr,
@@ -56,24 +64,24 @@ test("in tui the footer is set once per session", async () => {
 test("the directory shows under ~ and the branch follows a branch change without a repaint of anything else", async () => {
   vi.stubEnv("HOME", tmpdir());
   const { lines, setBranch, renders } = await tuiSession();
-  expect(lines()[0]).toMatch(/^ ~\/skyr-test-cwd-\S+ \(main\)$/);
+  expect(lines()[1]).toMatch(/^ ~\/skyr-test-cwd-\S+ \(main\)$/);
 
   const before = renders();
   setBranch("feat-x");
   expect(renders()).toBe(before + 1);
-  expect(lines()[0]).toContain("(feat-x)");
+  expect(lines()[1]).toContain("(feat-x)");
 
   setBranch(null);
-  expect(lines()[0]).not.toContain("(");
+  expect(lines()[1]).not.toContain("(");
 });
 
 test("a rename shows on the line", async () => {
   const { parent, lines, renders } = await tuiSession();
-  expect(lines()[0]).not.toContain("my session");
+  expect(lines()[1]).not.toContain("my session");
 
   const before = renders();
   parent.session.setSessionName("my session");
-  expect(lines()[0]).toMatch(/ • my session$/);
+  expect(lines()[1]).toMatch(/ • my session$/);
   expect(renders()).toBe(before + 1);
 });
 
@@ -117,15 +125,15 @@ test("invalidate drops the cached lines so a theme switch repaints", async () =>
 
 test("statuses are one line, sorted by key and absent when empty", async () => {
   const { lines, statuses } = await tuiSession();
-  expect(lines()).toHaveLength(1);
+  expect(lines()).toHaveLength(2);
 
   statuses.set("b", "two\nlines");
   statuses.set("a", "one");
-  expect(lines()).toHaveLength(2);
-  expect(lines()[1]).toBe(" one two lines");
+  expect(lines()).toHaveLength(3);
+  expect(lines()[2]).toBe(" one two lines");
 
   statuses.clear();
-  expect(lines()).toHaveLength(1);
+  expect(lines()).toHaveLength(2);
 });
 
 test("a status holding CR, ESC[2J, an OSC 52 sequence, a bidi override, wide characters and colour keeps the colour and loses everything else, and is cut to the pane", async () => {
@@ -134,9 +142,9 @@ test("a status holding CR, ESC[2J, an OSC 52 sequence, a bidi override, wide cha
   for (const width of [20, 40, 86, 200]) {
     const frame = lines(width);
     expectInert(frame, width);
-    expect(frame[1]).toContain("\u001b[31m");
-    expect(frame[1]).not.toContain("\u001b[2J");
-    expect(frame[1]).not.toContain("\r");
+    expect(frame[2]).toContain("\u001b[31m");
+    expect(frame[2]).not.toContain("\u001b[2J");
+    expect(frame[2]).not.toContain("\r");
   }
 });
 
@@ -144,7 +152,7 @@ test("under NO_COLOR a status loses its colour too", async () => {
   vi.stubEnv("NO_COLOR", "1");
   const { lines, statuses } = await tuiSession();
   statuses.set("x", "\u001b[31mred\u001b[0m");
-  expect(lines()[1]).toBe(" red");
+  expect(lines()[2]).toBe(" red");
 });
 
 test("a footer that throws gives way to Pi's footer, with one notice", async () => {
@@ -235,14 +243,44 @@ test("a malformed skyr.json still gets the footer", async () => {
   expect(footer()).toBeDefined();
 });
 
+/** A context the footer can read, with the reads counted. */
+function stubContext(
+  ui: ExtensionUIContext,
+  fields: Record<string, unknown> = {},
+) {
+  const reads = { entries: 0, branch: 0, context: 0 };
+  const ctx = {
+    mode: "tui",
+    ui,
+    sessionManager: {
+      getCwd: () => "/x",
+      getSessionName: () => undefined,
+      getSessionId: () => "s",
+      getLeafId: () => "leaf",
+      getEntries: () => {
+        reads.entries += 1;
+        return [];
+      },
+      getBranch: () => {
+        reads.branch += 1;
+        return [];
+      },
+    },
+    getContextUsage: () => {
+      reads.context += 1;
+      return { tokens: 1000, percent: 1, contextWindow: 100_000 };
+    },
+    model: { provider: "p", id: "claude-m", reasoning: true },
+    thinkingLevel: "high",
+    ...fields,
+  } as unknown as ExtensionContext;
+  return { ctx, reads };
+}
+
 test("a start overtaken while the settings are read installs nothing, and the latest start installs once", async () => {
   vi.stubEnv("PI_CODING_AGENT_DIR", scratchDir("agent"));
   const host = recordingUi();
-  const ctx = {
-    mode: "tui",
-    ui: host.ui,
-    sessionManager: { getCwd: () => "/x", getSessionName: () => undefined },
-  } as unknown as ExtensionContext;
+  const { ctx } = stubContext(host.ui);
   const footer = createFooter();
 
   const stopped = footer.start(ctx);
@@ -256,4 +294,153 @@ test("a start overtaken while the settings are read installs nothing, and the la
   expect(
     host.calls.filter(({ method }) => method === "setFooter"),
   ).toHaveLength(1);
+});
+
+/** A usage record that costs `total` and nothing else. */
+const usage = (total: number) => ({
+  input: 1,
+  output: 1,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 2,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total },
+});
+
+const userMessage = (text: string) => ({
+  role: "user" as const,
+  content: text,
+  timestamp: 0,
+});
+
+const assistant = (total: number) => ({
+  ...fauxAssistantMessage("answer"),
+  usage: usage(total),
+});
+
+test("a turn's own messages are in the figures at turn_end", async () => {
+  const { parent, lines } = await tuiSession();
+  expect(lines()[0]).toContain("0 turns $0.00");
+  await parent.session.prompt("go");
+  expect(lines()[0]).toContain("1 turns");
+});
+
+test("cost sums assistant, tool result, usage, compaction and branch-summary usage over every entry, abandoned branches included", async () => {
+  const { parent, lines } = await tuiSession();
+  const manager = parent.session.sessionManager;
+  const root = manager.appendMessage(userMessage("root"));
+  manager.appendMessage(assistant(1));
+  manager.appendMessage({
+    role: "toolResult",
+    toolCallId: "t",
+    toolName: "read",
+    content: [{ type: "text", text: "x" }],
+    isError: false,
+    timestamp: 0,
+    usage: usage(2),
+  });
+  manager.appendUsage("cache_warm", "faux", "faux-1", usage(4));
+  const kept = manager.appendMessage(userMessage("kept"));
+  manager.appendCompaction("summary", kept, 10, undefined, false, usage(8));
+  manager.branchWithSummary(root, "abandoned", undefined, false, usage(16));
+  await parent.session.prompt("go");
+  expect(lines()[0]).toContain("$31.00");
+});
+
+test("a delivered background run's usage is in the cost, and a custom message of another shape is ignored", async () => {
+  const { parent, lines } = await tuiSession();
+  const manager = parent.session.sessionManager;
+  manager.appendCustomMessageEntry("runs", "done", true, [
+    { id: "a", usage: usage(1.5) },
+    { id: "b", usage: usage(-3) },
+    { id: "c" },
+    "text",
+  ]);
+  manager.appendCustomMessageEntry("other", "x", true, { usage: usage(100) });
+  manager.appendCustomMessageEntry("none", "x", true);
+  await parent.session.prompt("go");
+  expect(lines()[0]).toContain("$1.50");
+});
+
+test("turns count the branch's user messages, not another branch's", async () => {
+  const { parent, lines } = await tuiSession();
+  const manager = parent.session.sessionManager;
+  const first = manager.appendMessage(userMessage("one"));
+  manager.appendMessage(userMessage("two"));
+  manager.appendMessage(userMessage("three"));
+  manager.branch(first);
+  await parent.session.prompt("go");
+  expect(lines()[0]).toContain("2 turns");
+});
+
+test("context reads ? after a compaction", async () => {
+  const { parent, lines } = await tuiSession();
+  const manager = parent.session.sessionManager;
+  const kept = manager.appendMessage(userMessage("kept"));
+  manager.appendCompaction("summary", kept, 10);
+  parent.session.setSessionName("compacted");
+  expect(lines()[0]).toMatch(/^ \? ▫{8} \?\/128k/);
+});
+
+test("one turn_end reads the context once", async () => {
+  const { parent } = await tuiSession();
+  const context = vi.spyOn(parent.session, "getContextUsage");
+  await parent.session.prompt("go");
+  expect(context).toHaveBeenCalledTimes(1);
+});
+
+test("a refresh with nothing changed reads no entries", async () => {
+  vi.stubEnv("PI_CODING_AGENT_DIR", scratchDir("agent"));
+  const host = recordingUi();
+  const { ctx, reads } = stubContext(host.ui);
+  const footer = createFooter();
+  await footer.start(ctx);
+  expect(reads).toEqual({ entries: 1, branch: 1, context: 1 });
+
+  footer.refresh(ctx);
+  footer.refresh(ctx);
+  expect(reads).toEqual({ entries: 1, branch: 1, context: 1 });
+});
+
+test("the model and thinking level follow the context, and no level shows for a model that does not reason", async () => {
+  vi.stubEnv("PI_CODING_AGENT_DIR", scratchDir("agent"));
+  const host = recordingUi();
+  const footer = createFooter();
+  const { ctx } = stubContext(host.ui);
+  await footer.start(ctx);
+  expect(host.footer()?.render(100)[0]).toContain("claude-m high");
+
+  footer.refresh(stubContext(host.ui, { thinkingLevel: "low" }).ctx);
+  expect(host.footer()?.render(100)[0]).toContain("claude-m low");
+
+  footer.refresh(
+    stubContext(host.ui, {
+      model: { provider: "p", id: "plain", reasoning: false },
+    }).ctx,
+  );
+  const line = host.footer()?.render(100)[0] ?? "";
+  expect(line).toContain("plain");
+  expect(line).not.toMatch(/plain (low|high)/);
+});
+
+test("the model follows model_select", async () => {
+  const { parent, lines } = await tuiSession();
+  expect(lines()[0]).toContain("faux-1");
+  const other = parent.session.modelRuntime
+    .getAllModels()
+    .find((model) => model.id === "faux-3");
+  if (!other) throw new Error("the faux provider lost faux-3");
+  await parent.session.setModel(other as never);
+  expect(lines()[0]).toContain("faux-3");
+  expect(lines()[0]).toContain("/60k");
+});
+
+test("a message's turn shows when its message ends, not when the turn does", async () => {
+  const held = hold();
+  const { parent, lines, nextRender } = await tuiSession(undefined, held.step);
+  const run = parent.session.prompt("go");
+  await held.entered;
+  // The model has not answered: only the prompt's message has ended
+  while (!lines()[0]?.includes("1 turns")) await nextRender();
+  held.release();
+  await run;
 });

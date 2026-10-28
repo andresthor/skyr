@@ -1,20 +1,56 @@
 import { expect, test } from "vitest";
 import {
+  formatCost,
+  formatCount,
   formatDuration,
   formatElapsed,
   formatTokens,
+  positiveOrZero,
 } from "../src/ui/format.js";
 
 test("tokens are exact under a thousand, rounded thousands under a million, then millions to one decimal", () => {
   expect(
     [999, 1_000, 61_499, 999_499, 999_500, 1_234_567].map(formatTokens),
+  ).toEqual(["999 tok", "1k tok", "61k tok", "999k tok", "1M tok", "1.2M tok"]);
+});
+
+test("formatCount never writes 1000k and keeps one decimal only in M", () => {
+  expect(
+    [
+      0, 850, 1_000, 61_499, 412_000, 999_499, 999_500, 1_000_000, 1_234_567,
+      12_345_678,
+    ].map(formatCount),
   ).toEqual([
-    "999 tok",
-    "1k tok",
-    "61k tok",
-    "999k tok",
-    "1.0M tok",
-    "1.2M tok",
+    "0",
+    "850",
+    "1k",
+    "61k",
+    "412k",
+    "999k",
+    "1M",
+    "1M",
+    "1.2M",
+    "12.3M",
+  ]);
+});
+
+test("formatCost shows cents below $100, whole dollars from $100, and $0.00 for zero", () => {
+  expect(
+    [0, 1.82, 4.123, 99.99, 99.996, 100, 101.6, 1204.4].map(formatCost),
+  ).toEqual([
+    "$0.00",
+    "$1.82",
+    "$4.12",
+    "$99.99",
+    "$100",
+    "$100",
+    "$102",
+    "$1204",
+  ]);
+  expect([-1, Number.NaN, Number.POSITIVE_INFINITY].map(formatCost)).toEqual([
+    "$0.00",
+    "$0.00",
+    "$0.00",
   ]);
 });
 
@@ -60,4 +96,12 @@ test("a negative or non-finite span prints zero, never NaN", () => {
     expect(formatDuration(ms)).toBe("0.0s");
     expect(formatElapsed(ms)).toBe("0s");
   }
+});
+
+test("positiveOrZero keeps only finite numbers above zero", () => {
+  expect(
+    [3, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, "5", undefined].map(
+      positiveOrZero,
+    ),
+  ).toEqual([3, 0, 0, 0, 0, 0, 0]);
 });

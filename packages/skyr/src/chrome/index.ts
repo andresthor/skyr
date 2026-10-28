@@ -48,7 +48,17 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
       }
     }
   });
+  // `message_end` fires before its message is saved, so it asks for a refresh a moment later
+  pi.on("message_end", (_event, ctx) => footer.refreshSoon(ctx));
+  // The rest fire after the entries they change are appended
   pi.on("session_info_changed", (_event, ctx) => footer.refresh(ctx));
+  pi.on("turn_end", (_event, ctx) => footer.refresh(ctx));
+  pi.on("tool_execution_start", (_event, ctx) => footer.refresh(ctx));
+  pi.on("agent_settled", (_event, ctx) => footer.refresh(ctx));
+  pi.on("session_compact", (_event, ctx) => footer.refresh(ctx));
+  pi.on("session_tree", (_event, ctx) => footer.refresh(ctx));
+  pi.on("model_select", (_event, ctx) => footer.refresh(ctx));
+  pi.on("thinking_level_select", (_event, ctx) => footer.refresh(ctx));
   pi.on("session_shutdown", () => {
     bar.stop();
     working.clear();

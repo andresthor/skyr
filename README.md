@@ -288,8 +288,12 @@ part misses the cache.
 
 ## Footer
 
-skyr replaces Pi's footer in the terminal UI: the directory, git branch and session name, and a
-line of other extensions' statuses. It is drawn nowhere else. `{"ui": {"footer": false}}` in
+skyr replaces Pi's footer in the terminal UI. The first line shows the context window's use as a
+percentage, a meter and tokens over the window, then the session's turns and cost, the model and
+its thinking level. The second shows the directory, git branch and session name, and a third
+holds other extensions' statuses when there are any. On a narrow pane the first line gives up
+its parts one by one, the cost and model last. The cost is Pi's own total plus the usage of
+background subagent runs delivered into the session, which Pi leaves out. It is drawn nowhere else. `{"ui": {"footer": false}}` in
 `<agentDir>/skyr.json` leaves Pi's footer, from the next session.
 
 ## Embedding it

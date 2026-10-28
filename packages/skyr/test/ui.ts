@@ -65,3 +65,33 @@ export function piScreen(
   const crash = draw();
   return { firstFrameCrash, crash };
 }
+
+const ESC = "\x1b";
+const BEL = "\x07";
+const cp = (...points: number[]) => String.fromCodePoint(...points);
+
+/** Strings a terminal row can meet: wide, joined, combining, control, hostile and oversized. */
+export const CORPUS: readonly string[] = [
+  "hello world",
+  cp(0x6f22, 0x5b57, 0x304b, 0x306a),
+  cp(0x1f44d),
+  cp(0x1f9d1, 0x200d, 0x1f4bb),
+  cp(0x2714, 0xfe0f),
+  `e${cp(0x301)}`,
+  "a\tb",
+  `${ESC}[2J`,
+  `${ESC}]8;;https://x.test${BEL}link${ESC}]8;;${BEL}`,
+  `${ESC}]52;c;cHduZWQ=${BEL}`,
+  `${ESC}[1m${ESC}[31mbold ${ESC}[4mnested${ESC}[0m plain`,
+  `${cp(0x202e)}rtl`,
+  `zero${cp(0x200b)}width`,
+  "• × ■ □ ← ─ … ·",
+  "x".repeat(300),
+  "",
+];
+
+/** Every width a pane can have in tests, 0 through 200. */
+export const WIDTHS_SWEEP: readonly number[] = Array.from(
+  { length: 201 },
+  (_, i) => i,
+);

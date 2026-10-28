@@ -178,6 +178,31 @@ test("retry, compaction and branch-summary indicators draw Pi's own text after s
   }
 });
 
+test("retry text does not shimmer, and the working text does", () => {
+  const working = createWorking();
+  working.agentStart();
+  /** The line 480 ms and 560 ms into an indicator's life: the glyph and the seconds are the same in both. */
+  const twoTicks = (kind: "retry" | "working") => {
+    const ed = lineEditor(CustomEditor, { working });
+    ed.setWorkingStatusIndicator(
+      kind === "working"
+        ? skyrIndicator("Message")
+        : realIndicator(kind, "Message"),
+    );
+    vi.advanceTimersByTime(480);
+    const first = ed.render(80)[0] ?? "";
+    vi.advanceTimersByTime(80);
+    return [first, ed.render(80)[0] ?? ""] as const;
+  };
+  const [retryA, retryB] = twoTicks("retry");
+  expect(retryB).toBe(retryA);
+  const [workingA, workingB] = twoTicks("working");
+  expect(stripTerminalSequences(workingB)).toBe(
+    stripTerminalSequences(workingA),
+  );
+  expect(workingB).not.toBe(workingA);
+});
+
 test("without an indicator the editor renders exactly as the editor it wraps", () => {
   const wrapped = lineEditor(CustomEditor, { paddingX: 1 });
   const bare = lineEditor(CustomEditor, { paddingX: 1 });

@@ -1,16 +1,21 @@
 // The frames skyr gives Pi's working loader, and the ones its own working line draws for each
 // situation.
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  indexedColor,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import type { Tier } from "../src/ui/caps.js";
 import {
   frameAt,
   loaderIndicator,
   type Situation,
+  shimmer,
   situationOf,
   variantFor,
 } from "../src/ui/spinner.js";
-import { styledRuns, testPaint } from "./voice.js";
+import { styledRuns, testPaint, testTheme } from "./voice.js";
 
 const plain = (frames: string[] | undefined) =>
   (frames ?? []).map(stripTerminalSequences);
@@ -104,4 +109,68 @@ test("no tool running is thinking; only subagent calls is waiting on subagents; 
   expect(situationOf("working", ["read"])).toBe("tool");
   for (const kind of ["retry", "compaction", "branchSummary"] as const)
     expect(situationOf(kind, ["bash"])).toBe("retry");
+});
+
+/** The foreground of each column of `shimmer`'s output, by column. */
+const colours = (out: string) =>
+  styledRuns(out).flatMap((run) =>
+    Array.from(run.text, () => ({
+      fg: JSON.stringify(run.fg),
+      bold: run.bold,
+    })),
+  );
+
+const SHIMMERED = "abcdefghijkl";
+
+test("the shimmer changes only colour: text and width stay the same from frame to frame", () => {
+  const paint = testPaint();
+  for (const text of [SHIMMERED, "漢字かな🙂 é", "", "a"])
+    for (let tick = 0; tick < 40; tick++) {
+      const out = shimmer(text, tick * 80, paint);
+      expect(stripTerminalSequences(out)).toBe(text);
+      expect(visibleWidth(out)).toBe(visibleWidth(text));
+      expect(styledRuns(out).length).toBeLessThanOrEqual(5);
+    }
+});
+
+test("the bright window moves one column per 80 ms tick", () => {
+  const paint = testPaint();
+  const base = JSON.stringify(paint.theme.colors.muted);
+  const lit = (sinceMs: number) =>
+    colours(shimmer(SHIMMERED, sinceMs, paint)).flatMap(({ fg }, column) =>
+      fg === base ? [] : [column],
+    );
+  // Head at column -3 is out of view; it enters at 0 and trails two columns behind
+  expect(lit(0)).toEqual([]);
+  expect(lit(3 * 80)).toEqual([0]);
+  expect(lit(4 * 80)).toEqual([0, 1]);
+  expect(lit(5 * 80)).toEqual([0, 1, 2]);
+  expect(lit(6 * 80)).toEqual([1, 2, 3]);
+  expect(lit(10 * 80)).toEqual([5, 6, 7]);
+  // It leaves past the end and the cycle starts again
+  expect(lit(15 * 80)).toEqual([10, 11]);
+  expect(lit(18 * 80)).toEqual([]);
+  expect(lit(21 * 80)).toEqual([0]);
+});
+
+test("mono and ascii draw the text without a shimmer", () => {
+  const ascii = shimmer(SHIMMERED, 400, testPaint("ascii"));
+  expect(ascii).toBe(SHIMMERED);
+  const mono = shimmer(SHIMMERED, 400, testPaint("mono"));
+  expect(stripTerminalSequences(mono)).toBe(SHIMMERED);
+  expect(styledRuns(mono).every((run) => !run.fg && !run.bold)).toBe(true);
+  expect(shimmer(SHIMMERED, 800, testPaint("mono"))).toBe(mono);
+});
+
+test("an indexed theme shimmers in bold instead of a colour mix", () => {
+  const paint = testPaint(
+    "color",
+    testTheme({ colors: { muted: indexedColor(8), text: indexedColor(15) } }),
+  );
+  const out = shimmer(SHIMMERED, 6 * 80, paint);
+  const cols = colours(out);
+  expect(cols.flatMap(({ bold }, column) => (bold ? [column] : []))).toEqual([
+    1, 2, 3,
+  ]);
+  expect(new Set(cols.map(({ fg }) => fg)).size).toBe(1);
 });

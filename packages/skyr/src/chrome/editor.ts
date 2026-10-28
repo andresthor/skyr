@@ -24,7 +24,7 @@ import { fitToWidth } from "../ui/fit.js";
 import { formatElapsed } from "../ui/format.js";
 import { keyName } from "../ui/hint.js";
 import { type Paint, styled } from "../ui/palette.js";
-import { frameAt, situationOf, variantFor } from "../ui/spinner.js";
+import { frameAt, shimmer, situationOf, variantFor } from "../ui/spinner.js";
 import { oneLine, sanitize } from "../ui/text.js";
 import type { Working } from "./working.js";
 
@@ -177,9 +177,10 @@ export function withWorkingLine<B extends EditorClass>(
       // The agent's own action reads better than "Working"; Pi's text is all the other kinds have
       const text =
         (isWorking ? state.action : undefined) ?? sanitize(rest).trim();
+      const age = now - this.heldSince;
       const glyph = frameAt(
         variantFor(situationOf(held.kind, state.tools), paint.mode),
-        now - this.heldSince,
+        age,
       );
       const pad = " ".repeat(
         Math.min(this.getPaddingX(), Math.floor((width - 1) / 2)),
@@ -197,14 +198,11 @@ export function withWorkingLine<B extends EditorClass>(
       const fg = (plain: string, token: Token) =>
         styled(paint, plain, { fg: colors[token] });
       const retrying = held.kind === "retry";
-      const textToken: Token = retrying
-        ? "warning"
-        : isWorking
-          ? "muted"
-          : "text";
       let row = `${pad}${fg(glyph, retrying ? "warning" : "accent")}`;
       if (text && width - lead - 1 > 0) {
-        row += ` ${fg(fitToWidth(text, width - lead - 1, glyphs.ellipsis), textToken)}`;
+        // Cut before styling, so the cut never lands inside an escape
+        const cut = fitToWidth(text, width - lead - 1, glyphs.ellipsis);
+        row += ` ${isWorking ? shimmer(cut, age, paint) : fg(cut, retrying ? "warning" : "text")}`;
         if (tail)
           row += `  ${tail.map(([plain, token]) => fg(plain, token)).join("")}`;
       }

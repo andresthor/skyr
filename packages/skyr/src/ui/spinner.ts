@@ -6,6 +6,7 @@ import type {
   CustomEditor,
   WorkingIndicatorOptions,
 } from "@earendil-works/pi-coding-agent";
+import { mixColors, visibleWidth } from "@earendil-works/pi-tui";
 import type { Tier } from "./caps.js";
 import { type Paint, styled } from "./palette.js";
 
@@ -99,4 +100,57 @@ export function loaderIndicator(paint: Paint): WorkingIndicatorOptions {
     ),
     intervalMs: TICK_MS,
   };
+}
+
+/** How much of the text colour each column of the bright window gets, head first. */
+const WINDOW = [1, 0.66, 0.33] as const;
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * `text` in muted with a three-column bright window that moves one column per 80 ms tick, enters
+ * from the left and leaves past the right end, then comes round again. Plain text in mono and
+ * ASCII, which have no colour to move. A theme with indexed colours gets a bold window instead
+ * of a mix, since a mix of palette entries is not one of them.
+ */
+export function shimmer(text: string, sinceMs: number, paint: Paint): string {
+  const { muted, text: bright } = paint.theme.colors;
+  if (paint.mode !== "color") return styled(paint, text, { fg: muted });
+
+  const cells = Array.from(graphemes.segment(text), ({ segment }) => segment);
+  const columns = cells.reduce((sum, cell) => sum + visibleWidth(cell), 0);
+  const head =
+    (Math.floor(Math.max(0, sinceMs) / TICK_MS) %
+      (columns + WINDOW.length * 2)) -
+    WINDOW.length;
+  const indexed = muted.kind === "indexed" || bright.kind === "indexed";
+
+  let out = "";
+  let run = "";
+  let runLevel = -1;
+  let column = 0;
+  const flush = () => {
+    if (!run) return;
+    const strength = WINDOW[runLevel];
+    out += styled(
+      paint,
+      run,
+      strength === undefined
+        ? { fg: muted }
+        : indexed
+          ? { fg: muted, bold: true }
+          : { fg: mixColors(muted, bright, strength, "oklch") },
+    );
+    run = "";
+  };
+  for (const cell of cells) {
+    const behind = head - column;
+    const level = behind >= 0 && behind < WINDOW.length ? behind : -1;
+    if (level !== runLevel) flush();
+    runLevel = level;
+    run += cell;
+    column += visibleWidth(cell);
+  }
+  flush();
+  return out;
 }

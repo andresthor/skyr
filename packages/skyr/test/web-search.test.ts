@@ -1,11 +1,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ToolRenderers,
+} from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { registerSkyr } from "../src/index.js";
-import type { Timing } from "../src/tools/render.js";
 import {
   formatResults,
   type Provider,
@@ -13,6 +16,10 @@ import {
   type SearchResult,
   webSearch,
 } from "../src/tools/web-search.js";
+import { piScreen, toolRowHost } from "./ui.js";
+
+const ESC = "\u001b";
+const BEL = "\u0007";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const fixture = (name: string) => readFileSync(join(FIXTURES, name), "utf8");
@@ -630,8 +637,8 @@ describe("text that reaches the model", () => {
   });
 });
 
-/** Only what these tests call: a narrow shape keeps them free of Pi's generics. */
-interface Captured {
+/** Only what these tests read of a registered tool: a narrow shape keeps them free of Pi's generics. */
+interface Captured extends ToolRenderers {
   name: string;
   annotations?: Record<string, boolean>;
   promptGuidelines?: string[];
@@ -644,39 +651,7 @@ interface Captured {
     content: { type: string; text?: string }[];
     structuredContent?: unknown;
   }>;
-  renderCall?: (
-    args: { query?: string },
-    theme: Theme,
-    context: CallContext,
-  ) => { render(width: number): string[] };
-  renderResult?: (
-    result: {
-      content: { type: string; text?: string }[];
-      details: { provider: string; count: number };
-    },
-    options: unknown,
-    theme: Theme,
-    context: { state: Timing; isError: boolean },
-  ) => { render(width: number): string[] };
 }
-
-const plainTheme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as unknown as Theme;
-
-type CallContext = {
-  state: Timing;
-  executionStarted: boolean;
-  invalidate: () => void;
-};
-
-/** A row as Pi rebuilds it from a saved session: never started, so never timed. */
-const untimed = (): CallContext => ({
-  state: {},
-  executionStarted: false,
-  invalidate: () => {},
-});
 
 function registered(): Captured {
   const tools: Captured[] = [];
@@ -696,8 +671,12 @@ function registered(): Captured {
   return tool;
 }
 
-const row = (component: { render(width: number): string[] } | undefined) =>
-  (component?.render(200)[0] ?? "").trimEnd();
+/** The row's lines at `width`, escapes stripped, the blank line Pi leads a row with dropped. */
+const rowAt = (host: ReturnType<typeof toolRowHost>, width = 200) =>
+  host
+    .lines(width)
+    .slice(1)
+    .map((line) => stripTerminalSequences(line).trimEnd());
 
 describe("registerWebSearch", () => {
   test("declares itself read-only, open-world and idempotent", () => {
@@ -736,70 +715,80 @@ describe("registerWebSearch", () => {
     }
   });
 
-  test("the call row quotes the query", () => {
-    expect(
-      row(
-        registered().renderCall?.({ query: "pi docs" }, plainTheme, untimed()),
-      ),
-    ).toBe('web_search "pi docs"');
+  test("the row quotes the query", () => {
+    const host = toolRowHost(registered(), { query: "pi docs" });
+    expect(rowAt(host)).toEqual([' • search   "pi docs"']);
   });
 
   test("arguments still streaming show no placeholder text, not undefined", () => {
-    expect(row(registered().renderCall?.({}, plainTheme, untimed()))).toBe(
-      "web_search",
-    );
+    expect(rowAt(toolRowHost(registered(), {}))).toEqual([" • search"]);
   });
 
-  test("the result row counts results and names the provider", () => {
-    const renderResult = registered().renderResult;
-    const render = (count: number) =>
-      row(
-        renderResult?.(
-          { content: [], details: { provider: "exa", count } },
-          {},
-          plainTheme,
-          { state: {}, isError: false },
-        ),
-      );
-    expect(render(0)).toBe("no results · exa");
-    expect(render(1)).toBe("1 result · exa");
-    expect(render(8)).toBe("8 results · exa");
+  test("a result count reads 1 result, N results or no results", () => {
+    const finished = (count: number) => {
+      const host = toolRowHost(registered(), { query: "q" });
+      host.update({ content: [], details: { provider: "exa", count } });
+      return rowAt(host)[0];
+    };
+    expect(finished(0)).toMatch(/no results · exa$/);
+    expect(finished(1)).toMatch(/ 1 result · exa$/);
+    expect(finished(8)).toMatch(/ 8 results · exa$/);
   });
 
-  test("a live call shows its running time, and its result the time it took", () => {
-    vi.useFakeTimers();
-    try {
-      const tool = registered();
-      const context = { ...untimed(), executionStarted: true };
-      tool.renderCall?.({ query: "pi docs" }, plainTheme, context);
-      vi.advanceTimersByTime(2_300);
-      expect(
-        row(tool.renderCall?.({ query: "pi docs" }, plainTheme, context)),
-      ).toBe('web_search "pi docs" · 2s');
-      const done = tool.renderResult?.(
-        { content: [], details: { provider: "tavily", count: 3 } },
-        {},
-        plainTheme,
-        { state: context.state, isError: false },
-      );
-      expect(done && row(done)).toBe("3 results · tavily · 2.3s");
-    } finally {
-      vi.useRealTimers();
+  test("the provider drops before the count as the pane narrows", () => {
+    const host = toolRowHost(registered(), { query: "pi docs" });
+    host.update({
+      content: [],
+      details: { provider: "tavily", count: 3 },
+      durationMs: 1400,
+    });
+    expect(rowAt(host, 80)[0]).toMatch(/3 results · tavily · 1\.4s$/);
+    const narrow = rowAt(host, 36)[0] ?? "";
+    expect(narrow).toContain("3 results");
+    expect(narrow).not.toContain("tavily");
+  });
+
+  test("a failure shows its reason without the tool's name, and the rest on a rail", () => {
+    const host = toolRowHost(registered(), { query: "q" });
+    host.update({
+      content: [
+        { type: "text", text: "web_search: no provider answered (x).\nmore" },
+      ],
+      isError: true,
+    });
+    const [head, rail] = rowAt(host);
+    expect(head).toMatch(/× search +"q" +no provider answered \(x\)\.$/);
+    expect(rail).toBe("   │ more");
+  });
+
+  test("details of another shape, or none, draw a plain record rather than throw", () => {
+    for (const details of [
+      undefined,
+      null,
+      3,
+      {},
+      { provider: 1, count: "2" },
+    ]) {
+      const host = toolRowHost(registered(), { query: "q" });
+      host.update({
+        content: [{ type: "text", text: "Results for q" }],
+        details,
+      });
+      expect(rowAt(host)[0]).toMatch(/^ ✓ search +"q" +Results for q$/);
     }
   });
 
-  test("the result row shows the first line of a failure", () => {
-    const component = registered().renderResult?.(
-      {
-        content: [
-          { type: "text", text: "web_search: no provider answered (x).\nmore" },
-        ],
-        details: { provider: "", count: 0 },
-      },
-      {},
-      plainTheme,
-      { state: {}, isError: true },
+  test("a hostile query is inert and the row fits 20 columns", () => {
+    const query = `${ESC}]52;c;cHduZWQ=${BEL}${ESC}[2J\u202e${"漢".repeat(40)}`;
+    const host = toolRowHost(registered(), { query });
+    host.update({ content: [], details: { provider: "exa", count: 1 } });
+    for (const line of host.lines(20)) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(20);
+      expect(line).not.toContain(`${ESC}]`);
+      expect(line).not.toContain("\u202e");
+    }
+    expect(piScreen({ invalidate() {}, render: host.lines }, 20).crash).toBe(
+      undefined,
     );
-    expect(row(component)).toBe("web_search: no provider answered (x).");
   });
 });

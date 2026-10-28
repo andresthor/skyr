@@ -6,9 +6,17 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { plural } from "../ui/format.js";
+import {
+  durationFact,
+  failedRow,
+  plainRow,
+  type Row,
+  type ToolView,
+  toolRenderers,
+} from "../ui/row.js";
 import { oneLine, sanitize } from "../ui/text.js";
 import { redactUrl, withTimeout } from "./net.js";
-import { elapsed, errorRow, took, toolRow } from "./render.js";
 
 const TIMEOUT_MS = 15_000;
 const DEFAULT_RESULTS = 8;
@@ -501,6 +509,44 @@ const Params = Type.Object({
   ),
 });
 
+function isSearchDetails(
+  details: unknown,
+): details is { provider: string; count: number } {
+  if (typeof details !== "object" || details === null) return false;
+  const d = details as { provider?: unknown; count?: unknown };
+  return typeof d.provider === "string" && typeof d.count === "number";
+}
+
+/** The ledger record of a search: the query, then how many results which provider gave. */
+function searchRow({ args, settled }: ToolView<Static<typeof Params>>): Row {
+  const query = typeof args.query === "string" ? sanitize(args.query) : "";
+  const head = {
+    verb: "search",
+    subject: [query === "" ? "" : `"${query}"`],
+    subjectKind: "text",
+  } as const;
+  if (!settled) return { head: { ...head, mark: "running", facts: [] } };
+  const duration = durationFact(settled);
+  if (settled.isError) return failedRow(head, settled, "web_search");
+  if (!isSearchDetails(settled.details))
+    return plainRow(head, settled, "web_search");
+  const { count, provider } = settled.details;
+  return {
+    head: {
+      ...head,
+      mark: "done",
+      facts: [
+        {
+          text: count === 0 ? "no results" : plural(count, "result"),
+          kind: "measure",
+        },
+        { text: sanitize(provider), kind: "extra" },
+        ...duration,
+      ],
+    },
+  };
+}
+
 export function registerWebSearch(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "web_search",
@@ -531,24 +577,6 @@ export function registerWebSearch(pi: ExtensionAPI): void {
         structuredContent: { provider, results },
       };
     },
-    renderCall(args, theme, context) {
-      return toolRow(theme, [
-        ["toolTitle", "web_search ", true],
-        ["muted", args.query ? `"${args.query}"` : ""],
-        ...elapsed(context),
-      ]);
-    },
-    renderResult(result, _options, theme, context) {
-      const time = took(context);
-      if (context.isError) return errorRow(theme, result.content, time);
-      const { provider, count } = result.details;
-      const found =
-        count === 0
-          ? "no results"
-          : count === 1
-            ? "1 result"
-            : `${count} results`;
-      return toolRow(theme, [["muted", `${found} · ${provider}`], ...time]);
-    },
+    ...toolRenderers<Static<typeof Params>>(searchRow),
   });
 }

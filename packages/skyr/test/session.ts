@@ -23,9 +23,14 @@ import {
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { type Component, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  parseColor,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { expect, onTestFinished } from "vitest";
 import { registerSkyr } from "../src/index.js";
+import type { VoiceTheme } from "../src/voice/palette.js";
 
 const tmp = (name: string) => mkdtempSync(join(tmpdir(), `skyr-test-${name}-`));
 
@@ -42,8 +47,32 @@ export interface Parent
 type Widget = Component & { dispose?(): void };
 
 /**
+ * The theme a widget factory is handed: real colour values, and a `style` that returns the text
+ * unchanged so a frame reads as plain text.
+ */
+export const plainTheme: VoiceTheme = {
+  colors: {
+    accent: parseColor("#B8F818"),
+    text: parseColor("#d4d4d4"),
+    muted: parseColor("#808080"),
+    dim: parseColor("#666666"),
+    error: parseColor("#cc6666"),
+    warning: parseColor("#d7af5f"),
+  },
+  appearance: "dark",
+  style: (text) => text,
+};
+
+/** What a widget factory is handed to draw with: the part of Pi's `TUI` skyr reads, and the theme. */
+interface WidgetTui {
+  requestRender(): void;
+  terminal: { rows: number; columns: number };
+}
+
+/**
  * A recording `setWidget` that holds widgets by key, as Pi does: a set replaces and disposes only
- * its own key's component, and a factory is mounted and asked for a frame at once.
+ * its own key's component, and a factory is mounted, given `(tui, theme)` and asked for a frame
+ * at once.
  */
 export function widgetHost() {
   const widgets: (string[] | undefined)[] = [];
@@ -69,7 +98,7 @@ export function widgetHost() {
       key: string,
       content:
         | string[]
-        | ((tui: { requestRender(): void }) => Widget)
+        | ((tui: WidgetTui, theme: VoiceTheme) => Widget)
         | undefined,
     ) {
       widgetSets.push(key);
@@ -82,7 +111,10 @@ export function widgetHost() {
         if (component)
           widgets.push(component.render(100).map((line) => line.slice(1)));
       };
-      component = content({ requestRender: frame });
+      component = content(
+        { requestRender: frame, terminal: { rows: 40, columns: 100 } },
+        plainTheme,
+      );
       mounted.set(key, component);
       frame();
     },

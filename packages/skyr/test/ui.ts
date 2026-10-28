@@ -2,12 +2,13 @@
  * Fixtures shared by the ui tests: Pi's real screen renderer over a silent terminal, to learn
  * what Pi does with a component's lines.
  */
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   type Terminal,
   TuiMainScreen,
 } from "@earendil-works/pi-tui";
-import { scratchDir } from "./session.js";
+import { plainTheme, scratchDir, widgetHost } from "./session.js";
 
 function silentTerminal(columns: number, rows: number): Terminal {
   return {
@@ -95,3 +96,39 @@ export const WIDTHS_SWEEP: readonly number[] = Array.from(
   { length: 201 },
   (_, i) => i,
 );
+
+/** One call skyr made on a UI context. */
+interface UiCall {
+  method: string;
+  args: unknown[];
+}
+
+/**
+ * A UI context that records every surface call skyr can make, in order. `setWidget` also holds
+ * widgets as `widgetHost` does; `overrides` replace any method.
+ */
+export function recordingUi(overrides: Partial<ExtensionUIContext> = {}) {
+  const { setWidget, ...widgets } = widgetHost();
+  const calls: UiCall[] = [];
+  const recorder =
+    (method: string, then?: (...args: never[]) => unknown) =>
+    (...args: unknown[]) => {
+      calls.push({ method, args });
+      return then?.(...(args as never[]));
+    };
+  const methods = {
+    setWidget: recorder("setWidget", setWidget),
+    setStatus: recorder("setStatus"),
+    setTitle: recorder("setTitle"),
+    setFooter: recorder("setFooter"),
+    setWorkingIndicator: recorder("setWorkingIndicator"),
+    setWorkingMessage: recorder("setWorkingMessage"),
+    setEditorComponent: recorder("setEditorComponent"),
+    getEditorComponent: recorder("getEditorComponent"),
+    notify: recorder("notify"),
+    theme: plainTheme,
+  };
+  // The object holds the surface skyr calls, not Pi's whole context: one cast, here.
+  const ui = { ...methods, ...overrides } as unknown as ExtensionUIContext;
+  return { ui, calls, ...widgets };
+}

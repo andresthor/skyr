@@ -6,10 +6,10 @@
  */
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import type { Tier } from "../src/ui/caps.js";
 import { createVoiceDisplay } from "../src/voice/display.js";
 import { DRY_MS } from "../src/voice/ghost.js";
 import type { VoiceSnapshot } from "../src/voice/indicator.js";
-import type { VoiceMode } from "../src/voice/palette.js";
 import { realEditor, snap, testPaint, testTheme } from "./voice.js";
 
 beforeEach(() => {
@@ -34,7 +34,7 @@ class FakeStatusUi {
 type Editor = ReturnType<typeof realEditor>;
 
 /** A display over `editor` (undefined: another extension owns it), started on a fresh footer. */
-function setup(editor?: Editor, mode: VoiceMode = "color") {
+function setup(editor?: Editor, mode: Tier = "color") {
   const ui = new FakeStatusUi();
   const repaint = vi.fn();
   const facts = { now: snap() as VoiceSnapshot };

@@ -25,6 +25,7 @@ import { type Mock, onTestFinished, vi } from "vitest";
 // biome-ignore lint/style/noRestrictedImports: Pi builds its app bindings with this class but does not export it from its root
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { registerSkyr } from "../src/index.js";
+import type { Tier } from "../src/ui/caps.js";
 import type { SttCredentials } from "../src/voice/credentials.js";
 import {
   createVoiceEditorClass,
@@ -32,7 +33,7 @@ import {
 } from "../src/voice/editor.js";
 import { type VoiceDeps, wireVoice } from "../src/voice/index.js";
 import type { VoiceKeys, VoiceSnapshot } from "../src/voice/indicator.js";
-import type { Paint, VoiceMode, VoiceTheme } from "../src/voice/palette.js";
+import type { Paint, VoiceTheme } from "../src/voice/palette.js";
 import { scratchDir } from "./session.js";
 
 /** A real Pi editor, focused, with voice's subclass on top. */
@@ -183,7 +184,7 @@ export function testTheme(
 
 /** What voice draws with: `theme` on a terminal that shows `mode`. */
 export const testPaint = (
-  mode: VoiceMode = "color",
+  mode: Tier = "color",
   theme: VoiceTheme = testTheme(),
 ): Paint => ({ theme, mode });
 

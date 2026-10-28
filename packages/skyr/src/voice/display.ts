@@ -3,6 +3,8 @@
  * rule while it can carry them, and on the footer status row when it cannot (another extension
  * owns the editor, a card hides it, or its rule drawing failed).
  */
+
+import type { Tier } from "../ui/caps.js";
 import type { DictationFacts } from "./dictation.js";
 import type { VoiceEditorLike } from "./editor.js";
 import {
@@ -10,7 +12,7 @@ import {
   renderStatus,
   type VoiceSnapshot,
 } from "./indicator.js";
-import type { VoiceMode, VoiceTheme } from "./palette.js";
+import type { VoiceTheme } from "./palette.js";
 
 const TICK_MS = 50;
 const VOICE_STATUS_KEY = "skyr.voice";
@@ -25,7 +27,7 @@ interface VoiceDisplayOptions {
   facts: () => DictationFacts;
   /** Our editor while it is the one installed, else undefined. */
   editor: () => Pick<VoiceEditorLike, "showRule" | "animating"> | undefined;
-  mode: VoiceMode;
+  mode: Tier;
   repaint: () => void;
 }
 

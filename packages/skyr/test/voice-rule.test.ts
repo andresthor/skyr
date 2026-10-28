@@ -11,20 +11,20 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
+import type { Tier } from "../src/ui/caps.js";
 import { SPEECH_DBFS } from "../src/voice/dictation.js";
 import {
   renderRule,
   renderStatus,
   type VoiceSnapshot,
 } from "../src/voice/indicator.js";
-import type { VoiceMode } from "../src/voice/palette.js";
 import { HINT_KEYS, snap, styledRuns, testPaint, testTheme } from "./voice.js";
 
 const rule = (s: string) => s;
 const SILENCE = Array.from({ length: 8 }, () => -58);
 const draw = (
   s: Partial<VoiceSnapshot>,
-  o: { width?: number; mode?: VoiceMode; hiddenBelow?: number } = {},
+  o: { width?: number; mode?: Tier; hiddenBelow?: number } = {},
 ) =>
   renderRule(snap(s), {
     width: o.width ?? 72,

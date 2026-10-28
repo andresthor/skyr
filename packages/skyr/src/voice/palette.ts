@@ -6,9 +6,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TextStyle } from "@earendil-works/pi-tui";
-
-/** What the terminal can show: `mono` is NO_COLOR (glyphs and attributes, no colour), `ascii` is TERM=dumb. */
-export type VoiceMode = "color" | "mono" | "ascii";
+import type { Tier } from "../ui/caps.js";
 
 type VoiceToken = "accent" | "text" | "muted" | "dim" | "error" | "warning";
 
@@ -27,7 +25,7 @@ export interface VoiceTheme {
 /** The theme and what the terminal can show of it. */
 export interface Paint {
   theme: VoiceTheme;
-  mode: VoiceMode;
+  mode: Tier;
 }
 
 /** `text` in `style`, in the theme's colour mode; `mono` drops the colour and keeps the attributes, `ascii` draws plain text. */

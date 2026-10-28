@@ -10,7 +10,6 @@ import { parseColor, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
 import type { SessionOptions } from "../src/voice/client.js";
 import { VoiceError } from "../src/voice/errors.js";
-import { voiceMode } from "../src/voice/index.js";
 import { parentSession } from "./session.js";
 import {
   agentDirWith,
@@ -272,17 +271,6 @@ test("a mid-session theme switch reaches the status row and the editor's ghost/f
   expect(styledRuns(ghostRow)).toContainEqual(
     expect.objectContaining({ text: "theme words", fg: parseColor("#c8beb4") }),
   );
-});
-
-test.each([
-  [{ TERM: "dumb" }, "ascii"],
-  [{ TERM: "dumb", NO_COLOR: "1" }, "ascii"],
-  [{ TERM: "xterm-256color", NO_COLOR: "1" }, "mono"],
-  [{ NO_COLOR: "1", FORCE_COLOR: "1" }, "color"],
-  [{ NO_COLOR: "" }, "color"],
-  [{}, "color"],
-] as const)("a terminal saying %j leaves voice drawing in %s", (env, mode) => {
-  expect(voiceMode(env)).toBe(mode);
 });
 
 test("during dictation the rule carries voice and the footer stays clear", async () => {

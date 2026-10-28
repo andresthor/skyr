@@ -18,6 +18,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { readSkyrSection } from "../config.js";
 import { loadPi } from "../pi.js";
+import { type Tier, tierOf } from "../ui/caps.js";
 import { quoted } from "../ui/text.js";
 import { prewarmToken } from "./client.js";
 import { parseVoiceSection } from "./config.js";
@@ -30,14 +31,14 @@ import {
   editorSink,
   type VoiceEditorLike,
 } from "./editor.js";
-import type { Paint, VoiceMode } from "./palette.js";
+import type { Paint } from "./palette.js";
 
 const VOICE_SHORTCUT = "ctrl+space";
 
 /** Seams for tests; each defaults to the real thing. */
 export interface VoiceDeps {
   /** What the terminal can show; read from the environment when not given. */
-  mode?: VoiceMode;
+  mode?: Tier;
   /** The fetch the session_start token prewarm uses instead of the global one. */
   fetch?: typeof fetch;
   /** Replaces the live Corti session, the microphone and the controller's timing. */
@@ -46,21 +47,6 @@ export interface VoiceDeps {
 
 interface Tui {
   requestRender(): void;
-}
-
-/**
- * TERM=dumb gets ASCII; NO_COLOR forbids colour, not glyphs or italics, unless FORCE_COLOR overrides it.
- * @internal
- */
-export function voiceMode(env: NodeJS.ProcessEnv): VoiceMode {
-  if (env.TERM === "dumb") return "ascii";
-  const forcedOn =
-    env.FORCE_COLOR !== undefined &&
-    env.FORCE_COLOR !== "0" &&
-    env.FORCE_COLOR !== "false";
-  return env.NO_COLOR !== undefined && env.NO_COLOR !== "" && !forcedOn
-    ? "mono"
-    : "color";
 }
 
 /**
@@ -92,7 +78,7 @@ export function registerVoice(pi: ExtensionAPI): void {
  * @internal
  */
 export function wireVoice(pi: ExtensionAPI, deps: VoiceDeps = {}): void {
-  const mode = deps.mode ?? voiceMode(process.env);
+  const mode = deps.mode ?? tierOf(process.env);
   const resolved = resolveSttCredentials();
 
   if (!("creds" in resolved)) {

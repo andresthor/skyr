@@ -12,6 +12,7 @@ import {
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
   htmlRender,
+  messageHost,
   piScreen,
   realIndicator,
   scrollScreen,
@@ -242,4 +243,41 @@ test("a renderer that throws is replaced by Pi's plain text, and a component who
   }));
   const host = toolRowHost(late.definition, {});
   expect(() => host.lines(40)).toThrow("component");
+});
+
+const MESSAGE = {
+  customType: "probe",
+  content: [{ type: "text", text: "the **model's** text" }],
+};
+
+test("a message renderer that returns undefined or throws is replaced by Pi's purple box with the model's text", () => {
+  const dropped = messageHost(() => undefined, MESSAGE);
+  const thrown = messageHost(() => {
+    throw new Error("renderer");
+  }, MESSAGE);
+  for (const host of [dropped, thrown]) {
+    const text = host.lines(60).map(stripTerminalSequences).join("\n");
+    expect(text).toContain("[probe]");
+    expect(text).toContain("the model's text");
+  }
+});
+
+test("a message component is rebuilt on expand and on invalidate", () => {
+  const renderer = vi.fn((_message: unknown, options: { expanded: boolean }) =>
+    lineOf(() => (options.expanded ? "EXPANDED" : "COLLAPSED")),
+  );
+  const host = messageHost(renderer as never, MESSAGE);
+  expect(renderer).toHaveBeenCalledTimes(1);
+  host.expand(true);
+  expect(renderer).toHaveBeenCalledTimes(2);
+  expect(host.lines(40)).toContain("EXPANDED");
+  host.expand(true);
+  expect(renderer).toHaveBeenCalledTimes(2);
+  host.invalidate();
+  expect(renderer).toHaveBeenCalledTimes(3);
+});
+
+test("a Spacer(1) precedes the renderer's component", () => {
+  const host = messageHost(() => lineOf(() => "RECORD"), MESSAGE);
+  expect(host.lines(40)).toEqual(["", "RECORD"]);
 });

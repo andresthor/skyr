@@ -3,8 +3,10 @@
  * what Pi does with a component's lines.
  */
 import {
+  CustomMessageComponent,
   type ExtensionUIContext,
   initTheme,
+  type MessageRenderer,
   ToolExecutionComponent,
   type ToolRenderers,
   type WorkingIndicatorOptions,
@@ -117,6 +119,12 @@ export interface RowResult {
 
 let themed = false;
 
+const themeOnce = () => {
+  if (themed) return;
+  initTheme("dark");
+  themed = true;
+};
+
 /**
  * A tool row as Pi draws it: the real `ToolExecutionComponent` over `definition`'s renderers,
  * driven the way the interactive mode drives it. Pi's own theme is initialised on first use,
@@ -127,10 +135,7 @@ export function toolRowHost(
   args: unknown,
   { outputPad = 1 }: { outputPad?: number } = {},
 ) {
-  if (!themed) {
-    initTheme("dark");
-    themed = true;
-  }
+  themeOnce();
   const component = new ToolExecutionComponent(
     "probe",
     "call-1",
@@ -149,6 +154,42 @@ export function toolRowHost(
     update(result: RowResult, partial = false) {
       component.updateResult({ isError: false, ...result }, partial);
     },
+    expand: (on: boolean) => component.setExpanded(on),
+    invalidate: () => component.invalidate(),
+  };
+}
+
+/**
+ * A custom message as Pi draws it: the real `CustomMessageComponent` over `renderer`, which Pi
+ * rebuilds on every expand and invalidate.
+ */
+export function messageHost(
+  renderer: MessageRenderer,
+  message: {
+    customType: string;
+    content: string | { type: string; text?: string }[];
+    details?: unknown;
+  },
+  {
+    expanded = false,
+    outputPad = 1,
+  }: { expanded?: boolean; outputPad?: number } = {},
+) {
+  themeOnce();
+  const component = new CustomMessageComponent(
+    {
+      role: "custom",
+      display: true,
+      timestamp: 0,
+      ...message,
+    } as never,
+    renderer,
+    undefined,
+    outputPad,
+  );
+  if (expanded) component.setExpanded(true);
+  return {
+    lines: (width: number) => component.render(width),
     expand: (on: boolean) => component.setExpanded(on),
     invalidate: () => component.invalidate(),
   };

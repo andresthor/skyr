@@ -2,9 +2,12 @@
  * Fixtures shared by the ui tests: Pi's real screen renderer over a silent terminal, to learn
  * what Pi does with a component's lines.
  */
-import type {
-  ExtensionUIContext,
-  WorkingIndicatorOptions,
+import {
+  type ExtensionUIContext,
+  initTheme,
+  ToolExecutionComponent,
+  type ToolRenderers,
+  type WorkingIndicatorOptions,
 } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
@@ -12,16 +15,23 @@ import {
   TuiMainScreen,
 } from "@earendil-works/pi-tui";
 import { onTestFinished } from "vitest";
+// biome-ignore lint/style/noRestrictedImports: Pi builds its HTML export of tool rows with this but does not export it from its root
+import { createToolHtmlRenderer } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/export-html/tool-renderer.js";
 // biome-ignore lint/style/noRestrictedImports: Pi builds its status indicators with these classes but does not export them from its root
 import * as indicators from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/status-indicator.js";
 import { plainTheme, scratchDir, widgetHost } from "./session.js";
+import { testTheme } from "./voice.js";
 
-function silentTerminal(columns: number, rows: number): Terminal {
+function silentTerminal(
+  columns: number,
+  rows: number,
+  sink: (data: string) => void = () => {},
+): Terminal {
   return {
     start() {},
     stop() {},
     async drainInput() {},
-    write() {},
+    write: sink,
     columns,
     rows,
     kittyProtocolActive: false,
@@ -71,6 +81,105 @@ export function piScreen(
   shown = "component";
   const crash = draw();
   return { firstFrameCrash, crash };
+}
+
+/**
+ * A real `TuiMainScreen` in regular mode, `rows` tall, that hands back what each frame wrote to
+ * the terminal. The first frame is the screen's first render, which writes without clearing.
+ */
+export function scrollScreen(rows: number, columns = 40) {
+  const writes: string[] = [];
+  const screen = new TuiMainScreen(
+    silentTerminal(columns, rows, (data) => writes.push(data)),
+    false,
+    scratchDir("scroll-screen"),
+  );
+  let lines: string[] = [];
+  screen.addChild({ invalidate() {}, render: () => lines });
+  return {
+    /** Draws `next` and returns everything the terminal was sent for it. */
+    show(next: string[]): string {
+      lines = next;
+      writes.length = 0;
+      screen.renderNow();
+      return writes.join("");
+    },
+  };
+}
+
+/** What a stream gives Pi for a tool row's result. */
+export interface RowResult {
+  content: { type: string; text?: string }[];
+  details?: unknown;
+  isError?: boolean;
+  durationMs?: number;
+}
+
+let themed = false;
+
+/**
+ * A tool row as Pi draws it: the real `ToolExecutionComponent` over `definition`'s renderers,
+ * driven the way the interactive mode drives it. Pi's own theme is initialised on first use,
+ * since the component reads it as a global.
+ */
+export function toolRowHost(
+  definition: ToolRenderers,
+  args: unknown,
+  { outputPad = 1 }: { outputPad?: number } = {},
+) {
+  if (!themed) {
+    initTheme("dark");
+    themed = true;
+  }
+  const component = new ToolExecutionComponent(
+    "probe",
+    "call-1",
+    args,
+    { outputPad },
+    definition,
+    { requestRender() {} } as never,
+    process.cwd(),
+  );
+  return {
+    lines: (width: number) => component.render(width),
+    start: () => component.markExecutionStarted(),
+    streamArgs: (next: unknown) => component.updateArgs(next),
+    argsComplete: () => component.setArgsComplete(),
+    /** The final result, or with `partial` a mid-run update. */
+    update(result: RowResult, partial = false) {
+      component.updateResult({ isError: false, ...result }, partial);
+    },
+    expand: (on: boolean) => component.setExpanded(on),
+    invalidate: () => component.invalidate(),
+  };
+}
+
+/**
+ * Pi's HTML export of one tool call: the call drawn on its own, then the result drawn on its own,
+ * collapsed and expanded, as the exporter does. Each is HTML, or undefined when it threw or
+ * the tool has no renderer. The theme is skyr's test theme, which a renderer reads as it does Pi's.
+ */
+export function htmlRender(
+  definition: ToolRenderers,
+  args: unknown,
+  result: RowResult,
+) {
+  const exporter = createToolHtmlRenderer({
+    getToolRenderers: () => definition,
+    theme: testTheme() as never,
+    cwd: process.cwd(),
+    width: 100,
+  });
+  return {
+    call: exporter.renderCall("call-1", "probe", args),
+    result: exporter.renderResult(
+      "call-1",
+      "probe",
+      result.content,
+      result.details,
+      result.isError ?? false,
+    ),
+  };
 }
 
 const ESC = "\x1b";

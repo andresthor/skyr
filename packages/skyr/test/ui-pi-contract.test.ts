@@ -1,6 +1,8 @@
 // Pi behaviour the ui layout rests on. A failure here after a Pi upgrade means the design
 // changes, not the test.
+import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
 import {
+  type Component,
   rgbColor,
   stripTerminalSequences,
   styleText,
@@ -8,7 +10,13 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { piScreen, realIndicator } from "./ui.js";
+import {
+  htmlRender,
+  piScreen,
+  realIndicator,
+  scrollScreen,
+  toolRowHost,
+} from "./ui.js";
 
 test("Pi measures a tab as three columns", () => {
   expect(visibleWidth("\t")).toBe(3);
@@ -102,4 +110,136 @@ test("an indicator with one frame starts no timer", () => {
   });
   realIndicator("working", "Working", { indicator: { frames: ["*"] } });
   expect(vi.getTimerCount()).toBe(0);
+});
+
+const lineOf = (text: () => string): Component => ({
+  invalidate() {},
+  render: () => [text()],
+});
+
+/** A self-framed definition whose renderers record the context Pi hands them. */
+function probeDefinition(
+  call: (context: Record<string, unknown>) => Component,
+  result: (context: Record<string, unknown>) => Component = () =>
+    lineOf(() => "RESULT"),
+) {
+  const seen: { call: Record<string, unknown>[]; result: unknown[] } = {
+    call: [],
+    result: [],
+  };
+  const definition: ToolRenderers = {
+    renderShell: "self",
+    renderCall: (_args, _theme, context) => {
+      seen.call.push(context as never);
+      return call(context as never);
+    },
+    renderResult: (res, options, _theme, context) => {
+      seen.result.push({ res, options, context });
+      return result(context as never);
+    },
+  };
+  return { definition, seen };
+}
+
+test("a \"self\" tool row is a blank line, then the call component's lines, then the result component's", () => {
+  const { definition } = probeDefinition(() => lineOf(() => "CALL"));
+  const host = toolRowHost(definition, {});
+  expect(host.lines(40)).toEqual(["", "CALL"]);
+  host.update({ content: [] });
+  expect(host.lines(40)).toEqual(["", "CALL", "RESULT"]);
+});
+
+test("components a renderer returns are drawn after both renderers ran, so a call component sees what renderResult stored in context.state in the same update", () => {
+  const { definition } = probeDefinition(
+    (context) =>
+      lineOf(() => String((context.state as { stored?: string }).stored)),
+    (context) => {
+      (context.state as { stored?: string }).stored = "settled";
+      return { invalidate() {}, render: () => [] };
+    },
+  );
+  const host = toolRowHost(definition, {});
+  expect(host.lines(40)).toEqual(["", "undefined"]);
+  host.update({ content: [] });
+  expect(host.lines(40)).toEqual(["", "settled"]);
+});
+
+test("a result with no details and no duration reaches the renderers when a stream aborts", () => {
+  const { definition, seen } = probeDefinition(() => lineOf(() => "CALL"));
+  const host = toolRowHost(definition, {});
+  host.update({ content: [{ type: "text", text: "aborted" }], isError: true });
+  const last = seen.result.at(-1) as {
+    res: { details: unknown };
+    context: { isError: boolean; durationMs: number | undefined };
+  };
+  expect(last.res.details).toBeUndefined();
+  expect(last.context).toMatchObject({ isError: true, durationMs: undefined });
+});
+
+test("durationMs reaches the renderers only on the final result", () => {
+  const { definition, seen } = probeDefinition(() => lineOf(() => "CALL"));
+  const host = toolRowHost(definition, {});
+  host.update({ content: [], durationMs: 900 }, true);
+  const partial = seen.result.at(-1) as { context: { durationMs?: number } };
+  expect(partial.context.durationMs).toBeUndefined();
+  host.update({ content: [], durationMs: 900 });
+  const final = seen.result.at(-1) as { context: { durationMs?: number } };
+  expect(final.context.durationMs).toBe(900);
+});
+
+test("HTML export draws the call with isPartial true and no duration, then the result on its own, with state shared", () => {
+  const { definition, seen } = probeDefinition(
+    (context) =>
+      lineOf(() => String((context.state as { stored?: string }).stored)),
+    (context) => {
+      (context.state as { stored?: string }).stored = "settled";
+      return lineOf(() => "RESULT");
+    },
+  );
+  const exported = htmlRender(definition, {}, { content: [] });
+  expect(seen.call[0]).toMatchObject({
+    isPartial: true,
+    durationMs: undefined,
+    executionStarted: true,
+    argsComplete: true,
+  });
+  // The call was drawn before the result existed
+  expect(stripTerminalSequences(exported.call ?? "")).toContain("undefined");
+  expect(exported.result?.expanded).toContain("RESULT");
+  const result = seen.result[0] as { context: { state: object } };
+  expect(result.context.state).toBe(seen.call[0]?.state);
+});
+
+test("Pi's regular renderer clears the scrollback when a line above the viewport changes, and not when a line inside it does", () => {
+  const CLEAR_SCROLLBACK = "\u001b[3J";
+  const screen = scrollScreen(10);
+  const tall = Array.from({ length: 30 }, (_, i) => `line ${i}`);
+  screen.show(tall);
+  expect(screen.show(tall.map((l, i) => (i === 0 ? "changed" : l)))).toContain(
+    CLEAR_SCROLLBACK,
+  );
+  const settled = tall.map((l, i) => (i === 0 ? "changed" : l));
+  const inside = settled.map((l, i) => (i === 29 ? "tail" : l));
+  const written = screen.show(inside);
+  expect(written).toContain("tail");
+  expect(written).not.toContain(CLEAR_SCROLLBACK);
+});
+
+test("a renderer that throws is replaced by Pi's plain text, and a component whose render throws is not caught", () => {
+  const thrower = probeDefinition(() => {
+    throw new Error("renderer");
+  });
+  expect(
+    stripTerminalSequences(
+      toolRowHost(thrower.definition, {}).lines(40).join("\n"),
+    ),
+  ).toContain("probe");
+  const late = probeDefinition(() => ({
+    invalidate() {},
+    render() {
+      throw new Error("component");
+    },
+  }));
+  const host = toolRowHost(late.definition, {});
+  expect(() => host.lines(40)).toThrow("component");
 });

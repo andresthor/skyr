@@ -87,3 +87,26 @@ test("a ctx with hasUI true in rpc mode draws nothing", async () => {
   expect(hasUI).toBe(true);
   expect(calls.filter(({ method }) => method === "setWidget")).toEqual([]);
 });
+
+test("setWorkingIndicator is called once per tui session start, after a reload again, and never outside tui", async () => {
+  const setups = async (mode: "tui" | "rpc" | "print") => {
+    const { ui, calls } = recordingUi();
+    const parent = await parentSession({
+      respond: () => fauxAssistantMessage("ok"),
+      mode,
+      ui,
+    });
+    const count = () =>
+      calls.filter(({ method }) => method === "setWorkingIndicator").length;
+    await parent.session.prompt("go");
+    return { parent, count };
+  };
+
+  const tui = await setups("tui");
+  expect(tui.count()).toBe(1);
+  await tui.parent.session.reload();
+  expect(tui.count()).toBe(2);
+
+  expect((await setups("rpc")).count()).toBe(0);
+  expect((await setups("print")).count()).toBe(0);
+});

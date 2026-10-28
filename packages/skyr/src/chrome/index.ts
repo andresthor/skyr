@@ -4,8 +4,9 @@
  * anything itself.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { canDraw } from "../ui/caps.js";
+import { canDraw, tierOf } from "../ui/caps.js";
 import { stopClock } from "../ui/clock.js";
+import { loaderIndicator } from "../ui/spinner.js";
 import { type BarHandle, createBar } from "./bar.js";
 
 export interface Chrome {
@@ -20,7 +21,12 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
   const bar = createBar();
   pi.on("session_start", (_event, ctx) => {
     bar.stop();
-    if (canDraw(ctx)) bar.start(ctx.ui);
+    if (!canDraw(ctx)) return;
+    bar.start(ctx.ui);
+    // Pi resets the indicator at every session start, so it is set here and only here
+    ctx.ui.setWorkingIndicator(
+      loaderIndicator({ theme: ctx.ui.theme, mode: tierOf(process.env) }),
+    );
   });
   pi.on("session_shutdown", () => {
     bar.stop();

@@ -142,7 +142,7 @@ export async function parentSession(o: {
   git?: boolean;
   /** The run mode extensions see; Pi's default is print. */
   mode?: ExtensionContext["mode"];
-  /** UI methods spread over the recording `setWidget` and `notify`. */
+  /** UI methods spread over the recording `setWidget` and `notify`, and a `setWorkingIndicator` that does nothing. */
   ui?: Partial<ExtensionUIContext>;
   /** Written to `<agentDir>/skyr.json` as JSON; a string is written as it is. */
   skyr?: unknown;
@@ -234,6 +234,7 @@ export async function parentSession(o: {
   const uiContext = {
     setWidget,
     notify: (message: string) => notices.push(message),
+    setWorkingIndicator: () => {},
     ...o.ui,
   } as unknown as ExtensionUIContext;
   await session.bindExtensions({ uiContext, mode: o.mode });

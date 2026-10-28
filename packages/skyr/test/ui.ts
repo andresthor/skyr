@@ -2,12 +2,18 @@
  * Fixtures shared by the ui tests: Pi's real screen renderer over a silent terminal, to learn
  * what Pi does with a component's lines.
  */
-import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionUIContext,
+  WorkingIndicatorOptions,
+} from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   type Terminal,
   TuiMainScreen,
 } from "@earendil-works/pi-tui";
+import { onTestFinished } from "vitest";
+// biome-ignore lint/style/noRestrictedImports: Pi builds its status indicators with these classes but does not export them from its root
+import * as indicators from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/status-indicator.js";
 import { plainTheme, scratchDir, widgetHost } from "./session.js";
 
 function silentTerminal(columns: number, rows: number): Terminal {
@@ -131,4 +137,40 @@ export function recordingUi(overrides: Partial<ExtensionUIContext> = {}) {
   // The object holds the surface skyr calls, not Pi's whole context: one cast, here.
   const ui = { ...methods, ...overrides } as unknown as ExtensionUIContext;
   return { ui, calls, ...widgets };
+}
+
+/**
+ * A status indicator as Pi hands one to the editor, in colours that need no initialised theme:
+ * a `WorkingStatusIndicator` for `working`, the base class for the other kinds (their subclasses
+ * reach for the global theme). `color` stands in for Pi's spinner and message colours, and
+ * `indicator` for the options an extension set, `requestRender` for what Pi's TUI would do on
+ * a tick. Disposed when the test ends.
+ */
+export function realIndicator(
+  kind: indicators.StatusIndicator["kind"],
+  message = "Working",
+  {
+    indicator,
+    color = (text: string) => text,
+    requestRender = () => {},
+  }: {
+    indicator?: WorkingIndicatorOptions;
+    color?: (text: string) => string;
+    requestRender?: () => void;
+  } = {},
+): indicators.StatusIndicator {
+  const ui = { requestRender } as never;
+  const made =
+    kind === "working"
+      ? new indicators.WorkingStatusIndicator(ui, message, indicator, color)
+      : new indicators.StatusIndicator(
+          kind,
+          ui,
+          color,
+          color,
+          message,
+          indicator,
+        );
+  onTestFinished(() => made.dispose());
+  return made;
 }

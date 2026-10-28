@@ -20,6 +20,14 @@ export function stripInvisible(text: string): string {
 }
 
 /**
+ * Body text drawn in a transcript: whole terminal sequences dropped and invisible characters
+ * stripped, with newlines and tabs kept so the text can still be markdown.
+ */
+export function sanitizeBlock(raw: string): string {
+  return stripInvisible(stripTerminalSequences(raw));
+}
+
+/**
  * One-line row text: drops whole terminal sequences, collapses whitespace, then strips
  * invisible characters. Newlines become spaces, so this is not for body text a model reads.
  */

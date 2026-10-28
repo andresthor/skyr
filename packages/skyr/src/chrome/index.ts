@@ -44,7 +44,7 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
   pi.on("session_shutdown", () => {
     bar.stop();
     working.clear();
-    // A running row's tick outlives its session otherwise: nothing else tells it Pi dropped the row
+    // The bar's own tick outlives its session otherwise
     stopClock();
   });
   pi.on("agent_start", (_event, ctx) => {

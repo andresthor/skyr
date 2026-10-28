@@ -8,19 +8,25 @@ import type {
   ExtensionContext,
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { readSkyrSection } from "../config.js";
 import { loadPi } from "../pi.js";
-import {
-  elapsed,
-  errorRow,
-  firstLine,
-  took,
-  toolRow,
-} from "../tools/render.js";
 import { formatTokens } from "../ui/format.js";
-import { oneLine, quoted, sanitize, stripInvisible } from "../ui/text.js";
+import {
+  durationFact,
+  failedRow,
+  plainRow,
+  type Row,
+  type ToolView,
+  toolRenderers,
+} from "../ui/row.js";
+import {
+  oneLine,
+  quoted,
+  sanitize,
+  sanitizeBlock,
+  stripInvisible,
+} from "../ui/text.js";
 import { type AdvisorModel, parseAdvisorSection } from "./config.js";
 import { adviceTokens, advisorContext } from "./dialogue.js";
 
@@ -49,6 +55,37 @@ function isAdvice(details: unknown): details is AdvisorDetails {
     "tokens" in details &&
     typeof details.tokens === "number"
   );
+}
+
+/** The ledger record of a review: whose advice, what it cost, and the advice itself once expanded. */
+function adviceRow({
+  settled,
+  expanded,
+}: ToolView<Record<string, never>>): Row {
+  const head = { verb: "advise", subject: [""], subjectKind: "text" } as const;
+  if (!settled) return { head: { ...head, mark: "running", facts: [] } };
+  if (settled.isError) return failedRow(head, settled, "advisor");
+  const d = settled.details;
+  if (!isAdvice(d)) return plainRow(head, settled, "advisor");
+  const duration = durationFact(settled);
+  const advice = settled.content
+    .flatMap((c) => (c.type === "text" && c.text ? [c.text] : []))
+    .join("\n");
+  return {
+    head: {
+      ...head,
+      mark: "done",
+      subject: [sanitize(d.model)],
+      facts: [{ text: formatTokens(d.tokens), kind: "measure" }, ...duration],
+    },
+    rail: expanded
+      ? {
+          lines: sanitizeBlock(advice).split("\n"),
+          collapsed: 0,
+          ink: "markdown",
+        }
+      : undefined,
+  };
 }
 
 const GUIDELINES = [
@@ -187,35 +224,7 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         .result();
       return adviceResult(reply, spec);
     },
-    renderCall(_args, theme, context) {
-      return toolRow(theme, [
-        ["toolTitle", "advisor", true],
-        ...elapsed(context),
-      ]);
-    },
-    renderResult(result, options, theme, context) {
-      if (context.isError)
-        return errorRow(theme, result.content, took(context));
-      const d = result.details;
-      if (!isAdvice(d))
-        return toolRow(theme, [
-          ["muted", firstLine(result.content)],
-          ...took(context),
-        ]);
-      const row = toolRow(theme, [
-        ["success", "✓ advice"],
-        ["muted", ` · ${d.model} · ${formatTokens(d.tokens)}`],
-        ...took(context),
-      ]);
-      if (!options.expanded) return row;
-      const advice = result.content
-        .flatMap((c) => (c.type === "text" ? [c.text] : []))
-        .join("\n");
-      const box = new Container();
-      box.addChild(row);
-      box.addChild(new Text(advice.split("\n").map(sanitize).join("\n"), 0, 0));
-      return box;
-    },
+    ...toolRenderers<Record<string, never>>(adviceRow),
   });
 
   pi.on("session_start", async (_event, ctx) => {

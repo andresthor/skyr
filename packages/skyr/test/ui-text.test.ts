@@ -5,10 +5,19 @@ import {
   oneLine,
   quoted,
   sanitize,
+  sanitizeBlock,
   stripInvisible,
 } from "../src/ui/text.js";
 
 const OSC52 = "\u001b]52;c;cHduZWQ=\u0007";
+
+describe("sanitizeBlock", () => {
+  test("terminal sequences and invisible characters go, newlines and tabs stay", () => {
+    expect(sanitizeBlock(`a\tb\n${OSC52}c\u202e\u200bd\n\u001b[2Je`)).toBe(
+      "a\tb\ncd\ne",
+    );
+  });
+});
 
 describe("sanitize", () => {
   test("an OSC 52 sequence never survives", () => {

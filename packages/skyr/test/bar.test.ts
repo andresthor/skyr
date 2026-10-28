@@ -3,7 +3,7 @@
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { elapsed } from "../src/tools/render.js";
+import { everySecond } from "../src/ui/clock.js";
 import {
   call,
   expectInert,
@@ -219,8 +219,8 @@ test("no interval is left after a session ends with a running row and a running 
 
   await parent.session.prompt("go");
   await held.entered;
-  // A tool row of this session, still running when it ends
-  elapsed({ state: {}, executionStarted: true, invalidate() {} });
+  // A subscriber of the shared clock, still ticking when the session ends
+  everySecond(() => {});
   expect(vi.getTimerCount()).toBe(intervals + 1);
 
   await parent.session.reload();

@@ -284,25 +284,33 @@ export function drawRecord(
   );
 }
 
+/** The columns a rail leaves for its text. */
+export function railRoom(paint: Paint, width: number, pad: number): number {
+  const { rail } = glyphsOf(paint.mode);
+  return Math.max(0, width - 2 * pad - 2 - visibleWidth(rail) - 1);
+}
+
 /**
  * The lines under a record: `  │ line`, the rail dim and the line in `ink`, each line cut with
- * the tier's ellipsis. Lines arrive sanitized.
+ * the tier's ellipsis. Lines arrive sanitized; with `styled` ink they also carry their own
+ * colour, and are only cut.
  */
 export function drawRail(
   paint: Paint,
   lines: readonly string[],
-  ink: "muted" | "text",
+  ink: "muted" | "text" | "styled",
   width: number,
   pad: number,
 ): string[] {
   const { ellipsis, rail } = glyphsOf(paint.mode);
   const colors = paint.theme.colors;
-  const room = Math.max(0, width - 2 * pad - 2 - visibleWidth(rail) - 1);
-  return lines.map((line) =>
-    fitToWidth(
-      `${" ".repeat(pad)}  ${styled(paint, `${rail} `, { fg: colors.dim })}${styled(paint, fitToWidth(line, room, ellipsis), { fg: colors[ink] })}`,
+  const room = railRoom(paint, width, pad);
+  return lines.map((line) => {
+    const cut = fitToWidth(line, room, ellipsis);
+    return fitToWidth(
+      `${" ".repeat(pad)}  ${styled(paint, `${rail} `, { fg: colors.dim })}${ink === "styled" ? cut : styled(paint, cut, { fg: colors[ink] })}`,
       width,
       "",
-    ),
-  );
+    );
+  });
 }

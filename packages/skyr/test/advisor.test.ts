@@ -8,12 +8,8 @@ import {
   fauxToolCall,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import {
-  defineTool,
-  type Theme,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { defineTool } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { describe, expect, test } from "vitest";
 import { parseAdvisorSection } from "../src/advisor/config.js";
@@ -34,15 +30,9 @@ import {
   textOf,
   toolsSeen,
 } from "./session.js";
+import { piScreen, toolRowHost } from "./ui.js";
 
 const OSC52 = "\u001b]52;c;cHduZWQ=\u0007";
-
-const plain = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as unknown as Theme;
-
-type RenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
 
 const answer = () => fauxAssistantMessage("done");
 const advise =
@@ -610,78 +600,88 @@ describe("the result", () => {
 });
 
 describe("the row", () => {
-  test("the advisor row fits a narrow terminal and lets no terminal sequence through, collapsed or expanded", async () => {
+  const ADVICE = {
+    content: [
+      {
+        type: "text" as const,
+        text: `read ${OSC52}the\ttests 漢字漢字漢字漢字漢字漢字\nthen **commit** 🎉🎉🎉🎉🎉🎉🎉🎉🎉\n- one\n- two`,
+      },
+    ],
+    details: { model: "faux/faux-2", tokens: 12_345 },
+    durationMs: 1500,
+  };
+
+  const hostFor = async () => {
     const parent = await parentSession({ respond: answer, skyr: ADVISOR_ON });
     const tool = parent.session.getToolDefinition("advisor");
-    const result = {
-      content: [
-        {
-          type: "text" as const,
-          text: `read ${OSC52}the\ttests 漢字漢字漢字漢字漢字漢字\nthen 🎉🎉🎉🎉🎉🎉🎉🎉🎉 commit`,
-        },
-      ],
-      details: { model: "faux/faux-2", tokens: 12_345 },
-    };
-    const render = (expanded: boolean, width: number) => {
-      const context = {
-        toolCallId: "adv",
-        isError: false,
-        state: {},
-        durationMs: 1500,
-        expanded,
-      } as RenderContext;
-      return (
-        tool
-          ?.renderResult?.(
-            result,
-            { expanded, isPartial: false },
-            plain,
-            context,
-          )
-          .render(width) ?? []
-      );
-    };
-    expect(render(false, 80)).toEqual([
-      expect.stringMatching(/^✓ advice · faux\/faux-2 · 12k tok · 1\.5s\s*$/),
+    if (!tool) throw new Error("no advisor tool");
+    return toolRowHost(tool, {});
+  };
+  const shown = (lines: string[]) => lines.map(stripTerminalSequences);
+
+  test("the row is one record: the model, the tokens and the time", async () => {
+    const host = await hostFor();
+    host.update(ADVICE);
+    expect(shown(host.lines(100)).slice(1)).toEqual([
+      expect.stringMatching(/^ ✓ advise {3}faux\/faux-2 +12k tok · 1\.5s$/),
     ]);
+  });
+
+  test("the advisor row fits a narrow terminal and lets no terminal sequence through, collapsed or expanded", async () => {
+    const host = await hostFor();
+    host.update(ADVICE);
     for (const expanded of [false, true]) {
-      const lines = render(expanded, 16);
-      expect(lines[0]).toMatch(/^✓ advice/);
-      expect(lines.length > 1).toBe(expanded);
+      host.expand(expanded);
+      const lines = host.lines(16);
+      expect(lines.length > 2).toBe(expanded);
       for (const line of lines) {
         expect(visibleWidth(line)).toBeLessThanOrEqual(16);
-        // A cut row ends on a style reset; no other control character may remain.
-        expect(line.replaceAll("\u001b[0m", "")).not.toMatch(/\p{Cc}/u);
+        expect(line).not.toContain("\u001b]");
+        expect(stripTerminalSequences(line)).not.toMatch(/\p{Cc}/u);
       }
+      expect(piScreen({ invalidate() {}, render: host.lines }, 16).crash).toBe(
+        undefined,
+      );
     }
   });
 
-  test("a successful result whose details the row does not recognise draws a muted row, not an error", async () => {
-    const parent = await parentSession({ respond: answer, skyr: ADVISOR_ON });
-    const tool = parent.session.getToolDefinition("advisor");
-    const tagged = {
-      fg: (color: string, text: string) => `<${color}>${text}`,
-      bold: (text: string) => text,
-    } as unknown as Theme;
-    const context = {
-      toolCallId: "adv",
-      isError: false,
-      state: {},
-      durationMs: 1500,
-      expanded: false,
-    } as RenderContext;
+  test("expanded advice sits on a rail as markdown and the first line does not change", async () => {
+    const host = await hostFor();
+    host.update(ADVICE);
+    const collapsed = host.lines(80);
+    expect(collapsed).toHaveLength(2);
+    host.expand(true);
+    const expanded = host.lines(80);
+    expect(expanded[1]).toBe(collapsed[1]);
+    const rail = shown(expanded).slice(2);
+    expect(rail[0]).toMatch(/^ {3}│ read the\s+tests/);
+    expect(rail.every((line) => line.startsWith("   │ "))).toBe(true);
+    // **commit** is bold, not literal asterisks
+    expect(rail.join("\n")).not.toContain("**");
+    expect(expanded.join("\n")).toContain("\u001b[1m");
+    expect(rail.join("\n")).toMatch(/- one|• one/);
+  });
+
+  test("a failed review shows its reason and the rest on a rail", async () => {
+    const host = await hostFor();
+    host.update({
+      content: [{ type: "text", text: "advisor: no usable model\ntry later" }],
+      isError: true,
+    });
+    const [head, rail] = shown(host.lines(80)).slice(1);
+    expect(head).toMatch(/^ × advise +no usable model$/);
+    expect(rail).toBe("   │ try later");
+  });
+
+  test("details of another shape draw a plain record, not an error", async () => {
+    const host = await hostFor();
     for (const details of [undefined, {}, { model: "faux/faux-2" }]) {
-      const lines =
-        tool
-          ?.renderResult?.(
-            { content: [{ type: "text", text: "advice\nmore" }], details },
-            { expanded: false, isPartial: false },
-            tagged,
-            context,
-          )
-          .render(80) ?? [];
-      expect(lines, JSON.stringify(details)).toEqual([
-        expect.stringMatching(/^<muted>advice<muted> · 1\.5s\s*$/),
+      host.update({
+        content: [{ type: "text", text: "advice\nmore" }],
+        details,
+      });
+      expect(shown(host.lines(80)).slice(1)).toEqual([
+        expect.stringMatching(/^ ✓ advise +advice$/),
       ]);
     }
   });

@@ -1,5 +1,5 @@
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, test, vi } from "vitest";
 import {
   durationFact,
   failedRow,
@@ -144,6 +144,93 @@ describe("toolRenderers", () => {
         expect(screen.firstFrameCrash).toBeUndefined();
         expect(screen.crash).toBeUndefined();
       }
+    }
+  });
+});
+
+describe("a markdown rail", () => {
+  const markdown = toolRenderers<Args>(
+    (): Row => ({
+      head: {
+        mark: "done",
+        verb: "probe",
+        subject: ["x"],
+        subjectKind: "text",
+        facts: [],
+      },
+      rail: {
+        lines: ["a **bold** word", "", "- one", "- two", "- three"],
+        collapsed: 2,
+        ink: "markdown",
+      },
+    }),
+  );
+
+  test("is drawn as markdown on the rail, and collapsed counts the lines it came to", () => {
+    const host = toolRowHost(markdown, {});
+    host.update({ content: [] });
+    const collapsed = host.lines(40);
+    expect(plain(collapsed).slice(2)).toEqual([
+      "   │ a bold word",
+      "   │ ",
+      "   │ … 3 more lines",
+    ]);
+    expect(collapsed.join("")).toContain("\u001b[1m");
+    host.expand(true);
+    expect(plain(host.lines(40)).slice(2, 5)).toEqual([
+      "   │ a bold word",
+      "   │ ",
+      "   │ - one",
+    ]);
+  });
+
+  test("is plain text on a rail under NO_COLOR and TERM=dumb, with no colour, link or Unicode", () => {
+    const linked = toolRenderers<Args>(
+      (): Row => ({
+        head: {
+          mark: "done",
+          verb: "probe",
+          subject: ["x"],
+          subjectKind: "text",
+          facts: [],
+        },
+        rail: {
+          lines: ["a **bold** [link](https://x.test)", "", "- one"],
+          collapsed: 5,
+          ink: "markdown",
+        },
+      }),
+    );
+    for (const [name, value] of [
+      ["NO_COLOR", "1"],
+      ["TERM", "dumb"],
+    ] as const) {
+      vi.stubEnv(name, value);
+      const host = toolRowHost(linked, {});
+      host.update({ content: [] });
+      const lines = host.lines(60).slice(2);
+      expect(plain(lines).filter((line) => !/[│|] ?$/.test(line))).toEqual([
+        expect.stringMatching(
+          /^ {3}[│|] a \*\*bold\*\* \[link\]\(https:\/\/x\.test\)$/,
+        ),
+        expect.stringMatching(/^ {3}[│|] - one$/),
+      ]);
+      expect(lines.join("")).not.toContain("\u001b[38");
+      expect(lines.join("")).not.toContain("\u001b]8");
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test("never draws a line wider than the pane, nor crashes Pi's renderer", () => {
+    const host = toolRowHost(markdown, {});
+    host.update({ content: [] });
+    host.expand(true);
+    for (const width of [4, 5, 12, 20]) {
+      for (const line of host.lines(width))
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      expect(
+        piScreen({ invalidate() {}, render: host.lines }, width).crash,
+      ).toBe(undefined);
     }
   });
 });

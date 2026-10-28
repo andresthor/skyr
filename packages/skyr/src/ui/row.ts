@@ -14,12 +14,23 @@
  * makes Pi's regular renderer clear the terminal's scrollback.
  */
 import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  Markdown,
+  type MarkdownTheme,
+  stripTerminalSequences,
+} from "@earendil-works/pi-tui";
 import { glyphsOf, tierOf } from "./caps.js";
 import { fitToWidth } from "./fit.js";
 import { formatDuration } from "./format.js";
 import type { Paint } from "./palette.js";
-import { drawRail, drawRecord, type Fact, type RecordSpec } from "./record.js";
+import {
+  drawRail,
+  drawRecord,
+  type Fact,
+  type RecordSpec,
+  railRoom,
+} from "./record.js";
 import { sanitize } from "./text.js";
 
 export interface Row {
@@ -28,12 +39,14 @@ export interface Row {
   readonly children?: readonly RecordSpec[];
   /**
    * Lines under the record, all sanitized. Until the row is expanded only the first `collapsed`
-   * show, with a muted note of how many are hidden; expanded shows them all.
+   * show, with a muted note of how many are hidden; expanded shows them all. With `markdown`
+   * ink the lines are markdown source, drawn with Pi's markdown colours in the colour tier and as
+   * plain text in the others; the count is of the lines it comes to at the width.
    */
   readonly rail?: {
     readonly lines: readonly string[];
     readonly collapsed: number;
-    readonly ink: "muted" | "text";
+    readonly ink: "muted" | "text" | "markdown";
   };
 }
 
@@ -67,33 +80,90 @@ const paintOf = (theme: Theme): Paint => ({
   mode: tierOf(process.env),
 });
 
+/** Pi's markdown colours, read from the theme a renderer is handed, as `getMarkdownTheme` reads the global. */
+const markdownThemeOf = (theme: Theme): MarkdownTheme => ({
+  heading: (text) => theme.fg("mdHeading", text),
+  link: (text) => theme.fg("mdLink", text),
+  linkUrl: (text) => theme.fg("mdLinkUrl", text),
+  code: (text) => theme.fg("mdCode", text),
+  codeBlock: (text) => theme.fg("mdCodeBlock", text),
+  codeBlockBorder: (text) => theme.fg("mdCodeBlockBorder", text),
+  quote: (text) => theme.fg("mdQuote", text),
+  quoteBorder: (text) => theme.fg("mdQuoteBorder", text),
+  hr: (text) => theme.fg("mdHr", text),
+  listBullet: (text) => theme.fg("mdListBullet", text),
+  bold: (text) => theme.bold(text),
+  italic: (text) => theme.italic(text),
+  underline: (text) => theme.underline(text),
+  strikethrough: (text) => theme.strikethrough(text),
+});
+
+/** What a drawn component keeps between paints: markdown caches its parse by text and width. */
+interface Memo {
+  markdown?: Markdown;
+  source?: string;
+}
+
+function markdownLines(
+  theme: Theme,
+  memo: Memo,
+  source: string,
+  width: number,
+): string[] {
+  if (!memo.markdown)
+    memo.markdown = new Markdown(source, 0, 0, markdownThemeOf(theme));
+  else if (memo.source !== source) memo.markdown.setText(source);
+  memo.source = source;
+  // Markdown pads each line out to the width
+  const lines = memo.markdown.render(width).map((line) => line.trimEnd());
+  while (
+    lines.length > 0 &&
+    stripTerminalSequences(lines.at(-1) ?? "").trim() === ""
+  )
+    lines.pop();
+  return lines;
+}
+
 function linesOf(
-  paint: Paint,
+  theme: Theme,
+  memo: Memo,
   row: Row,
   expanded: boolean,
   width: number,
   pad: number,
 ): string[] {
+  const paint = paintOf(theme);
   const { ellipsis } = glyphsOf(paint.mode);
   const out = [drawRecord(paint, row.head, width, pad)];
   for (const child of row.children ?? [])
     out.push(drawRecord(paint, child, width, pad));
   const { rail } = row;
-  if (rail && rail.lines.length > 0) {
-    const shown = expanded ? rail.lines : rail.lines.slice(0, rail.collapsed);
-    out.push(...drawRail(paint, shown, rail.ink, width, pad));
-    const hidden = rail.lines.length - shown.length;
-    if (hidden > 0)
-      out.push(
-        ...drawRail(
-          paint,
-          [`${ellipsis} ${hidden} more line${hidden === 1 ? "" : "s"}`],
-          "muted",
-          width,
-          pad,
-        ),
-      );
-  }
+  if (!rail) return out;
+  const wantsMarkdown = rail.ink === "markdown";
+  // Markdown draws 24-bit colour, hyperlinks and Unicode rules, which NO_COLOR and TERM=dumb forbid
+  const markdown = wantsMarkdown && paint.mode === "color";
+  const lines = markdown
+    ? markdownLines(
+        theme,
+        memo,
+        rail.lines.join("\n"),
+        railRoom(paint, width, pad),
+      )
+    : rail.lines;
+  const shown = expanded ? lines : lines.slice(0, rail.collapsed);
+  const ink = markdown ? "styled" : wantsMarkdown ? "text" : rail.ink;
+  out.push(...drawRail(paint, shown, ink, width, pad));
+  const hidden = lines.length - shown.length;
+  if (hidden > 0)
+    out.push(
+      ...drawRail(
+        paint,
+        [`${ellipsis} ${hidden} more line${hidden === 1 ? "" : "s"}`],
+        "muted",
+        width,
+        pad,
+      ),
+    );
   return out;
 }
 
@@ -134,6 +204,7 @@ export function toolRenderers<Args>(view: (v: ToolView<Args>) => Row) {
     renderCall(args: unknown, theme: Theme, context: Context): Component {
       const state: RowState = context.state;
       const { expanded, outputPad } = context;
+      const memo: Memo = {};
       return drawn((width) => {
         state.drew = state.settled !== undefined;
         const row = view({
@@ -141,7 +212,7 @@ export function toolRenderers<Args>(view: (v: ToolView<Args>) => Row) {
           settled: state.settled,
           expanded,
         });
-        return linesOf(paintOf(theme), row, expanded, width, outputPad);
+        return linesOf(theme, memo, row, expanded, width, outputPad);
       });
     },
     renderResult(
@@ -159,6 +230,7 @@ export function toolRenderers<Args>(view: (v: ToolView<Args>) => Row) {
           durationMs: context.durationMs,
         };
       const { expanded } = options;
+      const memo: Memo = {};
       return drawn((width) => {
         if (state.drew || state.settled === undefined) return [];
         const row = view({
@@ -166,7 +238,7 @@ export function toolRenderers<Args>(view: (v: ToolView<Args>) => Row) {
           settled: state.settled,
           expanded,
         });
-        return linesOf(paintOf(theme), row, expanded, width, context.outputPad);
+        return linesOf(theme, memo, row, expanded, width, context.outputPad);
       });
     },
   };

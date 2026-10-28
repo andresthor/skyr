@@ -11,9 +11,8 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { glyphsOf, tierOf } from "../ui/caps.js";
-import { everySecond } from "../ui/clock.js";
 import { fitToWidth } from "../ui/fit.js";
-import { formatDuration, formatElapsed } from "../ui/format.js";
+import { formatDuration } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
 
 export type Segment = [color: ThemeColor, text: string, bold?: boolean];
@@ -90,74 +89,24 @@ export function errorRow(
   return toolRow(theme, [["error", firstLine(content)], ...after]);
 }
 
-/** A timed row's clock, kept in the row's `context.state`, which Pi shares across its renders. */
-export interface Timing {
-  startedAt?: number;
-  endedAt?: number;
-  /** Present once the shared clock redraws the row; stops that, and may be called again. */
-  stop?: () => void;
-}
-
 /** ` · <text>` in muted, the time fact of a row. */
 export function timeFact(text: string): Segment[] {
   return [["muted", ` · ${text}`]];
 }
 
-// Only `took` stops a row's ticking, and Pi can drop a running row first (a chat rebuild, an
-// HTML export); past this bound its clock freezes.
-const TICK_LIMIT_MS = 5 * 60_000;
-
 /**
- * For `renderCall`: starts the clock when Pi starts executing the call and redraws the row each
- * second until `took` stops it. Returns the running time as a row suffix; nothing before the start
- * or after the result. A row the TUI rebuilds from a saved session never starts; an HTML export
- * starts and ends each row at once, so the call shows ` · 0s` and `took` ` · 0.0s`, as Pi's bash
- * row shows `Took 0.0s`.
- */
-export function elapsed(context: {
-  state: Timing;
-  executionStarted: boolean;
-  invalidate: () => void;
-}): Segment[] {
-  const { state } = context;
-  if (context.executionStarted && state.startedAt === undefined) {
-    const startedAt = Date.now();
-    state.startedAt = startedAt;
-    const stop = everySecond(() => {
-      if (Date.now() - startedAt < TICK_LIMIT_MS) context.invalidate();
-      else stop();
-    });
-    state.stop = stop;
-  }
-  if (state.startedAt === undefined || state.endedAt !== undefined) return [];
-  return timeFact(formatElapsed(Date.now() - state.startedAt));
-}
-
-/**
- * For `renderResult`: on a final result, or an error, stops the clock and returns the time taken,
- * Pi's recorded `durationMs` when it has one, so a row rebuilt from a saved session shows it too;
- * a partial result is mid-stream, so it keeps the clock running.
+ * The time a final result took, Pi's recorded `durationMs`, so a row rebuilt from a saved
+ * session shows it too; nothing while the result is partial or Pi recorded none.
  */
 export function took(context: {
-  state: Timing;
   isError?: boolean;
   isPartial?: boolean;
   durationMs?: number | undefined;
 }): Segment[] {
-  const { state } = context;
-  if (context.isPartial && !context.isError)
-    return state.startedAt === undefined
-      ? []
-      : timeFact(formatElapsed(Date.now() - state.startedAt));
-  if (state.startedAt !== undefined) {
-    state.endedAt ??= Date.now();
-    state.stop?.();
-  }
-  if (context.durationMs !== undefined)
-    return timeFact(formatDuration(context.durationMs));
-  return state.startedAt === undefined || state.endedAt === undefined
+  if (context.isPartial && !context.isError) return [];
+  return context.durationMs === undefined
     ? []
-    : timeFact(formatDuration(state.endedAt - state.startedAt));
+    : timeFact(formatDuration(context.durationMs));
 }
 
 /** A message's text, one sanitized line per line. */

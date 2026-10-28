@@ -8,21 +8,20 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { hostCapabilities } from "../tengi.js";
-import {
-  errorRow,
-  firstLine,
-  segmentRow,
-  took,
-  toolRow,
-} from "../tools/render.js";
 import { glyphsOf, tierOf } from "../ui/caps.js";
+import {
+  durationFact,
+  failedRow,
+  plainRow,
+  type Row,
+  type ToolView,
+  toolRenderers,
+} from "../ui/row.js";
 import { clip, oneLine, quoted, sanitize } from "../ui/text.js";
 import {
   type Answers,
-  alignHeaders,
   answerLine,
   createAskDialog,
   HEADER_WIDTH,
@@ -207,6 +206,76 @@ type AskDetails =
   | { outcome: "answered"; answers: { header: string; answer: string }[] }
   | { outcome: "declined" };
 
+/** What the user told the model, one `header → answer` per question, as a transcript row's subject. */
+function subjectOf(details: AskDetails): string {
+  if (details.outcome === "declined") return "";
+  const { ellipsis, sep, to } = glyphsOf(tierOf(process.env));
+  return details.answers
+    .map(
+      (a) =>
+        `${shortHeader(a.header, ellipsis)} ${to} ${sanitize(a.answer) || "not answered"}`,
+    )
+    .join(sep);
+}
+
+/** The headers of the questions being asked, from arguments that may still be streaming. */
+function headersOf(args: Partial<Static<typeof Params>>): string {
+  const { ellipsis, sep } = glyphsOf(tierOf(process.env));
+  return Array.isArray(args.questions)
+    ? args.questions
+        .map((q) => q?.header)
+        .filter((h): h is string => typeof h === "string")
+        .map((h) => shortHeader(h, ellipsis))
+        .join(sep)
+    : "";
+}
+
+/** The ledger record of a question: what was asked while it waits, the receipt once answered. */
+function askRow({ args, settled }: ToolView<Static<typeof Params>>): Row {
+  const head = { verb: "ask", subjectKind: "text" } as const;
+  const asking = [headersOf(args)];
+  if (!settled)
+    return { head: { ...head, mark: "running", subject: asking, facts: [] } };
+  const duration = durationFact(settled);
+  if (settled.isError)
+    return failedRow({ ...head, subject: asking }, settled, "ask_user");
+  const { details } = settled;
+  if (!isAsked(details))
+    return plainRow({ ...head, subject: asking }, settled, "ask_user");
+  if (details.outcome === "declined")
+    return {
+      head: {
+        ...head,
+        mark: "stopped",
+        subject: asking,
+        facts: [
+          { text: "declined", kind: "explain" },
+          { text: "the model was told to stop and wait", kind: "extra" },
+          ...duration,
+        ],
+      },
+    };
+  const answered = details.answers.filter((a) => a.answer !== "").length;
+  const total = details.answers.length;
+  return {
+    head: {
+      ...head,
+      mark: answered === total ? "done" : "mixed",
+      subject: [subjectOf(details)],
+      facts: [
+        {
+          text:
+            answered === total
+              ? `${total} answered`
+              : `${answered} of ${total} answered`,
+          kind: "measure",
+        },
+        ...duration,
+      ],
+    },
+  };
+}
+
 // Persisted details may come from an older build or another extension's tool of this name
 function isAsked(details: unknown): details is AskDetails {
   if (typeof details !== "object" || details === null) return false;
@@ -354,47 +423,6 @@ export function registerAskUser(pi: ExtensionAPI): void {
       }
     },
 
-    renderCall(args, theme) {
-      const { ellipsis } = glyphsOf(tierOf(process.env));
-      // Streaming arguments arrive partial, so nothing in them is guaranteed yet
-      const headers = Array.isArray(args.questions)
-        ? args.questions
-            .map((q) => q?.header)
-            .filter((h): h is string => typeof h === "string")
-            .map((h) => shortHeader(h, ellipsis))
-        : [];
-      return toolRow(theme, [
-        ["toolTitle", "ask_user", true],
-        ["muted", ` ${headers.join(" · ")}`],
-      ]);
-    },
-
-    renderResult(result, _options, theme, context) {
-      const time = took(context);
-      if (context.isError) return errorRow(theme, result.content, time);
-      const { details } = result;
-      if (!isAsked(details))
-        return toolRow(theme, [["muted", firstLine(result.content)], ...time]);
-      if (details.outcome === "declined")
-        return toolRow(theme, [["warning", "declined"], ...time]);
-      // Built outside toolRow, whose sanitize would collapse the padding that aligns the answers
-      const { ellipsis } = glyphsOf(tierOf(process.env));
-      const headers = alignHeaders(
-        details.answers.map((a) => shortHeader(a.header, ellipsis)),
-      );
-      const box = new Container();
-      details.answers.forEach((a, i) => {
-        box.addChild(
-          segmentRow(theme, [
-            ["muted", headers[i] ?? ""],
-            a.answer
-              ? ["text", sanitize(a.answer)]
-              : ["warning", "not answered"],
-            ...(i === 0 ? time : []),
-          ]),
-        );
-      });
-      return box;
-    },
+    ...toolRenderers<Static<typeof Params>>(askRow),
   });
 }

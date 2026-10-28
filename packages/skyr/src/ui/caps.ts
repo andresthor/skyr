@@ -34,6 +34,8 @@ export interface Glyphs {
   readonly mark: Readonly<Record<Mark, string>>;
   /** Leads a current action. */
   readonly now: string;
+  /** Between a question and its answer. */
+  readonly to: string;
   /** The left edge of the lines under a record. */
   readonly rail: string;
   /** What leads a child record: one that has siblings after it, and the last one. */
@@ -53,6 +55,7 @@ const UNICODE: Glyphs = {
     mixed: "!",
   },
   now: "›",
+  to: "→",
   rail: "│",
   branch: { mid: "├", last: "└" },
   sep: " · ",
@@ -69,6 +72,7 @@ const ASCII: Glyphs = {
     mixed: "!",
   },
   now: ">",
+  to: "->",
   rail: "|",
   branch: { mid: "|", last: "`" },
   sep: " - ",

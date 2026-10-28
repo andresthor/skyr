@@ -46,8 +46,8 @@ is ticked for you. Esc declines, and the model is told to stop and wait; on a ro
 Esc first clears it. It can ask up to four questions at once: Tab and Shift+Tab move between
 them, Space picks an option without moving on, and a Submit tab shows every answer before you
 send them. A question left unanswered goes to the model as not answered; sending none declines.
-The answers stay in the transcript as one row per question, after a resume too. The terminal
-bell rings when a question opens.
+The answers stay in the transcript as one row, `Colour → green · Extras → salt, pepper`, after a
+resume too. The terminal bell rings when a question opens.
 
 The terminal offers the tool, and so does a host that embeds Pi and answers form requests over
 Pi's event bus, where the questions become one form in the client; the bus contract a host

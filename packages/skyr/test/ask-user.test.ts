@@ -21,7 +21,11 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { type Component, Editor } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  Editor,
+  stripTerminalSequences,
+} from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { expect, test, vi } from "vitest";
 import { registerAskUser } from "../src/ask-user/index.js";
@@ -37,6 +41,7 @@ import {
   textOf,
   toolsSeen,
 } from "./session.js";
+import { toolRowHost } from "./ui.js";
 import { keybindings } from "./voice.js";
 
 const plain = {
@@ -521,31 +526,31 @@ test.each([
   expect(fake.custom).not.toHaveBeenCalled();
 });
 
-type ResultContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
+/** The row Pi draws for the tool, as plain lines without the blank one it leads with. */
+const shownRow = (host: ReturnType<typeof toolRowHost>, width = 80) =>
+  host
+    .lines(width)
+    .slice(1)
+    .map((line) => stripTerminalSequences(line).trimEnd());
 
-const drawn = (row: Component | undefined, width = 80) =>
-  row?.render(width).map((line) => line.trimEnd()) ?? [];
-
-/** The call row as drawn while the arguments stream in, so `args` may be partial. */
+/** The row while the call's arguments stream in, so `args` may be partial. */
 const callRows = (tool: AskTool, args: unknown, width?: number) =>
-  drawn(tool.renderCall?.(args as never, plain, {} as never), width);
+  shownRow(toolRowHost(tool, args), width);
 
-/** The result row as drawn, with the padding to the width cut off. */
+/** The row once the result is in, as Pi draws it (and redraws it from a saved session). */
 function resultRows(
   tool: AskTool,
   result: Awaited<ReturnType<AskTool["execute"]>>,
-  o: { isError?: boolean; width?: number } = {},
+  o: { isError?: boolean; width?: number; args?: unknown } = {},
 ): string[] {
-  const context = { isError: o.isError ?? false, state: {}, durationMs: 1200 };
-  return drawn(
-    tool.renderResult?.(
-      result as never,
-      { expanded: false, isPartial: false },
-      plain,
-      context as unknown as ResultContext,
-    ),
-    o.width,
-  );
+  const host = toolRowHost(tool, o.args ?? TWO);
+  host.update({
+    content: result.content,
+    details: result.details,
+    isError: o.isError ?? false,
+    durationMs: 1200,
+  });
+  return shownRow(host, o.width);
 }
 
 test("escape sequences, bidi overrides and wide text from the model or the user never reach a rendered line, at any width; the dialog rings the bell once on open", async () => {
@@ -565,7 +570,7 @@ test("escape sequences, bidi overrides and wide text from the model or the user 
   expectInert(dialogLines, 40);
   expect(opened.write.mock.calls).toEqual([["\x07"]]);
   const callRow = callRows(tool, params, 20);
-  const resultRow = resultRows(tool, result, { width: 20 });
+  const resultRow = resultRows(tool, result, { width: 20, args: params });
   expect([callRow.length, resultRow.length]).toEqual([1, 1]);
   expectInert([...callRow, ...resultRow], 20);
 
@@ -595,9 +600,9 @@ test("the call row survives arguments that are still streaming in", () => {
     { questions: "Sto" },
     { questions: [null, {}, { header: 3 }] },
   ])
-    expect(callRows(tool, args)).toEqual(["ask_user"]);
+    expect(callRows(tool, args)).toEqual([" • ask"]);
   expect(callRows(tool, { questions: [{ header: "Storage" }, {}] })).toEqual([
-    "ask_user Storage",
+    expect.stringMatching(/^ • ask +Storage$/),
   ]);
 });
 
@@ -605,9 +610,13 @@ test("a header cut for the transcript ends in the terminal's ellipsis, and the t
   const tool = registered();
   const long = { questions: [{ header: "Storage engine" }] };
   vi.stubEnv("TERM", "xterm-256color");
-  expect(callRows(tool, long)).toEqual(["ask_user Storage eng…"]);
+  expect(callRows(tool, long)).toEqual([
+    expect.stringMatching(/^ • ask +Storage eng…$/),
+  ]);
   vi.stubEnv("TERM", "dumb");
-  expect(callRows(tool, long)).toEqual(["ask_user Storage e..."]);
+  expect(callRows(tool, long)).toEqual([
+    expect.stringMatching(/^ \* ask +Storage e\.\.\.$/),
+  ]);
   const twins = {
     questions: [
       { ...STORAGE, header: "Storage engine" },
@@ -641,21 +650,75 @@ test("a question left unanswered reaches the model as not answered, with a line 
   });
   expect(
     resultRows(registered(), { content: [], details: result.details }),
-  ).toEqual(["Storage  not answered · 1.2s", "Name     [own words] skyr"]);
+  ).toEqual([
+    expect.stringMatching(
+      /^ ! ask +Storage → not answered · Name → \[own words\] skyr +1 of 2 answered$/,
+    ),
+  ]);
 });
 
-test("a thrown call draws the error row with its first line; a successful result with no details or another shape draws a plain row and never throws", () => {
+test("answers read as one receipt with each header cut to 12 columns, and a finished row is one line", async () => {
   const tool = registered();
-  expect(
-    resultRows(
-      tool,
-      {
-        content: [{ type: "text", text: `${NO_TERMINAL}\nsecond line` }],
-        details: { outcome: "declined" },
-      },
-      { isError: true, width: 400 },
+  const details = {
+    outcome: "answered",
+    answers: [
+      { header: "Colour", answer: "green" },
+      { header: "A header far too long", answer: "salt; pepper" },
+    ],
+  };
+  const rows = resultRows(tool, { content: [], details } as never, {
+    width: 120,
+  });
+  expect(rows).toEqual([
+    expect.stringMatching(
+      /^ ✓ ask +Colour → green · A header fa… → salt; pepper +2 answered · 1\.2s$/,
     ),
-  ).toEqual([`${NO_TERMINAL} · 1.2s`]);
+  ]);
+});
+
+test("the count and the time drop before the receipt is cut, as the pane narrows", () => {
+  const tool = registered();
+  const details = {
+    outcome: "answered",
+    answers: [
+      { header: "Colour", answer: "green" },
+      { header: "Extras", answer: "salt; pepper" },
+    ],
+  };
+  const at = (width: number) =>
+    resultRows(tool, { content: [], details } as never, { width })[0] ?? "";
+  expect(at(100)).toContain("2 answered");
+  expect(at(56)).not.toContain("2 answered");
+  expect(at(56)).toContain("Colour → green · Extras → salt; pepper");
+  expect(at(30)).toContain("…");
+});
+
+test("declined is a stopped record, not a failure", () => {
+  const rows = resultRows(
+    registered(),
+    { content: [], details: { outcome: "declined" } } as never,
+    { width: 120 },
+  );
+  expect(rows).toEqual([
+    expect.stringMatching(
+      /^ ■ ask +Storage · Name +declined · the model was told to stop and wait · 1\.2s$/,
+    ),
+  ]);
+});
+
+test("a thrown call draws the failure with its reason and the rest on a rail; a successful result with no details or another shape draws a plain record and never throws", () => {
+  const tool = registered();
+  const failed = resultRows(
+    tool,
+    {
+      content: [{ type: "text", text: `${NO_TERMINAL}\nsecond line` }],
+      details: { outcome: "declined" },
+    },
+    { isError: true, width: 400 },
+  );
+  expect(failed[0]).toMatch(/^ × ask +Storage · Name +this run has no/);
+  expect(failed[0]).toMatch(/and continue\. · 1\.2s$/);
+  expect(failed.slice(1)).toEqual(["   │ second line"]);
   for (const details of [
     undefined,
     "answered",
@@ -671,10 +734,11 @@ test("a thrown call draws the error row with its first line; a successful result
         content: [{ type: "text", text: "The user answered.\n1. a -> b" }],
         details,
       }),
-    ).toEqual(["The user answered. · 1.2s"]);
-  expect(
-    resultRows(tool, { content: [], details: { outcome: "declined" } }),
-  ).toEqual(["declined · 1.2s"]);
+    ).toEqual([
+      expect.stringMatching(
+        /^ ✓ ask +Storage · Name +The user answered\. · 1\.2s$/,
+      ),
+    ]);
 });
 
 /** A tool on a bus whose host answers capability queries with `reply`, after a session_start in `mode`. */

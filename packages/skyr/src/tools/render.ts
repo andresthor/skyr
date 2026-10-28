@@ -12,7 +12,6 @@ import {
 } from "@earendil-works/pi-tui";
 import { glyphsOf, tierOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
-import { formatDuration } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
 
 export type Segment = [color: ThemeColor, text: string, bold?: boolean];
@@ -80,33 +79,9 @@ export function firstLine(content: { type: string; text?: string }[]): string {
   return text.split("\n")[0] ?? "";
 }
 
-/** The first line of a thrown tool's message, for its red row, followed by `after`. */
-export function errorRow(
-  theme: Theme,
-  content: { type: string; text?: string }[],
-  after: Segment[] = [],
-): Component {
-  return toolRow(theme, [["error", firstLine(content)], ...after]);
-}
-
 /** ` · <text>` in muted, the time fact of a row. */
 export function timeFact(text: string): Segment[] {
   return [["muted", ` · ${text}`]];
-}
-
-/**
- * The time a final result took, Pi's recorded `durationMs`, so a row rebuilt from a saved
- * session shows it too; nothing while the result is partial or Pi recorded none.
- */
-export function took(context: {
-  isError?: boolean;
-  isPartial?: boolean;
-  durationMs?: number | undefined;
-}): Segment[] {
-  if (context.isPartial && !context.isError) return [];
-  return context.durationMs === undefined
-    ? []
-    : timeFact(formatDuration(context.durationMs));
 }
 
 /** A message's text, one sanitized line per line. */

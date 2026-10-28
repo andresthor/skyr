@@ -8,12 +8,7 @@ import {
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { RunSnapshot } from "../src/subagent/store.js";
 import { laneLine } from "../src/subagent/view.js";
-import {
-  errorRow,
-  type Segment,
-  segmentRow,
-  toolRow,
-} from "../src/tools/render.js";
+import { type Segment, segmentRow, toolRow } from "../src/tools/render.js";
 import { CORPUS, piScreen, WIDTHS_SWEEP } from "./ui.js";
 
 const plain = {
@@ -128,25 +123,5 @@ describe("toolRow", () => {
       ["muted", "x.dev"],
     ]).render(200);
     expect(line.trimEnd()).toBe("<toolTitle>*web_fetch *<muted>x.dev");
-  });
-});
-
-describe("errorRow", () => {
-  test("keeps the first line and leaves no hyperlink payload behind", () => {
-    const [line = ""] = errorRow(plain, [
-      { type: "text", text: `boom \u001b]8;;https://evil\u001b\\link\nmore` },
-    ]).render(200);
-    expect(line.trimEnd()).toBe("boom link");
-  });
-});
-
-describe("errorRow", () => {
-  test("a failure row carries the time after the message", () => {
-    const row = errorRow(
-      plain,
-      [{ type: "text", text: "tool: failed\nmore" }],
-      [["muted", " · 1.5s"]],
-    );
-    expect(row.render(200)[0]?.trimEnd()).toBe("tool: failed · 1.5s");
   });
 });

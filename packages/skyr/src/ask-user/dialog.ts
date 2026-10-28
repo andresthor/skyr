@@ -65,7 +65,7 @@ export function answerLine(answer: Answer): string {
 }
 
 /** Each header padded so the text after it starts at one column, two past the widest. */
-export function alignHeaders(headers: readonly string[]): string[] {
+function alignHeaders(headers: readonly string[]): string[] {
   const widest = Math.max(...headers.map((h) => visibleWidth(h)));
   return headers.map((h) => h + " ".repeat(widest - visibleWidth(h) + 2));
 }

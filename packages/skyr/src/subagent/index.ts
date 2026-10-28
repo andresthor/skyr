@@ -8,6 +8,7 @@ import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import type { BarHandle } from "../chrome/bar.js";
+import { failureLine } from "../chrome/bar-view.js";
 import { loadPi } from "../pi.js";
 import { isRecord, publishTasks } from "../tengi.js";
 import {
@@ -19,6 +20,7 @@ import {
   timeFact,
   toolRow,
 } from "../tools/render.js";
+import { canDraw } from "../ui/caps.js";
 import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { addUsage } from "./child/protocol.js";
@@ -263,17 +265,32 @@ export function registerSubagent(pi: ExtensionAPI, bar: BarHandle): void {
 
   pi.registerCommand("subagents", {
     description:
-      "List running subagents; `/subagents stop <id|all>` stops them",
+      "Open the bar on the running subagents; `/subagents stop <id|slot|all>` stops them",
     handler: async (args, ctx) => {
       const [verb, target] = args.trim().split(/\s+/);
       if (verb === "stop") {
-        const { text, level } = runs.stop(target ?? "");
+        const slot = bar.slotTarget("agents", target ?? "");
+        if (slot && !("id" in slot)) {
+          ctx.ui.notify(
+            `subagent: ${slot.reason}; running: ${slot.running || "none"}`,
+            "warning",
+          );
+          return;
+        }
+        const { text, level } = runs.stop(slot?.id ?? target ?? "");
         ctx.ui.notify(text, level);
         return;
       }
+      const unlisted = canDraw(ctx) ? bar.open("agents") : [];
+      if (unlisted === undefined) return;
+      // A pane too small to list the tab gets the listing, which names the ids
       ctx.ui.notify(
-        listingLines(store.running(), Date.now())?.join("\n") ??
-          "subagent: none running",
+        [
+          ...(listingLines(store.running(), Date.now()) ?? [
+            "subagent: none running",
+          ]),
+          ...unlisted.map(failureLine),
+        ].join("\n"),
         "info",
       );
     },

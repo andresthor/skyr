@@ -590,7 +590,7 @@ export function createShellSession(o: {
       if (ids.length === 0 || (target !== "all" && ids.length > 1))
         return `shells: ${ids.length === 0 ? "nothing matches" : "more than one id matches"} ${quoted(target, 40)}; running: ${running.map((j) => j.id).join(", ") || "none"}`;
       await watcher.stop(ids, "user");
-      return `shells: stopped ${ids.join(", ")}`;
+      return `shells: stopped ${matches.map((j) => `${j.id} "${titleOf(j.command)}"`).join(", ")}`;
     },
     jobs: () => store.jobs(),
     subscribe: (listener) => store.subscribe(listener),

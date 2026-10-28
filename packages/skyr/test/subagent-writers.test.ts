@@ -32,7 +32,7 @@ const queued =
   async () =>
     expect(
       (await listing(parent)).some((l) =>
-        l.startsWith(`○ queued "run ${task}"${rest}`),
+        l.startsWith(`□ queued "run ${task}"${rest}`),
       ),
     ).toBe(true);
 
@@ -165,7 +165,7 @@ test("a writer in a subdirectory queues behind a writer in the directory above i
   const run = parent.session.prompt("go");
   await holds.get("root")!.entered;
   await vi.waitFor(async () =>
-    expect((await listing(parent)).some((l) => l.startsWith("○ queued"))).toBe(
+    expect((await listing(parent)).some((l) => l.startsWith("□ queued"))).toBe(
       true,
     ),
   );
@@ -441,7 +441,7 @@ test("a stopped queued writer keeps the directory locked until the writer ahead 
 
   await parent.session.prompt("again");
   expect(await listing(parent)).toContainEqual(
-    expect.stringMatching(/^○ queued "run w3" · behind "run w1" · /),
+    expect.stringMatching(/^□ queued "run w3" · behind "run w1" · /),
   );
   expect(parent.requests.some((r) => taskOf(r) === "w3")).toBe(false);
 
@@ -470,7 +470,7 @@ test("a foreground writer stopped by Esc while queued keeps the directory locked
 
   await parent.session.prompt("again");
   expect(await listing(parent)).toContainEqual(
-    expect.stringMatching(/^○ queued "run w3" · behind /),
+    expect.stringMatching(/^□ queued "run w3" · behind /),
   );
   expect(parent.requests.some((r) => taskOf(r) === "w3")).toBe(false);
 

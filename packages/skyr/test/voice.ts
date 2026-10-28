@@ -161,6 +161,7 @@ const CORTI_DARK = {
   dim: parseColor("#666666"),
   error: parseColor("#cc6666"),
   warning: parseColor("#d7af5f"),
+  selectedBg: parseColor("#2a2d3a"),
 };
 
 /**

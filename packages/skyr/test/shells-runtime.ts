@@ -24,7 +24,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { onTestFinished } from "vitest";
-import type { BarHandle, BarSource } from "../src/chrome/bar.js";
+import type { BarHandle, BarSource, BarTab } from "../src/chrome/bar.js";
 import { registerSkyr } from "../src/index.js";
 import { loadPi } from "../src/pi.js";
 import { type ShellsDeps, wireShells } from "../src/shells/index.js";
@@ -33,18 +33,28 @@ import { registerWebFetch } from "../src/tools/web-fetch.js";
 import { textOf, widgetHost } from "./session.js";
 
 /** A bar that draws nothing, for a test that does not look at it. */
-export const NO_BAR: BarHandle = { attach: () => () => {} };
+export const NO_BAR: BarHandle = {
+  attach: () => () => {},
+  open: () => undefined,
+  slotTarget: () => undefined,
+};
 
-/** A bar that keeps the sources attached to it, for a test to read their rows from. */
+/** A bar that keeps the sources attached to it and the tabs it was opened on. */
 export function recordingBar() {
   const attached = new Set<BarSource>();
+  const opened: BarTab[] = [];
   const bar: BarHandle = {
     attach(source) {
       attached.add(source);
       return () => void attached.delete(source);
     },
+    open: (tab) => {
+      opened.push(tab);
+      return undefined;
+    },
+    slotTarget: () => undefined,
   };
-  return { bar, attached };
+  return { bar, attached, opened };
 }
 
 /**

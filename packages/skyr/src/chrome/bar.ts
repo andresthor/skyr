@@ -8,7 +8,7 @@ import { type Mark, tierOf } from "../ui/caps.js";
 import { everySecond } from "../ui/clock.js";
 import { guard } from "../ui/guard.js";
 import { oneLine } from "../ui/text.js";
-import { barLines, type FailedRow } from "./bar-view.js";
+import { barLines, type FailedRow, tabFits } from "./bar-view.js";
 
 const WIDGET_KEY = "skyr.bar";
 
@@ -25,9 +25,18 @@ export interface BarRow {
   readonly now?: string;
   /** Why a failed row failed: "429 rate limited", "exit 1". */
   readonly why?: string;
+  readonly turns?: number;
+  readonly tools?: number;
   /** Epoch ms. */
   readonly startedAt: number;
+  /** Epoch ms; present on a row that has ended. */
+  readonly endedAt?: number;
 }
+
+type SlotTarget =
+  | { readonly id: string }
+  /** `reason` says why no live row is there; `running` lists the slots that are live. */
+  | { readonly reason: string; readonly running: string };
 
 export interface BarSource {
   readonly tab: BarTab;
@@ -43,13 +52,28 @@ export interface BarSource {
 export interface BarHandle {
   /** Adds a source; returns its detach, which is idempotent. */
   attach(source: BarSource): () => void;
+  /**
+   * Opens the bar on `tab` and marks that tab's failures seen, and returns undefined. When the
+   * terminal has no room to list the tab (or the bar stopped drawing) nothing changes, and the
+   * tab's unseen failures come back, now forgotten, for the caller to list in a notice.
+   */
+  open(tab: BarTab): readonly BarRow[] | undefined;
+  /**
+   * What a stop target means on `tab`: a slot number (`1`; shells also take `$1`) names the live row in
+   * that slot, and is never an id prefix. Undefined when `text` is not a slot, so an id.
+   */
+  slotTarget(tab: BarTab, text: string): SlotTarget | undefined;
 }
 
 export interface Bar extends BarHandle {
   /** Mounts the bar once under "skyr.bar"; `notify` reports a render failure once. */
   start(ui: Pick<ExtensionUIContext, "setWidget" | "notify">): void;
-  /** Stops repainting and forgets failures; never calls Pi's UI, and is idempotent. */
+  /** Stops repainting and forgets what the user saw and chose; never calls Pi's UI, and is idempotent. */
   stop(): void;
+  /** Opens the bar on the tab it was last on, or closes it. Synchronous, so two quick presses end closed. */
+  toggle(): void;
+  /** Opens the bar on the tab it is not on. */
+  nextTab(): void;
 }
 
 /** `String(value)` throws for an object without a prototype. */
@@ -66,8 +90,21 @@ export function createBar(): Bar {
   let ui: Pick<ExtensionUIContext, "setWidget" | "notify"> | undefined;
   let reported = false;
   let failed: FailedRow[] = [];
+  let isOpen = false;
+  let tab: BarTab = "agents";
+  // Per tab, the smallest free number from 1: stable while a row is listed, freed when it leaves.
+  const slots: Record<BarTab, Map<string, number>> = {
+    agents: new Map(),
+    shells: new Map(),
+  };
   let mounted:
-    | { tui: { requestRender(): void }; offClock?: () => void }
+    | {
+        tui: {
+          requestRender(): void;
+          terminal: { rows: number; columns: number };
+        };
+        offClock?: () => void;
+      }
     | undefined;
   // Set by the first error in drawing or repainting; the bar draws nothing until a new session.
   let broken = false;
@@ -95,6 +132,26 @@ export function createBar(): Bar {
     });
   };
 
+  const listed = (of: BarTab) => failed.filter((f) => f.tab === of);
+
+  const assignSlots = () => {
+    for (const of of ["agents", "shells"] as const) {
+      const ids = [...rowsOf(of), ...listed(of).map((f) => f.row)].map(
+        (row) => row.id,
+      );
+      const taken = slots[of];
+      for (const id of [...taken.keys()])
+        if (!ids.includes(id)) taken.delete(id);
+      for (const id of ids)
+        if (!taken.has(id)) {
+          const used = new Set(taken.values());
+          let n = 1;
+          while (used.has(n)) n += 1;
+          taken.set(id, n);
+        }
+    }
+  };
+
   /** Ticks while a row runs, so its clock moves; not at all when nothing has mounted the bar. */
   const syncClock = () => {
     const here = mounted;
@@ -112,6 +169,7 @@ export function createBar(): Bar {
   const changed = () => {
     if (broken) return;
     try {
+      assignSlots();
       syncClock();
       mounted?.tui.requestRender();
     } catch (cause) {
@@ -119,18 +177,81 @@ export function createBar(): Bar {
     }
   };
 
+  /** Whether the tab is listed at the terminal's size now. */
+  const fits = () => {
+    const terminal = mounted?.tui.terminal;
+    return (
+      !broken &&
+      terminal !== undefined &&
+      tabFits(terminal.rows, terminal.columns)
+    );
+  };
+
+  /** Opens on `on` if the terminal has room to list it; nothing changes otherwise. */
+  const show = (on: BarTab): boolean => {
+    if (!fits()) return false;
+    isOpen = true;
+    tab = on;
+    failed = failed.map((f) => (f.tab === on ? { ...f, seen: true } : f));
+    changed();
+    return true;
+  };
+
   return {
     attach(source) {
       sources.add(source);
       const off = source.subscribe(changed, (row) => {
-        failed.push({ row, seen: false });
+        failed.push({
+          row,
+          tab: source.tab,
+          seen: isOpen && tab === source.tab && fits(),
+        });
         changed();
       });
+      changed();
       return () => {
         if (!sources.delete(source)) return;
         off();
         changed();
       };
+    },
+    open(on) {
+      if (show(on)) return undefined;
+      const unseen = failed.filter((f) => f.tab === on && !f.seen);
+      failed = failed.filter((f) => !unseen.includes(f));
+      return unseen.map((f) => f.row);
+    },
+    slotTarget(of, text) {
+      const slot = (of === "shells" ? /^\$?(\d{1,3})$/ : /^(\d{1,3})$/).exec(
+        text,
+      );
+      if (!slot) return undefined;
+      const live = rowsOf(of);
+      const numbered = (row: BarRow) => slots[of].get(row.id);
+      const hit = live.find((row) => numbered(row) === Number(slot[1]));
+      if (hit) return { id: hit.id };
+      const ended = listed(of).some((f) => numbered(f.row) === Number(slot[1]));
+      const prefix = of === "shells" ? "$" : "";
+      return {
+        reason: ended
+          ? `${prefix}${slot[1]} has ended`
+          : `nothing is in slot ${prefix}${slot[1]}`,
+        running: live
+          .map((row) => `${prefix}${numbered(row)} ${row.label}`)
+          .join(", "),
+      };
+    },
+    toggle() {
+      if (!isOpen) {
+        show(tab);
+        return;
+      }
+      isOpen = false;
+      failed = failed.filter((f) => !f.seen);
+      changed();
+    },
+    nextTab() {
+      show(tab === "agents" ? "shells" : "agents");
     },
     start(target) {
       ui = target;
@@ -149,12 +270,16 @@ export function createBar(): Bar {
                   ? []
                   : barLines(
                       {
+                        open: isOpen,
+                        tab,
                         agents: rowsOf("agents"),
                         shells: rowsOf("shells"),
                         failed,
+                        slots,
                       },
                       { theme, mode: tierOf(process.env) },
                       width,
+                      tui.terminal.rows,
                       Date.now(),
                     ),
               trip,
@@ -175,6 +300,10 @@ export function createBar(): Bar {
       mounted?.offClock?.();
       mounted = undefined;
       failed = [];
+      isOpen = false;
+      tab = "agents";
+      slots.agents.clear();
+      slots.shells.clear();
     },
   };
 }

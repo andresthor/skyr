@@ -23,7 +23,6 @@ import { type ChildRecord, leaveStopped, takeStopped } from "./handoff.js";
 import { answer, delivery, type LaneOutcome, noAnswer } from "./result.js";
 import { runnerFor, spawnCheck } from "./runner.js";
 import {
-  count,
   createRunStore,
   endedWithoutAnswer,
   labelOf,
@@ -1005,10 +1004,11 @@ export function createRuns(
         };
       }
       for (const [, controller] of hits) controller.abort();
-      return {
-        text: `subagent: stopping ${count(hits.length, "subagent")}`,
-        level: "info",
-      };
+      const named = hits.map(([id]) => {
+        const run = store.get(id);
+        return `${run ? `${sanitize(labelOf(run))} ` : ""}(id ${id.slice(0, 8)})`;
+      });
+      return { text: `subagent: stopping ${named.join(", ")}`, level: "info" };
     },
     async open(parentFile) {
       store.clear();

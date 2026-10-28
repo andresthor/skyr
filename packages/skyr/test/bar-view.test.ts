@@ -1,10 +1,15 @@
 // The bar's lines, drawn from plain rows: nothing at rest, a pulse while anything runs.
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  sliceByColumn,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
 import type { BarRow } from "../src/chrome/bar.js";
 import { type BarView, barLines } from "../src/chrome/bar-view.js";
 import type { Tier } from "../src/ui/caps.js";
 import { keyLabel } from "../src/ui/hint.js";
+import type { Paint } from "../src/ui/palette.js";
 import { sanitize } from "../src/ui/text.js";
 import { plainTheme } from "./session.js";
 import { CORPUS, WIDTHS_SWEEP } from "./ui.js";
@@ -27,11 +32,23 @@ const HINT = keyLabel("alt+a").replace("+", "\\+");
 
 /** A view of `rows`, with nothing left that is not named. */
 const view = (rows: Partial<BarView>): BarView => ({
+  open: false,
+  tab: "agents",
   agents: [],
   shells: [],
   failed: [],
+  slots: { agents: new Map(), shells: new Map() },
   ...rows,
 });
+
+/** `barLines` on a terminal tall enough for the open bar, unless said otherwise. */
+const draw = (
+  shown: BarView,
+  paint: Paint,
+  width: number,
+  now: number,
+  termRows = 40,
+) => barLines(shown, paint, width, termRows, now);
 
 const none = view({});
 
@@ -39,12 +56,12 @@ const none = view({});
 const textOf = (lines: string[]) => lines.map(stripTerminalSequences);
 
 test("the bar is absent at rest: no rows draw no lines", () => {
-  expect(barLines(none, plain(), 100, 0)).toEqual([]);
-  expect(barLines(none, plain(), 0, 0)).toEqual([]);
+  expect(draw(none, plain(), 100, 0)).toEqual([]);
+  expect(draw(none, plain(), 0, 0)).toEqual([]);
 });
 
 test("a pulse is one row plus the bar's own trailing blank", () => {
-  const lines = barLines(
+  const lines = draw(
     view({ agents: [row({ now: "read" })] }),
     plain(),
     100,
@@ -69,7 +86,7 @@ const THREE = view({
 });
 
 test("the pulse shows a group per tab with a pip per row, the newest action, the oldest elapsed and the key", () => {
-  const [pulse] = textOf(barLines(THREE, plain(), 120, 64_000));
+  const [pulse] = textOf(draw(THREE, plain(), 120, 64_000));
   expect(pulse).toMatch(
     /^ 3 agents • □ • {3}1 shell • {3}› read {2,}1m04s {2}/,
   );
@@ -77,8 +94,8 @@ test("the pulse shows a group per tab with a pip per row, the newest action, the
 });
 
 test("groups sit 3 spaces apart, 2 under 100 columns", () => {
-  expect(textOf(barLines(THREE, plain(), 120, 0))[0]).toContain("•   1 shell");
-  const narrow = textOf(barLines(THREE, plain(), 90, 0))[0];
+  expect(textOf(draw(THREE, plain(), 120, 0))[0]).toContain("•   1 shell");
+  const narrow = textOf(draw(THREE, plain(), 90, 0))[0];
   expect(narrow).toContain("•  1 shell");
   expect(narrow).not.toContain("•   1 shell");
 });
@@ -87,14 +104,14 @@ test("more than eight rows show eight pips and a count of the rest", () => {
   const many = view({
     agents: Array.from({ length: 11 }, (_, i) => row({ id: `id${i}` })),
   });
-  const [pulse] = textOf(barLines(many, plain(), 120, 0));
+  const [pulse] = textOf(draw(many, plain(), 120, 0));
   expect(pulse).toContain("11 agents • • • • • • • • +3");
 });
 
 /** The widest pane at which `part` is gone, scanning down from 150 columns. */
 function goneAt(shown: BarView, part: RegExp): number {
   for (let width = 150; width >= 1; width--) {
-    const [pulse = ""] = textOf(barLines(shown, plain(), width, 64_000));
+    const [pulse = ""] = textOf(draw(shown, plain(), width, 64_000));
     if (!part.test(pulse)) return width;
   }
   return 0;
@@ -121,7 +138,7 @@ test("a lead that cannot show whole is cut to at least eight columns, ending in 
     ],
   });
   const cut = Array.from({ length: 100 }, (_, i) => i + 20).flatMap((width) => {
-    const [pulse = ""] = textOf(barLines(long, plain(), width, 0));
+    const [pulse = ""] = textOf(draw(long, plain(), width, 0));
     const lead = /› (\S.*?)(?: {2,}|$)/.exec(pulse)?.[1];
     return lead?.endsWith("…") ? [visibleWidth(`› ${lead}`)] : [];
   });
@@ -143,19 +160,19 @@ test("the pulse fits every width 0-200 for hostile labels in every tier", () => 
         agents: [row({ now }), row({ now: "x", mark: "queued" })],
         shells: [row({ label: now, now })],
         failed: [
-          { row: failure, seen: true },
-          { row: failure, seen: false },
-          { row: failure, seen: false },
+          { row: failure, tab: "agents" as const, seen: true },
+          { row: failure, tab: "agents" as const, seen: false },
+          { row: failure, tab: "agents" as const, seen: false },
         ],
       });
       for (const width of WIDTHS_SWEEP)
-        for (const line of barLines(hostile, testPaint(mode), width, 3_700_000))
+        for (const line of draw(hostile, testPaint(mode), width, 3_700_000))
           expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
 });
 
 test("the ascii tier draws the pulse with no escape and no non-ASCII character", () => {
-  const lines = barLines(
+  const lines = draw(
     { ...THREE, agents: [row({ now: "bash" }), row({ mark: "queued" })] },
     testPaint("ascii"),
     120,
@@ -174,10 +191,10 @@ test("states stay distinct with colour stripped: queued, running and failed have
       row({ mark: "failed" }),
     ],
   });
-  expect(textOf(barLines(marks, testPaint("mono"), 120, 0))[0]).toContain(
+  expect(textOf(draw(marks, testPaint("mono"), 120, 0))[0]).toContain(
     "3 agents □ • ×",
   );
-  expect(textOf(barLines(marks, testPaint("ascii"), 120, 0))[0]).toContain(
+  expect(textOf(draw(marks, testPaint("ascii"), 120, 0))[0]).toContain(
     "3 agents o * x",
   );
 });
@@ -193,17 +210,21 @@ test("an unseen failure leads the pulse, its reason in bold", () => {
   const led = view({
     agents: [row({ now: "read" }), row()],
     failed: [
-      { row: FAILED, seen: false },
-      { row: { ...FAILED, id: "dead0002" }, seen: false },
+      { row: FAILED, tab: "agents" as const, seen: false },
+      {
+        row: { ...FAILED, id: "dead0002" },
+        tab: "agents" as const,
+        seen: false,
+      },
     ],
   });
 
-  const [pulse] = textOf(barLines(led, plain(), 140, 64_000));
+  const [pulse] = textOf(draw(led, plain(), 140, 64_000));
   expect(pulse).toMatch(
     /^ × "Data review" · 429 rate limited · unseen {2}\+1 {3}2 agents • • {2,}1m04s {2}/,
   );
   expect(pulse).not.toContain("› read");
-  const reason = styledRuns(barLines(led, testPaint(), 140, 0)[0] ?? "").find(
+  const reason = styledRuns(draw(led, testPaint(), 140, 0)[0] ?? "").find(
     (run) => run.text === "429 rate limited",
   );
   expect(reason).toMatchObject({ bold: true });
@@ -212,17 +233,22 @@ test("an unseen failure leads the pulse, its reason in bold", () => {
 test("a failure the user has seen no longer leads", () => {
   const seen = view({
     agents: [row({ now: "read" })],
-    failed: [{ row: FAILED, seen: true }],
+    failed: [{ row: FAILED, tab: "agents" as const, seen: true }],
   });
-  expect(textOf(barLines(seen, plain(), 140, 0))[0]).toContain("› read");
+  expect(textOf(draw(seen, plain(), 140, 0))[0]).toContain("› read");
   expect(
-    barLines(view({ failed: [{ row: FAILED, seen: true }] }), plain(), 140, 0),
+    draw(
+      view({ failed: [{ row: FAILED, tab: "agents" as const, seen: true }] }),
+      plain(),
+      140,
+      0,
+    ),
   ).toEqual([]);
 });
 
 test("with only unseen failures the pulse still shows", () => {
-  const lines = barLines(
-    view({ failed: [{ row: FAILED, seen: false }] }),
+  const lines = draw(
+    view({ failed: [{ row: FAILED, tab: "agents" as const, seen: false }] }),
     plain(),
     100,
     0,
@@ -238,10 +264,296 @@ test("a failure keeps its reason and 'unseen' as the pane narrows, cutting its l
   const led = view({
     agents: [row()],
     failed: [
-      { row: { ...FAILED, label: '"A very long review name"' }, seen: false },
+      {
+        row: { ...FAILED, label: '"A very long review name"' },
+        tab: "agents" as const,
+        seen: false,
+      },
     ],
   });
-  const [pulse = ""] = textOf(barLines(led, plain(), 60, 0));
+  const [pulse = ""] = textOf(draw(led, plain(), 60, 0));
   expect(pulse).toContain("429 rate limited · unseen");
   expect(pulse).toContain("…");
+});
+
+// The open bar: a header and one tab's rows on a grid.
+
+const AGENT_ROWS: BarRow[] = [
+  row({
+    id: "a1f3e0d2a1f3e0d2",
+    now: "bash",
+    turns: 6,
+    tools: 9,
+    startedAt: 0,
+  }),
+  row({
+    id: "9c2e4b119c2e4b11",
+    label: '"漢字レビュー"',
+    background: true,
+    now: "read src/auth/session.ts",
+    turns: 1,
+    tools: 12,
+    startedAt: 0,
+  }),
+  row({
+    id: "b4d60f3cb4d60f3c",
+    mark: "queued",
+    label: '"Data review"',
+    now: 'behind "Correctness review"',
+    turns: 0,
+    tools: 0,
+    startedAt: 0,
+  }),
+];
+
+/** An open AGENTS tab over `AGENT_ROWS`, slots as the bar hands them out. */
+const OPEN = view({
+  open: true,
+  agents: AGENT_ROWS,
+  shells: [row({ id: "7a40cb12", label: "pnpm dev", background: true })],
+  slots: {
+    agents: new Map(
+      AGENT_ROWS.map((r, i) => [r.id, i === 2 ? 12 : i + 1] as const),
+    ),
+    shells: new Map([["7a40cb12", 1]]),
+  },
+});
+
+const GRID_ROWS = (lines: string[]) => lines.slice(1, 1 + AGENT_ROWS.length);
+
+/** The columns `text` spans from `start`, as a terminal shows them. */
+const at = (line: string, start: number, length: number) =>
+  stripTerminalSequences(sliceByColumn(line, start, length, true));
+
+test("columns line up: mark, slot, label, now, time and id start at the same column on every row", () => {
+  const lines = textOf(draw(OPEN, plain(), 150, 64_000));
+
+  const rows = GRID_ROWS(lines);
+  expect(rows).toHaveLength(3);
+  for (const line of rows) expect(visibleWidth(line)).toBe(150);
+  // pad 1 · mark 1 · sp · slot 2 · sp · label 26 · sp 2 · now · turns 8 · tools 8 · time 6 · id 8 · pad
+  expect(rows.map((l) => at(l, 1, 1))).toEqual(["•", "•", "□"]);
+  expect(rows.map((l) => at(l, 3, 2))).toEqual(["1 ", "2 ", "12"]);
+  expect(rows.map((l) => at(l, 6, 26).trimEnd())).toEqual([
+    '"Correctness review"',
+    '"漢字レビュー" &',
+    '"Data review"',
+  ]);
+  expect(rows.map((l) => at(l, 34, 6))).toEqual(["› bash", "› read", "› behi"]);
+  expect(rows.map((l) => at(l, 150 - 1 - 8, 8))).toEqual([
+    "a1f3e0d2",
+    "9c2e4b11",
+    "b4d60f3c",
+  ]);
+  expect(rows.map((l) => at(l, 150 - 1 - 8 - 2 - 6, 6))).toEqual([
+    " 1m04s",
+    " 1m04s",
+    " 1m04s",
+  ]);
+  expect(rows.map((l) => at(l, 150 - 1 - 8 - 2 - 6 - 2 - 8, 8))).toEqual([
+    " 9 tools",
+    "12 tools",
+    " 0 tools",
+  ]);
+});
+
+test("a shells row's slot is $n and its columns without turns and tools stay blank", () => {
+  const lines = textOf(draw({ ...OPEN, tab: "shells" }, plain(), 150, 64_000));
+
+  expect(lines[0]).toMatch(/^ {2}AGENTS 3 {4}SHELLS 1 /);
+  const [shell] = GRID_ROWS(lines);
+  expect(at(shell ?? "", 3, 2)).toBe("$1");
+  expect(shell).toMatch(/pnpm dev &/);
+  expect(visibleWidth(shell ?? "")).toBe(150);
+});
+
+test("columns drop as the pane narrows: id under 110, tools under 100, turns under 80, all but time under 60", () => {
+  const shows = (width: number) => {
+    const [first = ""] = GRID_ROWS(textOf(draw(OPEN, plain(), width, 64_000)));
+    return {
+      id: first.includes("a1f3e0d2"),
+      tools: first.includes("9 tools"),
+      turns: first.includes("6 turns"),
+      time: first.includes("1m04s"),
+      width: visibleWidth(first),
+    };
+  };
+
+  expect(shows(150)).toEqual({
+    id: true,
+    tools: true,
+    turns: true,
+    time: true,
+    width: 150,
+  });
+  expect(shows(109)).toEqual({
+    id: false,
+    tools: true,
+    turns: true,
+    time: true,
+    width: 109,
+  });
+  expect(shows(99)).toEqual({
+    id: false,
+    tools: false,
+    turns: true,
+    time: true,
+    width: 99,
+  });
+  expect(shows(79)).toEqual({
+    id: false,
+    tools: false,
+    turns: false,
+    time: true,
+    width: 79,
+  });
+  expect(shows(59)).toEqual({
+    id: false,
+    tools: false,
+    turns: false,
+    time: true,
+    width: 59,
+  });
+  // Below 44 columns the pulse stands in for the grid
+  const narrow = textOf(draw(OPEN, plain(), 43, 64_000));
+  expect(narrow).toHaveLength(2);
+  expect(narrow[0]).toContain("3 agents");
+  expect(narrow.join("\n")).not.toContain("AGENTS");
+});
+
+test("more than eight rows show seven and a count of the rest", () => {
+  const many = Array.from({ length: 10 }, (_, i) =>
+    row({ id: `id${i}`, now: "x" }),
+  );
+  const lines = textOf(
+    draw(view({ open: true, agents: many }), plain(), 120, 0),
+  );
+
+  expect(lines).toHaveLength(1 + 7 + 1 + 1);
+  expect(lines.at(-2)).toMatch(/^ {34}\+3 more$/);
+  expect(lines.at(-1)).toBe("");
+});
+
+test("failed rows come first, with their reason and how long they ran", () => {
+  const failed = row({
+    id: "dead0001",
+    mark: "failed",
+    label: '"Data review"',
+    why: "429 rate limited",
+    startedAt: 0,
+    endedAt: 41_000,
+  });
+  const lines = textOf(
+    draw(
+      view({
+        open: true,
+        agents: [row({ now: "read" })],
+        failed: [{ row: failed, tab: "agents", seen: true }],
+        slots: {
+          agents: new Map([
+            ["dead0001", 1],
+            ["a1f3e0d2a1f3e0d2", 2],
+          ]),
+          shells: new Map(),
+        },
+      }),
+      plain(),
+      150,
+      64_000,
+    ),
+  );
+
+  expect(lines[1]).toMatch(
+    /^ × 1 {2}"Data review" +429 rate limited .* 41s {2}dead0001 $/,
+  );
+  expect(lines[2]).toContain("• 2");
+  expect(lines[0]).toMatch(/^ {2}AGENTS 2 /);
+});
+
+test("an open bar with nothing to list says so under its header", () => {
+  const lines = textOf(draw(view({ open: true }), plain(), 100, 0));
+
+  expect(lines).toHaveLength(3);
+  expect(lines[0]).toMatch(/^ {2}AGENTS 0 {4}SHELLS 0 .* switch · .*close $/);
+  expect(lines[1]).toBe(" nothing running");
+});
+
+test("the header's keys drop first when the pane is narrow", () => {
+  const [header = ""] = textOf(draw(OPEN, plain(), 44, 0));
+  expect(header).toMatch(/^ {2}AGENTS 3 {4}SHELLS 1 $/);
+});
+
+test("under 30 terminal rows an open bar draws the pulse", () => {
+  const short = textOf(draw(OPEN, plain(), 120, 64_000, 29));
+  expect(short).toHaveLength(2);
+  expect(short[0]).toMatch(/^ 3 agents .*1 shell /);
+  expect(draw(OPEN, plain(), 120, 64_000, 30)[0]).toContain("AGENTS");
+});
+
+test("open and idle, the pulse reads nothing running with the key", () => {
+  const [pulse = ""] = textOf(draw(view({ open: true }), plain(), 100, 0, 20));
+  expect(pulse).toMatch(new RegExp(`^ nothing running +${HINT} $`));
+});
+
+test("no bar line is a rule: no row is only ─ or -", () => {
+  for (const mode of TIERS)
+    for (const open of [true, false])
+      for (const line of draw({ ...OPEN, open }, testPaint(mode), 100, 0))
+        expect(/^[\s─-]+$/.test(line) && line.trim() !== "").toBe(false);
+});
+
+test("every expanded line fits 0-200 columns in every tier with hostile labels", () => {
+  for (const mode of TIERS)
+    for (const text of HOSTILE_NOWS) {
+      const hostile = row({
+        label: text,
+        now: text,
+        why: text,
+        turns: 1000,
+        tools: 99999,
+        endedAt: 3_700_000,
+      });
+      const shown = view({
+        open: true,
+        agents: [hostile, row({ background: true, label: text })],
+        shells: [hostile],
+        failed: [
+          { row: { ...hostile, mark: "failed" }, tab: "agents", seen: true },
+        ],
+        slots: {
+          agents: new Map([[hostile.id, 12345]]),
+          shells: new Map([[hostile.id, 12345]]),
+        },
+      });
+      for (const tab of ["agents", "shells"] as const)
+        for (const width of WIDTHS_SWEEP)
+          for (const line of draw(
+            { ...shown, tab },
+            testPaint(mode),
+            width,
+            3_700_000,
+          ))
+            expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+});
+
+test("the ascii tier draws the tabs as [AGENTS n] with no escape", () => {
+  const lines = draw(OPEN, testPaint("ascii"), 120, 64_000);
+
+  expect(lines[0]).toMatch(/^ \[AGENTS 3\] {3}SHELLS 1 /);
+  // The second row's label is CJK on purpose; the escape check covers every line
+  for (const line of [lines[0], lines[1], lines[3]])
+    expect(line).toMatch(/^[\x20-\x7e]*$/);
+  for (const line of lines) expect(line).not.toContain("\x1b");
+  expect(lines[1]).toContain("* 1");
+  const marks = lines.slice(1, 4).map((l) => l[1]);
+  expect(marks).toEqual(["*", "*", "o"]);
+});
+
+test("the colour tier marks the active tab with the selected background, mono with inverse", () => {
+  const colour = draw(OPEN, testPaint("color"), 120, 0)[0] ?? "";
+  const mono = draw(OPEN, testPaint("mono"), 120, 0)[0] ?? "";
+  expect(colour).toContain("48;2;");
+  expect(mono).not.toContain("48;");
+  expect(mono).toContain("\x1b[7");
 });

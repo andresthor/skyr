@@ -21,6 +21,7 @@ import type { BarHandle } from "../chrome/bar.js";
 import type { PiModule } from "../pi.js";
 import { publishTasks, type TaskRef } from "../tengi.js";
 import { textMessageRenderer } from "../tools/render.js";
+import { canDraw } from "../ui/caps.js";
 import { Moved, movingOperations } from "./exec.js";
 import { identify } from "./job.js";
 import { createShellSession, snapshotOf, stopHandedOver } from "./session.js";
@@ -176,17 +177,32 @@ export function wireShells(
 
   pi.registerCommand("shells", {
     description:
-      "List this session's background jobs; `/shells stop <id|all>` stops them",
+      "Open the bar on this session's background jobs; `/shells stop <id|[$]slot|all>` stops them",
     handler: async (args, ctx) => {
       if (!session) {
         ctx.ui.notify("shells: background shells are off", "warning");
         return;
       }
       const [verb, target] = args.trim().split(/\s+/);
+      if (verb === "stop") {
+        const slot = bar.slotTarget("shells", target ?? "");
+        if (slot && !("id" in slot)) {
+          ctx.ui.notify(
+            `shells: ${slot.reason}; running: ${slot.running || "none"}`,
+            "warning",
+          );
+          return;
+        }
+        ctx.ui.notify(
+          await session.stopByUser(slot?.id ?? target ?? ""),
+          "info",
+        );
+        return;
+      }
+      // A pane too small to list the tab gets the listing, which names the ids
+      if (canDraw(ctx) && bar.open("shells") === undefined) return;
       ctx.ui.notify(
-        verb === "stop"
-          ? await session.stopByUser(target ?? "")
-          : listingLines(session.jobs(), Date.now()).join("\n"),
+        listingLines(session.jobs(), Date.now()).join("\n"),
         "info",
       );
     },

@@ -13,6 +13,10 @@ function clock(seconds: number): string {
   return `${Math.floor(minutes / 60)}h${pad2(minutes % 60)}m`;
 }
 
+/** `1 turn`, `3 turns`; pass `many` when the plural is not the noun plus `s`. */
+export const plural = (n: number, one: string, many = `${one}s`): string =>
+  `${n} ${n === 1 ? one : many}`;
+
 /** A finished span: `0.1s`-`9.9s`, `41s`, `2m14s`, `1h04m`; zero for negative or non-finite input. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "0.0s";

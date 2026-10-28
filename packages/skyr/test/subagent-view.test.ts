@@ -1,4 +1,5 @@
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
+import { failureLine } from "../src/chrome/bar-view.js";
 import type { RunSnapshot } from "../src/subagent/store.js";
 import {
   barRow,
@@ -23,10 +24,10 @@ test("the listing marks a stalled run, and only while its activity is unknown", 
   const line = (activity: RunSnapshot["activity"]) =>
     listingLines([{ ...running, activity }], 3_000)?.[0];
   expect(line("unknown")).toBe(
-    '● running scout "look around" · 1 turn · 1 tool · grep · stalled · 3s · abcdef01',
+    '• running scout "look around" · 1 turn · 1 tool · grep · stalled · 3s · abcdef01',
   );
   expect(line("working")).toBe(
-    '● running scout "look around" · 1 turn · 1 tool · grep · 3s · abcdef01',
+    '• running scout "look around" · 1 turn · 1 tool · grep · 3s · abcdef01',
   );
 });
 
@@ -79,4 +80,27 @@ test("a run past a quarter of an hour reads 18m58s in the listing, a lane and a 
     segments.map(([, s]) => s).join("");
   expect(text(laneLine(ended))).toContain(" · 18m58s · ");
   expect(laneTree([ended]).map(text).join("\n")).toContain(" · 18m58s");
+});
+
+test("under TERM=dumb the listing and a failure notice use the tier's glyphs and separator", () => {
+  vi.stubEnv("TERM", "dumb");
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  const queued = { ...running, status: "queued" as const };
+  const lines = [
+    ...(listingLines([queued, { ...running, background: true }], 3_000) ?? []),
+    failureLine({
+      id: "abcdef0123",
+      mark: "failed",
+      label: "scout",
+      background: false,
+      startedAt: 0,
+      why: "exit 1",
+    }),
+  ];
+  expect(lines[0]).toMatch(/^o queued scout "look around" - /);
+  expect(lines[1]).toMatch(/^\* running & scout "look around" - /);
+  expect(lines[2]).toBe("x scout - exit 1 - abcdef01");
+  expect(lines[2]).toMatch(/^[\x20-\x7e]*$/);
 });

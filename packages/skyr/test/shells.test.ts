@@ -481,15 +481,34 @@ describe("a slow bash call in a session", () => {
     expect(stoppedFailed).not.toHaveBeenCalled();
   });
 
-  test("/shells lists and stops a job, telling the model without starting a turn", async () => {
-    const { rt, job } = await runningJob();
+  test("/shells opens the bar on SHELLS in tui and lists the jobs elsewhere", async () => {
+    const { bar, opened } = recordingBar();
+    const { rt, job } = await runningJob({ bar });
     await rt.session.prompt("/shells");
-    expect(rt.notices.at(-1)).toContain(job.id);
-    expect(rt.notices.at(-1)).toContain(job.log);
+    expect(opened).toEqual(["shells"]);
+    expect(rt.notices).toEqual([]);
+
+    const rpc = await shellRuntime({
+      mode: "rpc",
+      extensions: [shells],
+      respond: script(call(slow(gateFile()), "c1")),
+    });
+    await rpc.session.prompt("go");
+    const listed = resultOf(rpc.session, "c1").job!;
+    await rpc.session.prompt("/shells");
+    expect(rpc.notices.at(-1)).toContain(listed.id);
+    expect(rpc.notices.at(-1)).toContain(listed.log);
+    expect(job.id).not.toBe(listed.id);
+  });
+
+  test("/shells stop stops a job, telling the model without starting a turn", async () => {
+    const { rt, job } = await runningJob();
     const requests = rt.requests.length;
     const delivery = rt.nextDelivery();
     await rt.session.prompt("/shells stop all");
-    expect(rt.notices.at(-1)).toBe(`shells: stopped ${job.id}`);
+    expect(rt.notices.at(-1)).toBe(
+      `shells: stopped ${job.id} "${titleOf(job.command)}"`,
+    );
     expect(await delivery).toContain("stopped by the user after");
     await rt.session.waitForIdle();
     expect(rt.requests.length).toBe(requests);

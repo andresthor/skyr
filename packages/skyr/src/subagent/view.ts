@@ -19,26 +19,27 @@ import {
 
 const LISTING_WIDTH = 100;
 
-/** One line per running child, `<mark> <label> · <progress> · <elapsed> · <id>`; undefined when none. */
+/** One line per running child, `<mark> <state> <label> · <progress> · <elapsed> · <id>` with the tier's mark and separator; undefined when none. */
 export function listingLines(
   runs: readonly RunSnapshot[],
   now: number,
 ): string[] | undefined {
   if (runs.length === 0) return undefined;
+  const { mark, sep, ellipsis } = glyphsOf(tierOf(process.env));
   return runs.map((run) => {
-    const mark =
+    // The background flag leads, since the width may cut the label
+    const state =
       run.status === "queued"
-        ? "○ queued"
-        : run.background
-          ? "↗ running"
-          : "● running";
+        ? `${mark.queued} queued`
+        : `${mark.running} running${run.background ? " &" : ""}`;
     const progress = progressOf(run);
-    const line = `${mark} ${labelOf(run)}${progress ? ` · ${progress}` : ""} · ${formatElapsed(now - run.startedAt)} · ${run.id.slice(0, 8)}`;
-    return fitToWidth(
-      sanitize(line),
-      LISTING_WIDTH,
-      glyphsOf(tierOf(process.env)).ellipsis,
-    );
+    const line = [
+      `${state} ${labelOf(run)}`,
+      ...(progress ? [progress] : []),
+      formatElapsed(now - run.startedAt),
+      run.id.slice(0, 8),
+    ].join(sep);
+    return fitToWidth(sanitize(line), LISTING_WIDTH, ellipsis);
   });
 }
 
@@ -58,7 +59,10 @@ export function barRow(run: RunSnapshot): BarRow {
     background: run.background === true,
     ...(now && { now: sanitize(now) }),
     ...(failed && { why: sanitize(run.error ?? "failed") }),
+    turns: run.turns,
+    tools: run.toolCalls,
     startedAt: run.startedAt,
+    ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
   };
 }
 

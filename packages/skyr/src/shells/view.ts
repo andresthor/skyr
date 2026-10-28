@@ -20,6 +20,7 @@ export function barRow(job: ShellSnapshot): BarRow {
       why: job.exitCode === undefined ? "failed" : `exit ${job.exitCode}`,
     }),
     startedAt: job.startedAt,
+    ...(job.endedAt !== undefined && { endedAt: job.endedAt }),
   };
 }
 

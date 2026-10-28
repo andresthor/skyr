@@ -582,18 +582,24 @@ test("each TUI session_start asks for a token ahead of the first dictation; a he
   expect(pi.signIns[0]).toMatch(/^https:\/\/auth\.test-env\.corti\.app\//);
 });
 
+/** The two keys the bar registers, ahead of voice's. */
+const BAR_SHORTCUTS = ["alt+a", "alt+s"];
+
 describe("registerSkyr", () => {
-  test("without Corti credentials it registers only /voice, to say what is missing", () => {
+  test("without Corti credentials it registers only /voice, to say what is missing, beside the bar's keys", () => {
     const pi = registeredSkyr();
     expect(pi.commands.has("voice")).toBe(true);
-    expect([...pi.shortcuts.keys()]).toEqual([]);
+    expect([...pi.shortcuts.keys()]).toEqual(BAR_SHORTCUTS);
   });
 
-  test("with Corti credentials it registers /voice and ctrl+space", () => {
+  test("with Corti credentials it registers /voice and ctrl+space, beside the bar's keys", () => {
     withCreds();
     const pi = registeredSkyr();
     expect(pi.commands.has("voice")).toBe(true);
-    expect([...pi.shortcuts.keys()]).toEqual([VOICE_SHORTCUT]);
+    expect([...pi.shortcuts.keys()]).toEqual([
+      ...BAR_SHORTCUTS,
+      VOICE_SHORTCUT,
+    ]);
   });
 });
 

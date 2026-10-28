@@ -7,7 +7,14 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TextStyle } from "@earendil-works/pi-tui";
 import type { Tier } from "./caps.js";
 
-type Token = "accent" | "text" | "muted" | "dim" | "error" | "warning";
+type Token =
+  | "accent"
+  | "text"
+  | "muted"
+  | "dim"
+  | "error"
+  | "warning"
+  | "selectedBg";
 
 /**
  * The part of Pi's Theme skyr draws with. Colours reach `style` as values from `colors`, never

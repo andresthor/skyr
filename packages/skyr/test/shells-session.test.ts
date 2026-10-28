@@ -596,7 +596,7 @@ test("a user's stop ends the job, and the model is told in a message that starts
   h.session.track(job);
   const stopping = h.session.stopByUser("ab12");
   await h.over(job);
-  expect(await stopping).toBe("shells: stopped ab12cd34");
+  expect(await stopping).toBe('shells: stopped ab12cd34 "sleep 30"');
   await h.delivered(1);
   expect(h.sent[0]?.text.split("\n")[0]).toMatch(
     /^\[background job "sleep 30" \(id ab12cd34\): stopped by the user after \d+s\]$/,

@@ -103,7 +103,7 @@ test("a background call returns before the child answers, and the answer arrives
       textOf(started!),
     )?.[1];
   expect(id).toBeDefined();
-  expect((await listing(parent))[0]).toMatch(/^↗ running "run bg" · 0 turns/);
+  expect((await listing(parent))[0]).toMatch(/^• running & "run bg" · 0 turns/);
 
   held.release();
   const message = await delivered(parent);
@@ -209,7 +209,7 @@ test("Esc does not stop a background child, and /subagents stop <id> does", asyn
 
   expect(childAborted).toBe(false);
   const line = (await listing(parent))[0] ?? "";
-  expect(line).toMatch(/^↗ running "run bg"/);
+  expect(line).toMatch(/^• running & "run bg"/);
   const id = /· ([0-9a-f]{8})$/.exec(line)?.[1];
   expect(id).toBeDefined();
 
@@ -219,7 +219,9 @@ test("Esc does not stop a background child, and /subagents stop <id> does", asyn
   expect(textOf(message)).toMatch(
     /^Background subagent answers\. .*\n\n<subagent-answer task="1 of 1" description="run bg" status="stopped" .*>\nsubagent: "run bg" was stopped by the user before it answered\n<\/subagent-answer>$/,
   );
-  expect(parent.notices.at(-1)).toBe("subagent: stopping 1 subagent");
+  expect(parent.notices.at(-1)).toMatch(
+    /^subagent: stopping "run bg" \(id [0-9a-f]{8}\)$/,
+  );
   expect(await listing(parent)).toEqual([]);
 });
 
@@ -268,7 +270,7 @@ test("the listing shows live children with sanitised text within the width, and 
   const lines = await listing(parent);
   expect(lines).toHaveLength(2);
   expectInert(lines, 100);
-  expect(lines.map((l) => l.slice(0, 2)).sort()).toEqual(["↗ ", "● "]);
+  expect(lines.filter((l) => l.startsWith("• running & "))).toHaveLength(1);
 
   for (const h of holds.values()) h.release();
   await run;
@@ -291,7 +293,7 @@ test("a background writer takes the per-cwd slot like a blocking one", async () 
   const run = parent.session.prompt("go");
   await holds.get("bg")!.entered;
   await vi.waitFor(async () =>
-    expect((await listing(parent)).some((l) => l.startsWith("○ queued"))).toBe(
+    expect((await listing(parent)).some((l) => l.startsWith("□ queued"))).toBe(
       true,
     ),
   );
@@ -326,7 +328,7 @@ test("a queued background writer returns at once as queued and runs when the slo
   const run = parent.session.prompt("go");
   await holds.get("fg")!.entered;
   await vi.waitFor(() => expect(ended).toBe(true));
-  expect((await listing(parent)).some((l) => l.startsWith("○ queued"))).toBe(
+  expect((await listing(parent)).some((l) => l.startsWith("□ queued"))).toBe(
     true,
   );
   holds.get("fg")!.release();
@@ -490,12 +492,17 @@ test("a background run that fails is reported to the bar once; a stopped one is 
 
   const run = parent.session.prompt("go");
   await held.entered;
-  const [stopme] = (await listing(parent)).flatMap(
-    (line) => /"run stopme".* ([0-9a-f]{8})$/.exec(line)?.[1] ?? [],
-  );
-  await parent.session.prompt(`/subagents stop ${stopme}`);
   await run;
+  const stopme = /\(id ([0-9a-f]{8})\)/.exec(
+    textOf(results(parent.session).get("stopme")!),
+  )?.[1];
+  await parent.session.prompt(`/subagents stop ${stopme}`);
   await delivered(parent);
+  await parent.session.waitForIdle();
+  // The stopped run has left the groups by now; only the failure remains
+  await vi.waitFor(() =>
+    expect(parent.widgets.at(-1)?.[0]).not.toContain("agent"),
+  );
 
   // One failed background run leads; neither the stopped run nor the failed foreground one is here
   const pulse = parent.widgets.at(-1)?.[0] ?? "";

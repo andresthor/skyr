@@ -30,7 +30,7 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
 - `bash` — Pi's own `bash` with the same parameters, output and limits, plus `background`; a slow
   call keeps running as a background job. See [Background shells](#background-shells).
 - `bash_stop` — stops a background job by its id; see [Background shells](#background-shells).
-- `/shells` — lists this session's background jobs and stops them; see
+- `/shells` — opens the bar on this session's background jobs and stops them; see
   [Background shells](#background-shells).
 - `ask_user` — asks you a question in place of the input editor and waits for your answer; see
   [Ask user](#ask-user).
@@ -153,15 +153,22 @@ in-tree and its answer says so.
 
 With `background: true` on the call, it returns at once and each task's answer arrives later as a
 message that starts a new turn, once the parent is idle; answers that end while the parent is busy
-arrive together. Esc does not stop a background subagent; `/subagents` lists the live ones and
-`/subagents stop <id|all>` stops them, one task at a time or all. A `/reload` stops background
+arrive together. Esc does not stop a background subagent; `/subagents` opens the bar on the live
+ones and `/subagents stop <id|slot|all>` stops them, one task at a time or all (a slot is the number
+the bar shows, and a stop names what it stopped). A `/reload` stops background
 subagents; the reloaded session receives one message naming each, so the model knows their answers
 will not come. A bar above the editor shows what runs: nothing at rest; while subagents or shells
 run, one line with a mark per run, the latest action and the longest running time; a failed
-background subagent or shell leads it, with its reason. The bar is drawn only in Pi's terminal UI;
-rpc clients and print mode get none. A delivered message shows one line per subagent, naming why
-any of them gave no answer; expand it to read the answers. A background subagent's token usage is
-in the delivered message, not in the footer.
+background subagent or shell leads it, with its reason, until you open the bar. `alt+a` opens and
+closes the bar and `alt+s` switches between its AGENTS and SHELLS tabs; `/subagents` and `/shells`
+open the bar on their tab (on macOS `alt` needs Option-as-Meta; the commands always work). An open bar lists
+each run with its slot number, latest action, turns, tools, time and id, dropping columns as the
+pane narrows; under 30 terminal rows or 44 columns it stays a pulse, and `/subagents` and `/shells`
+list in a notice instead. The bar is drawn only in Pi's terminal UI;
+rpc clients and print mode get none, and there `/subagents` and `/shells` list in a notice. A
+delivered message shows one line per subagent, naming why any of them gave no answer; expand it
+to read the answers. A background subagent's token usage is in the delivered message, not in the
+footer.
 
 The model reads each answer inside a `<subagent-answer>` block, foreground or delivered, whose
 attributes carry the run's status, tokens and 8-char `id`; the subagent's own text can't open or
@@ -201,8 +208,9 @@ is not lost to a timeout or a wait: it can keep running, and the model is told w
 - **`bash_stop {id}`** stops a job: SIGTERM to its process group, then SIGKILL after 5 s.
   Stopping a job that has ended is not an error. Processes that leave the group (`setsid`,
   `docker run -d`, `tmux`) are neither tracked nor stopped.
-- **`/shells`** lists this session's jobs, running first, with their state and log. `/shells stop
-  <id|all>` stops them; the model is told, without a new turn. Running jobs also show in the
+- **`/shells`** opens the bar on this session's jobs; outside the terminal UI, or on a pane too
+  small for the tab, it lists them, running first, with their state and log. `/shells stop
+  <id|slot|$slot|all>` stops them (a bare number is a slot, as on agents); the model is told, without a new turn. Running jobs also show in the
   bar above the editor (see Subagents; Pi's terminal UI only), and in an ACP client's task list,
   where a moved call's card points to its job's task instead of showing an exit code.
 - **Messages.** A job's end arrives when the session is idle and starts a turn: its exit code or

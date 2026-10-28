@@ -1,6 +1,7 @@
 // The bar above the editor: a component Pi mounts once per session, empty at rest, repainting
 // itself while anything runs so a clock in its pulse moves.
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { KeyId } from "@earendil-works/pi-tui";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { elapsed } from "../src/tools/render.js";
 import {
@@ -8,12 +9,16 @@ import {
   expectInert,
   HOSTILE,
   hold,
+  listing,
+  type Parent,
   parentSession,
   plainTheme,
   router,
+  scriptTurns,
   taskOf,
 } from "./session.js";
 import { piScreen } from "./ui.js";
+import { keybindings } from "./voice.js";
 
 const BAR = "skyr.bar";
 
@@ -305,6 +310,308 @@ test("a host whose repaint throws costs the store change nothing", async () => {
   ).toHaveLength(1);
 });
 
+/** Presses `key` as Pi does: the shortcut an extension registered, run with a context of `mode`. */
+function press(
+  parent: Parent,
+  key: KeyId,
+  mode: "tui" | "rpc" | "print" = "tui",
+): void {
+  const runner = parent.session.extensionRunner;
+  const shortcut = runner
+    .getShortcuts(keybindings().getEffectiveConfig())
+    .get(key);
+  if (!shortcut) throw new Error(`nothing is registered on ${key}`);
+  void shortcut.handler({ ...runner.createContext(), mode });
+}
+
+/**
+ * The ascii tier shows which tab is open as `[AGENTS n]` or `[SHELLS n]`, so a test can read it
+ * without colour.
+ */
+function asciiBar(parent: Parent) {
+  vi.stubEnv("TERM", "dumb");
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  return () => {
+    const lines = parent.mounted(BAR)?.render(100) ?? [];
+    return {
+      lines,
+      open: /\[(AGENTS|SHELLS)/.test(lines[0] ?? ""),
+      tab: /\[(AGENTS|SHELLS) \d+\]/.exec(lines[0] ?? "")?.[1],
+    };
+  };
+}
+
+test("alt+a opens the bar on AGENTS and closes it; alt+s opens it on the other tab", async () => {
+  const held = hold();
+  const parent = await parentSession({
+    mode: "tui",
+    respond: router([call({ prompt: "s" })], held.step),
+  });
+  const bar = asciiBar(parent);
+  const run = parent.session.prompt("go");
+  await held.entered;
+  expect(bar().open).toBe(false);
+
+  press(parent, "alt+a");
+  expect(bar().tab).toBe("AGENTS");
+  expect(bar().lines[1]).toContain('"run s"');
+  press(parent, "alt+a");
+  expect(bar().open).toBe(false);
+
+  press(parent, "alt+s");
+  expect(bar().tab).toBe("SHELLS");
+  expect(bar().lines[1]).toContain("nothing running");
+  press(parent, "alt+s");
+  expect(bar().tab).toBe("AGENTS");
+
+  held.release();
+  await run;
+});
+
+test("two alt+a in one tick end closed", async () => {
+  const parent = await parentSession({
+    mode: "tui",
+    respond: router([call({ prompt: "s" })], hold().step),
+  });
+  const bar = asciiBar(parent);
+
+  press(parent, "alt+a");
+  press(parent, "alt+a");
+  expect(bar().open).toBe(false);
+});
+
+test("the shortcuts claim keys Pi leaves unbound", async () => {
+  const parent = await parentSession({
+    mode: "tui",
+    respond: router([], hold().step),
+  });
+  const runner = parent.session.extensionRunner;
+  const shortcuts = runner.getShortcuts(keybindings().getEffectiveConfig());
+
+  expect([...shortcuts.keys()].sort()).toEqual(["alt+a", "alt+s"]);
+  expect(runner.getShortcutDiagnostics()).toEqual([]);
+});
+
+test("outside tui the shortcuts do nothing", async () => {
+  const parent = await parentSession({
+    mode: "tui",
+    respond: router([], hold().step),
+  });
+  const bar = asciiBar(parent);
+
+  for (const mode of ["rpc", "print"] as const) {
+    press(parent, "alt+a", mode);
+    press(parent, "alt+s", mode);
+  }
+  expect(bar().open).toBe(false);
+});
+
+const explodingChild = () =>
+  fauxAssistantMessage("", {
+    stopReason: "error",
+    errorMessage: "provider exploded",
+  });
+
+test("opening a tab marks its failures seen: the pulse stops leading with them once the bar closes", async () => {
+  const parent = await parentSession({
+    mode: "tui",
+    respond: scriptTurns(explodingChild, () =>
+      fauxAssistantMessage([call({ prompt: "boom", background: true })]),
+    ),
+  });
+
+  await parent.session.prompt("go");
+  await vi.waitFor(
+    () =>
+      expect(parent.widgets.at(-1)?.[0]).toMatch(/^× "run boom" · .*unseen/),
+    { timeout: 15_000 },
+  );
+  await parent.session.waitForIdle();
+
+  press(parent, "alt+a");
+  const open = parent.mounted(BAR)?.render(100) ?? [];
+  expect(open[0]).toMatch(/AGENTS 1/);
+  expect(open[1]).toMatch(/× 1 {2}"run boom" +.*provider exploded/);
+  press(parent, "alt+a");
+  expect(parent.mounted(BAR)?.render(100)).toEqual([]);
+});
+
+test("/subagents opens the AGENTS tab in tui and lists running subagents elsewhere", async () => {
+  const held = hold();
+  const tui = await parentSession({
+    mode: "tui",
+    respond: router([call({ prompt: "s" })], held.step),
+  });
+  const bar = asciiBar(tui);
+  const run = tui.session.prompt("go");
+  await held.entered;
+
+  press(tui, "alt+s");
+  expect(bar().tab).toBe("SHELLS");
+  await tui.session.prompt("/subagents");
+  expect(bar().tab).toBe("AGENTS");
+  expect(tui.notices).toEqual([]);
+  held.release();
+  await run;
+
+  const other = hold();
+  const print = await parentSession({
+    mode: "print",
+    respond: router([call({ prompt: "s" })], other.step),
+  });
+  const printRun = print.session.prompt("go");
+  await other.entered;
+  expect(await listing(print)).toEqual([
+    expect.stringMatching(/^\* running "run s"/),
+  ]);
+  other.release();
+  await printRun;
+});
+
+test("/shells opens the SHELLS tab in tui", async () => {
+  const parent = await parentSession({
+    mode: "tui",
+    respond: scriptTurns(hold().step, () =>
+      fauxAssistantMessage([
+        fauxToolCall(
+          "bash",
+          { command: "sleep 60", background: true },
+          { id: "sh" },
+        ),
+      ]),
+    ),
+  });
+  const bar = asciiBar(parent);
+
+  await parent.session.prompt("go");
+  expect(bar().open).toBe(false);
+  await parent.session.prompt("/shells");
+  expect(bar().tab).toBe("SHELLS");
+  expect(bar().lines[1]).toMatch(/\* \$1 sleep 60 &/);
+  expect(parent.notices).toEqual([]);
+
+  await parent.session.prompt("/shells stop all");
+});
+
+test("a session start resets open, tab and the failures it was holding", async () => {
+  const parent = await parentSession({
+    mode: "tui",
+    respond: scriptTurns(explodingChild, () =>
+      fauxAssistantMessage([call({ prompt: "boom", background: true })]),
+    ),
+  });
+  const bar = asciiBar(parent);
+  await parent.session.prompt("go");
+  await vi.waitFor(
+    () => expect(parent.widgets.at(-1)?.[0]).toMatch(/^x "run boom"/),
+    { timeout: 15_000 },
+  );
+  await parent.session.waitForIdle();
+  press(parent, "alt+s");
+  expect(bar().tab).toBe("SHELLS");
+
+  await parent.session.reload();
+  // The failure it had not been shown would lead the new session's pulse
+  expect(bar().lines).toEqual([]);
+  press(parent, "alt+a");
+  expect(bar().tab).toBe("AGENTS");
+});
+
+test("/subagents stop takes the slot number the bar shows, never an id prefix", async () => {
+  const held = hold();
+  const parent = await parentSession({
+    mode: "tui",
+    respond: router([call({ prompt: "s" })], held.step),
+  });
+  const run = parent.session.prompt("go");
+  await held.entered;
+
+  // Digits are hex too: slot 2 must not stop an id that begins with 2
+  await parent.session.prompt("/subagents stop 2");
+  expect(parent.notices.at(-1)).toMatch(
+    /^subagent: nothing is in slot 2; running: 1 "run s"$/,
+  );
+  await parent.session.prompt("/subagents stop 1");
+  expect(parent.notices.at(-1)).toMatch(
+    /^subagent: stopping "run s" \(id [0-9a-f]{8}\)$/,
+  );
+  await run;
+});
+
+test("/shells stop takes the $slot number the bar shows", async () => {
+  const parent = await parentSession({
+    mode: "tui",
+    respond: scriptTurns(hold().step, () =>
+      fauxAssistantMessage([
+        fauxToolCall(
+          "bash",
+          { command: "sleep 60", background: true },
+          { id: "sh" },
+        ),
+      ]),
+    ),
+  });
+  await parent.session.prompt("go");
+
+  await parent.session.prompt("/shells stop $2");
+  expect(parent.notices.at(-1)).toBe(
+    "shells: nothing is in slot $2; running: $1 sleep 60",
+  );
+  await parent.session.prompt("/shells stop 2");
+  expect(parent.notices.at(-1)).toBe(
+    "shells: nothing is in slot $2; running: $1 sleep 60",
+  );
+  await parent.session.prompt("/shells stop $1");
+  expect(parent.notices.at(-1)).toMatch(
+    /^shells: stopped [0-9a-f]{8} "sleep 60"$/,
+  );
+});
+
+test("on a pane too small to list the tab, /subagents lists the children with their ids", async () => {
+  const host = await brokenHost(
+    { requestRender() {}, terminal: { rows: 20, columns: 100 } },
+    plainTheme,
+  );
+
+  await host.parent.session.prompt("/subagents");
+  expect(host.parent.notices.at(-1)).toMatch(
+    /^• running "run s" .* [0-9a-f]{8}$/,
+  );
+  await host.finish();
+});
+
+test("a failure that lands while its tab is open is already seen", async () => {
+  const gate = hold();
+  const parent = await parentSession({
+    mode: "tui",
+    respond: scriptTurns(
+      async (...args) => {
+        await gate.step(...args);
+        return fauxAssistantMessage("", {
+          stopReason: "error",
+          errorMessage: "provider exploded",
+        });
+      },
+      () => fauxAssistantMessage([call({ prompt: "boom", background: true })]),
+    ),
+  });
+  await parent.session.prompt("go");
+  await gate.entered;
+  press(parent, "alt+a");
+
+  gate.release();
+  await vi.waitFor(
+    () =>
+      expect(parent.mounted(BAR)?.render(100)[1]).toMatch(/provider exploded/),
+    { timeout: 15_000 },
+  );
+  await parent.session.waitForIdle();
+  press(parent, "alt+a");
+  expect(parent.mounted(BAR)?.render(100)).toEqual([]);
+});
+
 test("a bar that stopped drawing stops its clock, repaints nothing more, and reaches trip from a tick", async () => {
   fakeTicks();
   const baseline = vi.getTimerCount();
@@ -353,4 +660,88 @@ test("a tick whose repaint throws stops the bar and says so once", async () => {
   // A running child would draw a pulse; a bar that tripped draws nothing
   expect(host.bar()?.render(100)).toEqual([]);
   await host.finish();
+});
+
+test("after the bar stopped drawing, /subagents still lists", async () => {
+  const theme = {
+    get colors(): never {
+      throw new Error("theme gone");
+    },
+  };
+  const host = await brokenHost(
+    { requestRender() {}, terminal: { rows: 40, columns: 100 } },
+    theme,
+  );
+  host.bar()?.render(100);
+
+  await host.parent.session.prompt("/subagents");
+  expect(host.parent.notices).toContainEqual(
+    expect.stringMatching(/^• running "run s"/),
+  );
+  await host.finish();
+});
+
+/** A parent whose bar is mounted on a terminal of `rows` rows, with a child that fails in the background. */
+async function failingOn(
+  rows: number,
+  extra: ReturnType<typeof fauxToolCall>[] = [],
+) {
+  let bar: { render(width: number): string[] } | undefined;
+  const parent = await parentSession({
+    mode: "tui",
+    respond: scriptTurns(explodingChild, () =>
+      fauxAssistantMessage([
+        call({ prompt: "boom", background: true }),
+        ...extra,
+      ]),
+    ),
+    ui: {
+      setWidget: ((_key: string, factory: (...args: object[]) => never) => {
+        bar = factory(
+          { requestRender() {}, terminal: { rows, columns: 100 } },
+          plainTheme,
+        );
+      }) as never,
+    },
+  });
+  await parent.session.prompt("go");
+  await vi.waitFor(
+    () => expect(bar?.render(100)[0]).toMatch(/^ ?× "run boom"/),
+    {
+      timeout: 15_000,
+    },
+  );
+  await parent.session.waitForIdle();
+  return { parent, bar: () => bar?.render(100) ?? [] };
+}
+
+test("on a pane too small for the tab, the keys do nothing and /subagents lists the failure instead of losing it", async () => {
+  const { parent, bar } = await failingOn(20);
+
+  press(parent, "alt+a");
+  press(parent, "alt+s");
+  expect(bar()[0]).toMatch(/unseen/);
+  expect(bar()[0]).not.toContain("nothing running");
+
+  await parent.session.prompt("/subagents");
+  expect(parent.notices.at(-1)).toMatch(
+    /× "run boom" · .*provider exploded.* · [0-9a-f]{8}$/,
+  );
+  // Listed once, so it no longer leads
+  expect(bar()).toEqual([]);
+});
+
+test("on a pane too small for the tab, /shells lists the jobs", async () => {
+  const { parent, bar } = await failingOn(20, [
+    fauxToolCall(
+      "bash",
+      { command: "sleep 60", background: true },
+      { id: "sh" },
+    ),
+  ]);
+
+  await parent.session.prompt("/shells");
+  expect(parent.notices.at(-1)).toMatch(/"sleep 60" · running for/);
+  expect(bar()[0]).not.toMatch(/AGENTS|SHELLS/);
+  await parent.session.prompt("/shells stop all");
 });

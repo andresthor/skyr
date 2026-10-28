@@ -977,7 +977,7 @@ test("a running call's row is its call line alone, and the listing shows the run
   const lines = await listing(parent);
   expect(lines).toHaveLength(1);
   const id8 =
-    /^● running scout "run scout" · 0 turns · 0 tools · \d+s · ([0-9a-f]{8})$/.exec(
+    /^• running scout "run scout" · 0 turns · 0 tools · \d+s · ([0-9a-f]{8})$/.exec(
       lines[0] ?? "",
     )?.[1];
   expect(id8).toBeDefined();

@@ -149,7 +149,7 @@ describe("row timing", () => {
   });
 
   afterEach(() => {
-    // the ticker is shared across rows: past the tick limit, every row a test left running drops
+    // the clock is shared across rows: past the tick limit, every row a test left running drops
     vi.advanceTimersByTime(5 * 60_000);
     vi.useRealTimers();
   });

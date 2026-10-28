@@ -11,6 +11,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { glyphsOf, tierOf } from "../ui/caps.js";
+import { everySecond } from "../ui/clock.js";
 import { fitToWidth } from "../ui/fit.js";
 import { formatDuration, formatElapsed } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
@@ -93,8 +94,8 @@ export function errorRow(
 export interface Timing {
   startedAt?: number;
   endedAt?: number;
-  /** Present while the shared ticker redraws the row. */
-  redraw?: () => void;
+  /** Present once the shared clock redraws the row; stops that, and may be called again. */
+  stop?: () => void;
 }
 
 /** ` · <text>` in muted, the time fact of a row. */
@@ -105,29 +106,6 @@ export function timeFact(text: string): Segment[] {
 // Only `took` stops a row's ticking, and Pi can drop a running row first (a chat rebuild, an
 // HTML export); past this bound its clock freezes.
 const TICK_LIMIT_MS = 5 * 60_000;
-
-/** The running rows, redrawn each second by one ticker that runs only while a row is here. */
-const ticking = new Set<Timing>();
-let ticker: ReturnType<typeof setInterval> | undefined;
-
-function startTicking(state: Timing, redraw: () => void): void {
-  state.redraw = redraw;
-  ticking.add(state);
-  ticker ??= setInterval(() => {
-    const now = Date.now();
-    for (const row of ticking)
-      if (now - (row.startedAt ?? now) < TICK_LIMIT_MS) row.redraw?.();
-      else stopTicking(row);
-  }, 1000);
-}
-
-function stopTicking(state: Timing): void {
-  ticking.delete(state);
-  state.redraw = undefined;
-  if (ticking.size > 0 || ticker === undefined) return;
-  clearInterval(ticker);
-  ticker = undefined;
-}
 
 /**
  * For `renderCall`: starts the clock when Pi starts executing the call and redraws the row each
@@ -143,8 +121,13 @@ export function elapsed(context: {
 }): Segment[] {
   const { state } = context;
   if (context.executionStarted && state.startedAt === undefined) {
-    state.startedAt = Date.now();
-    startTicking(state, context.invalidate);
+    const startedAt = Date.now();
+    state.startedAt = startedAt;
+    const stop = everySecond(() => {
+      if (Date.now() - startedAt < TICK_LIMIT_MS) context.invalidate();
+      else stop();
+    });
+    state.stop = stop;
   }
   if (state.startedAt === undefined || state.endedAt !== undefined) return [];
   return timeFact(formatElapsed(Date.now() - state.startedAt));
@@ -168,7 +151,7 @@ export function took(context: {
       : timeFact(formatElapsed(Date.now() - state.startedAt));
   if (state.startedAt !== undefined) {
     state.endedAt ??= Date.now();
-    stopTicking(state);
+    state.stop?.();
   }
   if (context.durationMs !== undefined)
     return timeFact(formatDuration(context.durationMs));

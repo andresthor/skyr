@@ -22,10 +22,11 @@ import {
 import { glyphsOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
 import { formatElapsed } from "../ui/format.js";
+import { failureLatch } from "../ui/guard.js";
 import { keyName } from "../ui/hint.js";
 import { type Paint, styled } from "../ui/palette.js";
 import { frameAt, shimmer, situationOf, variantFor } from "../ui/spinner.js";
-import { oneLine, sanitize } from "../ui/text.js";
+import { sanitize } from "../ui/text.js";
 import type { Working } from "./working.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: TypeScript accepts a class mixin only over an any[] constructor (TS2545)
@@ -77,6 +78,7 @@ export function withWorkingLine<B extends EditorClass>(
     private heldSince = 0;
     /** Drawing the line threw once: for this editor's life Pi's status stays in the rule. */
     private lineFailed = false;
+    private readonly failures = failureLatch();
     /** Rows drawn above the rule last frame, which a mouse event's row has to discount. */
     private head = 0;
     private readonly lineKeys: KeybindingsManager;
@@ -99,17 +101,12 @@ export function withWorkingLine<B extends EditorClass>(
         line = this.lineFailed ? undefined : this.lineFor(width);
       } catch (cause) {
         this.lineFailed = true;
-        const reason = cause instanceof Error ? cause.message : String(cause);
-        queueMicrotask(() => {
-          try {
-            notify(
-              `skyr: the working line stopped drawing after an error (${oneLine(reason, 120)}); /reload brings it back`,
-              "warning",
-            );
-          } catch {
-            // The session that would show it may be gone
-          }
-        });
+        this.failures.trip(cause, (reason) =>
+          notify(
+            `skyr: the working line stopped drawing after an error (${reason}); /reload brings it back`,
+            "warning",
+          ),
+        );
       }
       // Decided before the base draws its rule, which shows a status only while it holds one
       super.setWorkingStatusIndicator(

@@ -1,4 +1,5 @@
 import { fitToWidth } from "./fit.js";
+import { describeCause, oneLine } from "./text.js";
 
 /**
  * For a component Pi renders outside any handler, where a throw exits Pi: lines clamped to
@@ -19,5 +20,35 @@ export function guard(
       onThrow(cause);
       return [];
     }
+  };
+}
+
+/**
+ * A surface that stopped drawing tells the user once: the first `trip` queues `report` with the
+ * cause described on one line, and later trips do nothing until `reset`. The report runs outside
+ * the failing call, and a throw from it is dropped, since the session that would show it may be
+ * gone.
+ */
+export function failureLatch(): {
+  trip(cause: unknown, report: (reason: string) => void): void;
+  reset(): void;
+} {
+  let spent = false;
+  return {
+    trip(cause, report) {
+      if (spent) return;
+      spent = true;
+      const reason = oneLine(describeCause(cause), 120);
+      queueMicrotask(() => {
+        try {
+          report(reason);
+        } catch {
+          // The session that would show it may be gone
+        }
+      });
+    },
+    reset() {
+      spent = false;
+    },
   };
 }

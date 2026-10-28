@@ -7,7 +7,7 @@ import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { type Mark, tierOf } from "../ui/caps.js";
 import { everySecond } from "../ui/clock.js";
 import { guard } from "../ui/guard.js";
-import { oneLine } from "../ui/text.js";
+import { describeCause, oneLine } from "../ui/text.js";
 import { barLines, type FailedRow, tabFits } from "./bar-view.js";
 
 const WIDGET_KEY = "skyr.bar";
@@ -76,15 +76,6 @@ export interface Bar extends BarHandle {
   nextTab(): void;
 }
 
-/** `String(value)` throws for an object without a prototype. */
-function describe(value: unknown): string {
-  try {
-    return String(value);
-  } catch {
-    return "unknown error";
-  }
-}
-
 export function createBar(): Bar {
   const sources = new Set<BarSource>();
   let ui: Pick<ExtensionUIContext, "setWidget" | "notify"> | undefined;
@@ -119,7 +110,7 @@ export function createBar(): Bar {
     if (mounted) mounted.offClock = undefined;
     if (reported) return;
     reported = true;
-    const message = cause instanceof Error ? cause.message : describe(cause);
+    const message = describeCause(cause);
     queueMicrotask(() => {
       try {
         ui?.notify(

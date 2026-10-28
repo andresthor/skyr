@@ -36,6 +36,32 @@ export function sanitize(raw: string): string {
   return stripInvisible(stripTerminalSequences(raw).replace(/\s+/g, " "));
 }
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching the escape byte is the point
+const SGR = /\u001b\[[0-9;:]{0,40}m/g;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching the escape byte is the point
+const SGR_RESET = /^\u001b\[0*m$/;
+// Closes a colour another extension opened, which no theme style can
+const RESET = `${String.fromCharCode(0x1b)}[0m`;
+
+/**
+ * `sanitize` for text whose colour is part of the message, such as another extension's status:
+ * colour and attribute sequences stay, every other sequence and invisible character goes, and
+ * a colour left open is closed.
+ */
+export function sanitizeStyled(raw: string): string {
+  let out = "";
+  let from = 0;
+  let open = false;
+  for (const found of raw.matchAll(SGR)) {
+    out += sanitize(raw.slice(from, found.index)) + found[0];
+    open = !SGR_RESET.test(found[0]);
+    from = found.index + found[0].length;
+  }
+  out += sanitize(raw.slice(from));
+  // Sanitizing the pieces apart leaves the spaces that met at a colour change side by side
+  return `${out.replace(/ {2,}/g, " ").trim()}${open ? RESET : ""}`;
+}
+
 /**
  * Model-supplied text bound for an error message: its length is unbounded, so keep it readable.
  * Cuts between grapheme clusters, so an emoji sequence, a flag or a letter with its accents is
@@ -70,4 +96,14 @@ export function quoted(text: string, max: number): string {
       (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, "0")}`,
     ).join(""),
   );
+}
+
+/** What a caught value says: an error's message, else its string form, which throws for an object without a prototype. */
+export function describeCause(cause: unknown): string {
+  if (cause instanceof Error) return cause.message;
+  try {
+    return String(cause);
+  } catch {
+    return "unknown error";
+  }
 }

@@ -2,10 +2,12 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import {
   clip,
+  describeCause,
   oneLine,
   quoted,
   sanitize,
   sanitizeBlock,
+  sanitizeStyled,
   stripInvisible,
 } from "../src/ui/text.js";
 
@@ -143,4 +145,35 @@ describe("clip", () => {
     const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
     expect(clip(family, 1)).toBe(family);
   });
+});
+
+describe("sanitizeStyled", () => {
+  const ESC = "\u001b";
+
+  test("keeps colour and attribute sequences, drops every other sequence and invisible character", () => {
+    const text = sanitizeStyled(
+      `a\r${ESC}[2J${OSC52}${ESC}[1;38;2;1;2;3mhot${ESC}[0m‮ b`,
+    );
+    expect(text).toBe(`a ${ESC}[1;38;2;1;2;3mhot${ESC}[0m b`);
+  });
+
+  test("closes a colour left open, and leaves a closed one alone", () => {
+    expect(sanitizeStyled(`${ESC}[31mred`)).toBe(`${ESC}[31mred${ESC}[0m`);
+    expect(sanitizeStyled(`${ESC}[31mred${ESC}[m`)).toBe(
+      `${ESC}[31mred${ESC}[m`,
+    );
+  });
+
+  test("a sequence split by a colour change leaves no escape byte behind", () => {
+    const text = sanitizeStyled(`${ESC}]52;c;${ESC}[31mx${ESC}[0m\u0007`);
+    expect(
+      text.split(`${ESC}[31m`).join("").split(`${ESC}[0m`).join(""),
+    ).not.toContain(ESC);
+  });
+});
+
+test("describeCause reads an error, a string and an object without a prototype", () => {
+  expect(describeCause(new Error("boom"))).toBe("boom");
+  expect(describeCause("plain")).toBe("plain");
+  expect(describeCause(Object.create(null))).toBe("unknown error");
 });

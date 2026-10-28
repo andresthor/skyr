@@ -286,6 +286,11 @@ cannot see. Parts go a few at a time, so the calls between two cuts still read t
 from the cache; until the session is long enough for that, each call that has to drop one more
 part misses the cache.
 
+## Footer
+
+skyr replaces Pi's footer in the terminal UI: the directory, git branch and session name, and a
+line of other extensions' statuses. It is drawn nowhere else.
+
 ## Embedding it
 
 A host that builds its own Pi distribution can call `await registerSkyr(pi)` instead of

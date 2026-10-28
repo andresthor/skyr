@@ -31,7 +31,7 @@ import {
   type RecordSpec,
   railRoom,
 } from "./record.js";
-import { sanitize } from "./text.js";
+import { describeCause, sanitize } from "./text.js";
 
 export interface Row {
   readonly head: RecordSpec;
@@ -181,9 +181,7 @@ function drawn(render: (width: number) => string[]): Component {
         return render(width).map((line) => fitToWidth(line, width, ""));
       } catch (cause) {
         const mark = glyphsOf(tierOf(process.env)).mark.failed;
-        const why = sanitize(
-          cause instanceof Error ? cause.message : String(cause),
-        );
+        const why = sanitize(describeCause(cause));
         return [fitToWidth(`${mark} row failed to draw: ${why}`, width, "")];
       }
     },
@@ -317,9 +315,7 @@ export function messageComponent(
     );
   } catch (cause) {
     const mark = glyphsOf(tierOf(process.env)).mark.failed;
-    const why = sanitize(
-      cause instanceof Error ? cause.message : String(cause),
-    );
+    const why = sanitize(describeCause(cause));
     return asText([`${mark} could not draw this message: ${why}`]);
   }
 }

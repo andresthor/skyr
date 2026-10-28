@@ -15,8 +15,10 @@ import { type Static, Type } from "typebox";
 import { loadPi } from "../pi.js";
 import { clip, errnoOf, quoted, sanitize } from "../tools/render.js";
 import { DEFAULT_TOOLS, type loadAgents, parseTools } from "./agents.js";
+import { GRACE_MS } from "./child/proc-runner.js";
 import { readStoredResult } from "./child/protocol.js";
 import { registerChildTools } from "./child/tools.js";
+import { leaveStopped, takeStopped } from "./handoff.js";
 import { answer, delivery, type LaneOutcome, noAnswer } from "./result.js";
 import { runnerFor, spawnCheck } from "./runner.js";
 import {
@@ -127,9 +129,16 @@ interface Runs {
   flush(): void;
   /** `/subagents stop <id|all>`: the notice. */
   stop(target: string): { text: string; level: "info" | "warning" };
-  /** Session start: forget the last session, sweep crashed job dirs, deliver what they hold. */
+  /**
+   * Session start: forget the last session, sweep crashed job dirs, deliver what they hold. The
+   * background runs a reload of this session file stopped are delivered too, as a message that
+   * starts no turn of its own.
+   */
   open(parentFile: string | undefined): Promise<void>;
-  /** Session shutdown: stop every child with `reason`; forget records and pending answers. */
+  /**
+   * Session shutdown: stop every child with `reason`; forget records and pending answers. The
+   * background runs it stops are left for the next session on the same file.
+   */
   close(reason: string): void;
 }
 
@@ -190,6 +199,53 @@ const errorText = (error: unknown) =>
 /** What follows "was stopped" when the session's end, not the user, stopped a child. */
 const sessionStop = (reason: unknown) =>
   reason === "reload" ? " because Pi reloaded" : " because the session ended";
+
+/** How long a child the session's end stopped may keep writing: its kill grace, and its exit. */
+const STOP_SETTLE_MS = GRACE_MS + 1_000;
+
+/**
+ * What a background run reads as when a session's end stopped it and its own call is gone. A
+ * worktree that exists is stated: the run may have written there before it stopped.
+ */
+async function stoppedOutcome(
+  run: RunSnapshot,
+  reason: string,
+): Promise<LaneOutcome> {
+  const { body, error } = noAnswer(labelOf(run), {
+    stoppedBy: sessionStop(reason),
+    before: run.status === "queued" ? "started" : "answered",
+  });
+  const plan = run.worktree;
+  // A child that was running keeps writing through its kill grace, so no read of its tree is
+  // final; one still queued never wrote.
+  const settling = run.status !== "queued";
+  const state =
+    plan === undefined
+      ? "absent"
+      : settling
+        ? existsSync(plan.path)
+          ? "writes"
+          : "absent"
+        : await worktreeState(plan);
+  return {
+    body,
+    notes:
+      plan === undefined || state === "absent"
+        ? []
+        : [
+            { kind: "line", text: worktreeNote(plan, state === "writes") },
+            ...(settling
+              ? [
+                  {
+                    kind: "line" as const,
+                    text: `The child may still be writing for about ${Math.ceil(STOP_SETTLE_MS / 1000)}s; check git -C ${plan.path} status --porcelain after that`,
+                  },
+                ]
+              : []),
+          ],
+    run: { ...run, status: "aborted", endedAt: Date.now(), error },
+  };
+}
 
 /** The directory where one session's child sessions live, next to the parent's .jsonl. */
 function childSessionDir(parentFile: string | undefined): string | undefined {
@@ -306,6 +362,8 @@ export function createRuns(
   // Bumped at every session start and shutdown, so a child that outlives its session touches
   // neither the next session nor its own stale context.
   let generation = 0;
+  // Written only in `open`.
+  let sessionFile: string | undefined;
   let sessionAbort = new AbortController();
   let canSpawn = spawnCheck();
 
@@ -549,14 +607,7 @@ export function createRuns(
       tokens: 0,
       ...(slot?.behind ? { behind: slot.behind } : {}),
       ...(background ? { background: true as const } : {}),
-      ...(call.worktree
-        ? {
-            worktree: {
-              path: call.worktree.path,
-              branch: call.worktree.branch,
-            },
-          }
-        : {}),
+      ...(call.worktree ? { worktree: call.worktree } : {}),
     };
     const own = new AbortController();
     children.set(call.id, own);
@@ -639,8 +690,11 @@ export function createRuns(
     return parentTrusted;
   }
 
-  /** One message for everything that finished, so a second send never lands in a steer queue. */
-  function flush(): void {
+  /**
+   * One message for everything that finished, so a second send never lands in a steer queue.
+   * `triggerTurn` false only delivers it: the model reads it on its next prompt.
+   */
+  function flush(triggerTurn = true): void {
     if (pending.length === 0) return;
     // `delivery` never throws: every field it reads is checked where it enters.
     const text = delivery(pending);
@@ -653,7 +707,7 @@ export function createRuns(
         display: true,
         details,
       },
-      { triggerTurn: true },
+      { triggerTurn },
     );
   }
 
@@ -917,14 +971,30 @@ export function createRuns(
       pending = [];
       records.clear();
       runningContinues.clear();
+      sessionFile = parentFile;
       const recovered = await sweepJobs(parentFile);
-      if (recovered.length > 0) {
-        pending.push(...recovered);
-        flush();
-      }
+      const stopped = takeStopped(parentFile);
+      // A SIGTERMed process child can finish its result before the sweep reads it; that answer
+      // is the run's, and a notice that it was stopped would contradict it.
+      const notices = stopped
+        ? await Promise.all(
+            stopped.runs
+              .filter((run) => !recovered.some((r) => r.run.id === run.id))
+              .map((run) => stoppedOutcome(run, stopped.reason)),
+          )
+        : [];
+      pending.push(...recovered, ...notices);
+      // A crashed child's answer asks for work; a reload's notice only informs.
+      flush(recovered.length > 0);
     },
     close(reason) {
       generation += 1;
+      // Before the abort, which can end children synchronously and empty the store.
+      leaveStopped(
+        sessionFile,
+        reason,
+        store.running().filter((run) => run.background),
+      );
       // the reason lets a stopped child say whether Pi reloaded or the session ended
       sessionAbort.abort(reason);
       store.clear();

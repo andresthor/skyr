@@ -11,8 +11,8 @@ import {
 } from "./protocol.js";
 import type { ChildResult, Runner } from "./types.js";
 
-/** Seconds a child gets between SIGTERM and SIGKILL once its abort fires. */
-const GRACE_MS = 3_000;
+/** Milliseconds a child gets between SIGTERM and SIGKILL once its abort fires. */
+export const GRACE_MS = 3_000;
 /** Heartbeat age that marks a row stalled; nothing kills a stalled child. */
 const STALLED_MS = 15_000;
 const POLL_MS = 500;

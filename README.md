@@ -154,12 +154,14 @@ in-tree and its answer says so.
 With `background: true` on the call, it returns at once and each task's answer arrives later as a
 message that starts a new turn, once the parent is idle; answers that end while the parent is busy
 arrive together. Esc does not stop a background subagent; `/subagents` lists the live ones and
-`/subagents stop <id|all>` stops them, one task at a time or all. A widget above the editor shows
-every live subagent, running, queued or in the background; past ten, it shows nine and a count
-of the rest. Plain `pi --mode rpc` clients don't get the widget: Pi's RPC mode passes on widgets
-made of lines only, and this one is a component. A delivered message shows one line per
-subagent, naming why any of them gave no answer; expand it to read the answers. A background
-subagent's token usage is in the delivered message, not in the footer.
+`/subagents stop <id|all>` stops them, one task at a time or all. A `/reload` stops background
+subagents; the reloaded session receives one message naming each, so the model knows their answers
+will not come. A widget above the editor shows every live subagent, running, queued or in the
+background; past ten, it shows nine and a count of the rest. Plain `pi --mode rpc` clients don't get
+the widget: Pi's RPC mode passes on widgets made of lines only, and this one is a component. A
+delivered message shows one line per subagent, naming why any of them gave no answer; expand it to
+read the answers. A background subagent's token usage is in the delivered message, not in the
+footer.
 
 The model reads each answer inside a `<subagent-answer>` block, foreground or delivered, whose
 attributes carry the run's status, tokens and 8-char `id`; the subagent's own text can't open or

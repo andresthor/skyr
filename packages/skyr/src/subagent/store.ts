@@ -5,6 +5,7 @@
 import type { TaskItem } from "../tengi.js";
 import { clip } from "../tools/render.js";
 import type { ChildEvent } from "./runner.js";
+import type { WorktreePlan } from "./worktree.js";
 
 const RUN_STATUSES = [
   "queued",
@@ -37,7 +38,7 @@ export interface RunSnapshot {
   /** The call returned at once; the answer is delivered as a message. */
   background?: true;
   /** The child writes in its own fresh git worktree, not the parent's tree. */
-  worktree?: { path: string; branch: string };
+  worktree?: WorktreePlan;
   /** Delivered from a recovered job dir after a restarted session; not a live child. */
   recovered?: true;
   sessionFile?: string;

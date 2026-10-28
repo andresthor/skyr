@@ -24,7 +24,7 @@ type Note = Spill | { kind: "line"; text: string };
  * present exactly when it gave no answer.
  */
 export interface LaneOutcome {
-  /** The task's place in its call; absent for a run recovered after a restart, whose call is gone. */
+  /** The task's place in its call; absent when its call is gone (recovered, or stopped by a reload). */
   lane?: { n: number; of: number };
   run: RunSnapshot;
   /** The answer, cut to the cap, or the sentence saying why there is none. */
@@ -131,7 +131,9 @@ function block({ lane, run, body, notes }: LaneOutcome): string {
     "<subagent-answer" +
     (lane
       ? attribute("task", `${lane.n} of ${lane.of}`)
-      : attribute("recovered", "after a restart")) +
+      : run.recovered
+        ? attribute("recovered", "after a restart")
+        : "") +
     (run.agent !== undefined ? attribute("agent", run.agent) : "") +
     attribute("description", run.description) +
     attribute("status", statusOf(run)) +

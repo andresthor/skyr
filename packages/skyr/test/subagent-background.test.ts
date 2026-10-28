@@ -467,7 +467,7 @@ test("lanes of a background call that end while the parent is busy arrive as one
   ]);
 });
 
-test("a reload stops every background lane and nothing reaches the next session", async () => {
+test("a reload stops every background lane and no answer reaches the next session", async () => {
   const { holds, aborted, child } = heldLanes("a", "b");
   const parent = await parentSession({
     respond: bgRouter(

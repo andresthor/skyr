@@ -18,6 +18,7 @@ import {
   type FooterFacts,
   footerLines,
   statusesLine,
+  type TokenFacts,
 } from "./footer-view.js";
 
 export interface Footer {
@@ -81,27 +82,66 @@ function deliveredCost(details: unknown): number {
   return total;
 }
 
-/** The session's cost over every entry, abandoned branches included, as Pi's footer sums it. */
-function costOfEntries(entries: readonly SessionEntry[]): number {
-  let total = 0;
+/** The part of Pi's usage record the footer reads; an old session may hold bad numbers in it. */
+interface UsageShape {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** What every entry of the session added up to, abandoned branches included, as Pi's footer sums it. */
+function totalsOf(entries: readonly SessionEntry[]): {
+  cost: number;
+  tokens: TokenFacts;
+} {
+  let cost = 0;
+  let input = 0;
+  let output = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let cacheHit: number | undefined;
+  const add = (usage: UsageShape) => {
+    cost += costOf(usage);
+    input += positiveOrZero(usage.input);
+    output += positiveOrZero(usage.output);
+    cacheRead += positiveOrZero(usage.cacheRead);
+    cacheWrite += positiveOrZero(usage.cacheWrite);
+  };
   for (const entry of entries) {
-    if (entry.type === "usage") total += costOf(entry.usage);
+    if (entry.type === "usage") add(entry.usage);
     else if (entry.type === "message") {
       const message = entry.message;
-      if (message.role === "assistant") total += costOf(message.usage);
-      else if (message.role === "toolResult") total += costOf(message.usage);
-    } else if (entry.type === "branch_summary" || entry.type === "compaction")
-      total += costOf(entry.usage);
+      if (message.role === "assistant") {
+        add(message.usage);
+        const { usage } = message;
+        const prompt =
+          positiveOrZero(usage.input) +
+          positiveOrZero(usage.cacheRead) +
+          positiveOrZero(usage.cacheWrite);
+        cacheHit =
+          prompt > 0
+            ? (positiveOrZero(usage.cacheRead) / prompt) * 100
+            : undefined;
+      } else if (message.role === "toolResult" && message.usage)
+        add(message.usage);
+    } else if (
+      (entry.type === "branch_summary" || entry.type === "compaction") &&
+      entry.usage
+    )
+      add(entry.usage);
+    // Delivered runs carry a cost only: their tokens were spent by another session
     else if (entry.type === "custom_message")
-      total += deliveredCost(entry.details);
+      cost += deliveredCost(entry.details);
   }
-  return total;
+  return { cost, tokens: { input, output, cacheRead, cacheWrite, cacheHit } };
 }
 
 /** What a pass over the session found, valid while its key holds. */
 interface Counted {
   readonly key: string;
   readonly cost: number;
+  readonly tokens: TokenFacts;
   readonly turns: number;
   readonly context: ContextFacts | undefined;
 }
@@ -167,7 +207,7 @@ export function createFooter(): Footer {
       const usage = ctx.getContextUsage();
       counted = {
         key,
-        cost: costOfEntries(manager.getEntries()),
+        ...totalsOf(manager.getEntries()),
         turns: manager
           .getBranch()
           .filter(
@@ -188,6 +228,7 @@ export function createFooter(): Footer {
       context: counted.context,
       turns: counted.turns,
       cost: counted.cost,
+      tokens: counted.tokens,
       ...(model ? { model: oneLine(model.id, 80) } : {}),
       ...(model?.reasoning && ctx.thinkingLevel
         ? { thinking: ctx.thinkingLevel }

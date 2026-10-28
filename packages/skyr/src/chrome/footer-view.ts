@@ -16,12 +16,22 @@ export interface ContextFacts {
   readonly window: number;
 }
 
+/** Token totals over every entry of the session, and the latest response's cache hit rate in percent. */
+export interface TokenFacts {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly cacheHit?: number;
+}
+
 /** What the footer shows, every string already sanitized by its source. */
 export interface FooterFacts {
   readonly cwd: string;
   readonly branch?: string;
   readonly sessionName?: string;
   readonly context?: ContextFacts;
+  readonly tokens: TokenFacts;
   readonly turns: number;
   readonly cost: number;
   readonly model?: string;
@@ -52,11 +62,13 @@ function degrade<S>(
 }
 
 interface Where {
+  tokens: boolean;
   name: boolean;
   branch: boolean;
 }
 
 const WHERE_STEPS: readonly ((state: Where) => Where)[] = [
+  (state) => ({ ...state, tokens: false }),
   (state) => ({ ...state, name: false }),
   (state) => ({ ...state, branch: false }),
 ];
@@ -139,7 +151,7 @@ export function statusesLine(
  * column and fits the pane.
  * ```
  *  41% ▪▪▪▪▫▫ ▫▫▫▫ 412k/1M · 12 turns $1.82 · claude-sonnet-5-5 high
- *  ~/projects/skyr (feat-auth-refactor) • my session
+ *  ~/projects/skyr (feat-auth-refactor) • my session · ↑412k ↓38k R1.2M W96k CH94%
  * ```
  */
 export function footerLines(
@@ -228,17 +240,35 @@ export function footerLines(
     room,
   );
 
+  /** `↑412k ↓38k R1.2M W96k CH94%`: the parts Pi's footer shows, from the same totals. */
+  const totals = (): string => {
+    const { input, output, cacheRead, cacheWrite, cacheHit } = facts.tokens;
+    const parts = [
+      input > 0 && `${glyphs.flow.up}${formatCount(input)}`,
+      output > 0 && `${glyphs.flow.down}${formatCount(output)}`,
+      cacheRead > 0 && `R${formatCount(cacheRead)}`,
+      cacheWrite > 0 && `W${formatCount(cacheWrite)}`,
+      (cacheRead > 0 || cacheWrite > 0) &&
+        cacheHit !== undefined &&
+        `CH${Math.round(cacheHit)}%`,
+    ].filter((part): part is string => part !== false);
+    return ink(parts.join(" "), "muted");
+  };
+
   const where = degrade<Where>(
-    { name: true, branch: true },
+    { tokens: true, name: true, branch: true },
     WHERE_STEPS,
     (show) => {
       const parts = [ink(facts.cwd, "muted")];
       if (show.branch && facts.branch)
         parts.push(ink(`(${facts.branch})`, "accent"));
       const place = parts.join(" ");
-      return show.name && facts.sessionName
-        ? `${place} ${ink(glyphs.mark.running, "dim")} ${ink(facts.sessionName, "muted")}`
-        : place;
+      return joined([
+        show.name && facts.sessionName
+          ? `${place} ${ink(glyphs.mark.running, "dim")} ${ink(facts.sessionName, "muted")}`
+          : place,
+        show.tokens ? totals() : "",
+      ]);
     },
     room,
   );

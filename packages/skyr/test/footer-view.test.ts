@@ -18,6 +18,13 @@ const facts: FooterFacts = {
   branch: "feat-auth-refactor",
   sessionName: "my session",
   context: { tokens: 412_000, percent: 41.2, window: 1_000_000 },
+  tokens: {
+    input: 412_000,
+    output: 38_000,
+    cacheRead: 1_234_567,
+    cacheWrite: 96_000,
+    cacheHit: 93.6,
+  },
   turns: 12,
   cost: 1.82,
   model: "claude-sonnet-5-5",
@@ -29,6 +36,10 @@ const filled = (percent: number, window = 1_000_000): FooterFacts => ({
   ...facts,
   context: { tokens: (window * percent) / 100, percent, window },
 });
+
+/** The second line, which holds the directory, branch, name and token totals. */
+const where = (f: FooterFacts, width = 200, mode: Tier = "color") =>
+  footerLines(f, "", paint(mode), width)[1] ?? "";
 
 const head = (f: FooterFacts, width = 200, mode: Tier = "color") =>
   footerLines(f, "", paint(mode), width)[0] ?? "";
@@ -189,4 +200,40 @@ test("line one fits widths 0-200 in every tier", () => {
         expect(
           visibleWidth(head(filled(percent), width, mode)),
         ).toBeLessThanOrEqual(width);
+});
+
+test("line two ends in the token totals and the cache hit rate", () => {
+  expect(where(facts)).toBe(
+    " ~/projects/skyr (feat-auth-refactor) • my session · ↑412k ↓38k R1.2M W96k CH94%",
+  );
+  expect(where(facts, 200, "ascii")).toContain(
+    " - ^412k v38k R1.2M W96k CH94%",
+  );
+});
+
+test("the totals leave out what is zero, and CH needs cache use and a response to measure", () => {
+  const only = (tokens: FooterFacts["tokens"]) => where({ ...facts, tokens });
+  expect(only({ input: 5, output: 0, cacheRead: 0, cacheWrite: 0 })).toMatch(
+    / · ↑5$/,
+  );
+  expect(
+    only({ input: 5, output: 1, cacheRead: 0, cacheWrite: 0, cacheHit: 0 }),
+  ).not.toContain("CH");
+  expect(
+    only({ input: 5, output: 1, cacheRead: 9, cacheWrite: 0 }),
+  ).not.toContain("CH");
+  expect(
+    only({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
+  ).not.toMatch(/ · $/);
+});
+
+test("the token group is the first thing line two drops", () => {
+  const widths = (needle: string) =>
+    WIDTHS_SWEEP.filter((w) => where(facts, w).includes(needle));
+  const tokens = Math.min(...widths("CH94%"));
+  const name = Math.min(...widths("my session"));
+  const branch = Math.min(...widths("feat-auth"));
+  expect(tokens).toBeGreaterThan(name);
+  expect(name).toBeGreaterThan(branch);
+  expect(where(facts, name)).not.toContain("↑");
 });

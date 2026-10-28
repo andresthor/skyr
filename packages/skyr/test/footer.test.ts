@@ -297,12 +297,21 @@ test("a start overtaken while the settings are read installs nothing, and the la
 });
 
 /** A usage record that costs `total` and nothing else. */
-const usage = (total: number) => ({
-  input: 1,
-  output: 1,
+const usage = (
+  total: number,
+  tokens: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  } = {},
+) => ({
+  input: 0,
+  output: 0,
   cacheRead: 0,
   cacheWrite: 0,
-  totalTokens: 2,
+  totalTokens: 0,
+  ...tokens,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total },
 });
 
@@ -443,4 +452,68 @@ test("a message's turn shows when its message ends, not when the turn does", asy
   while (!lines()[0]?.includes("1 turns")) await nextRender();
   held.release();
   await run;
+});
+
+test("the totals sum Pi's four sources over every entry, and a delivered run adds none", async () => {
+  const { parent, lines } = await tuiSession();
+  const manager = parent.session.sessionManager;
+  const root = manager.appendMessage(userMessage("root"));
+  manager.appendMessage({ ...assistant(0), usage: usage(0, { input: 1000 }) });
+  manager.appendMessage({
+    role: "toolResult",
+    toolCallId: "t",
+    toolName: "read",
+    content: [{ type: "text", text: "x" }],
+    isError: false,
+    timestamp: 0,
+    usage: usage(0, { output: 2000 }),
+  });
+  manager.appendUsage(
+    "cache_warm",
+    "faux",
+    "faux-1",
+    usage(0, { cacheRead: 4000 }),
+  );
+  manager.appendCompaction(
+    "s",
+    root,
+    1,
+    undefined,
+    false,
+    usage(0, { cacheWrite: 8000 }),
+  );
+  manager.branchWithSummary(
+    root,
+    "abandoned",
+    undefined,
+    false,
+    usage(0, { input: 16_000 }),
+  );
+  manager.appendCustomMessageEntry("runs", "done", true, [
+    { usage: usage(0, { input: 999_000 }) },
+  ]);
+  parent.session.setSessionName("totals");
+  expect(lines()[1]).toContain("↑17k ↓2k R4k W8k");
+});
+
+test("CH is the latest assistant's cache read over its prompt tokens and absent without cache use", async () => {
+  const { parent, lines } = await tuiSession();
+  const manager = parent.session.sessionManager;
+  manager.appendMessage(userMessage("a"));
+  manager.appendMessage({
+    ...assistant(0),
+    usage: usage(0, { input: 10, cacheRead: 990 }),
+  });
+  manager.appendMessage(userMessage("b"));
+  manager.appendMessage({
+    ...assistant(0),
+    usage: usage(0, { input: 50, cacheRead: 30, cacheWrite: 20 }),
+  });
+  parent.session.setSessionName("x");
+  expect(lines()[1]).toContain("CH30%");
+
+  manager.appendMessage({ ...assistant(0), usage: usage(0) });
+  parent.session.setSessionName("y");
+  expect(lines()[1]).toContain("↑60 R1k W20");
+  expect(lines()[1]).not.toContain("CH");
 });

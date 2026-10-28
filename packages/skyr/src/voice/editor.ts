@@ -9,9 +9,10 @@
  * Enter, undo and history only ever see firm text, and interim jitter can't clobber
  * the buffer. `setEditorText` would lose the cursor and the undo stack.
  *
- * Everything the editor draws — ghost, drying commits, the bottom rule — lives here
- * and nowhere else: the sink, the display and `index.ts` go through this surface
- * and never read or write decoration state directly.
+ * Everything the editor draws for dictation — ghost, drying commits, the bottom rule — lives
+ * here and nowhere else: the sink, the display and `index.ts` go through this surface and never
+ * read or write decoration state directly. The working line above the top rule is not voice's:
+ * `chrome/editor.ts` wraps this class with it at mount.
  *
  * The base class and the per-session options (key hook, paint) are passed in because
  * the package may not import pi-coding-agent statically (src/pi.ts is the one value
@@ -21,6 +22,7 @@ import type {
   CustomEditor,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { InterruptClaim } from "../chrome/editor.js";
 import { keyName } from "../ui/hint.js";
 import type { Paint } from "../ui/palette.js";
 import type { DictationSink } from "./dictation.js";
@@ -63,8 +65,10 @@ export interface VoiceEditorLike {
 export interface VoiceEditorOptions {
   /** Consulted before Pi sees a key; return true to swallow it. */
   keyHook: (data: string, keys: KeybindingsManager) => boolean;
-  /** The colours to draw in; its theme is Pi's live handle, so a /theme switch reaches it. */
+  /** The colours to draw in. */
   paint: Paint;
+  /** Whether dictation is on, which is when the key hook takes the interrupt key for itself; never when not given. */
+  dictating?: () => boolean;
 }
 
 type CustomEditorClass = typeof CustomEditor;
@@ -84,9 +88,12 @@ export const BINDINGS = {
 
 export function createVoiceEditorClass(
   Base: CustomEditorClass,
-  { keyHook, paint }: VoiceEditorOptions,
+  { keyHook, paint, dictating = () => false }: VoiceEditorOptions,
 ) {
-  return class VoiceEditor extends Base implements VoiceEditorLike {
+  return class VoiceEditor
+    extends Base
+    implements VoiceEditorLike, InterruptClaim
+  {
     private ghostText = "";
     /** Recent commits, newest first; `at` is when each landed. */
     private drying: { chars: number; lead: number; at: number }[] = [];
@@ -173,6 +180,10 @@ export function createVoiceEditorClass(
         cancel: keyName(this.keys, BINDINGS.cancel),
         undo: keyName(this.keys, BINDINGS.undo),
       };
+    }
+
+    get interruptTaken(): boolean {
+      return dictating();
     }
 
     ghost(text: string): void {

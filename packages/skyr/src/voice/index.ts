@@ -16,6 +16,8 @@ import type {
   ExtensionUIContext,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { withWorkingLine } from "../chrome/editor.js";
+import type { Working } from "../chrome/working.js";
 import { readSkyrSection } from "../config.js";
 import { loadPi } from "../pi.js";
 import { type Tier, tierOf } from "../ui/caps.js";
@@ -69,15 +71,19 @@ type EditorFactory = Parameters<ExtensionUIContext["setEditorComponent"]>[0];
  * `/voice`, ctrl+space and the session_start, session_shutdown and ui_prompt_start handlers.
  * Registering starts nothing: the display starts with a TUI session, the mic with a dictation.
  */
-export function registerVoice(pi: ExtensionAPI): void {
-  wireVoice(pi);
+export function registerVoice(pi: ExtensionAPI, working: Working): void {
+  wireVoice(pi, working);
 }
 
 /**
  * `registerVoice` with its test seams.
  * @internal
  */
-export function wireVoice(pi: ExtensionAPI, deps: VoiceDeps = {}): void {
+export function wireVoice(
+  pi: ExtensionAPI,
+  working: Working,
+  deps: VoiceDeps = {},
+): void {
   const mode = deps.mode ?? tierOf(process.env);
   const resolved = resolveSttCredentials();
 
@@ -190,13 +196,17 @@ export function wireVoice(pi: ExtensionAPI, deps: VoiceDeps = {}): void {
     // Pi's theme handle is its global theme proxy, never replaced, so /theme reaches the editor
     const paint: Paint = { theme: ctx.ui.theme, mode };
     // one class per session mount, not per editor: the hook and paint live for the session's life
-    const VoiceEditor = createVoiceEditorClass(CustomEditor, {
-      keyHook,
-      paint,
-    });
+    const VoiceEditor = withWorkingLine(
+      createVoiceEditorClass(CustomEditor, { keyHook, paint }),
+      {
+        paint,
+        working,
+        notify: (message, type) => ctx.ui.notify(message, type),
+      },
+    );
     editorFactory = (t, theme, keybindings) => {
       // Pi copies padding and autocomplete into a custom editor, but not this constructor-only flag;
-      // without it the working spinner leaves the top rule for a separate row
+      // without it Pi draws its loader in a row of its own instead of handing it to the editor
       const ed = new VoiceEditor(t, theme, keybindings, {
         embedWorkingStatus: true,
       });

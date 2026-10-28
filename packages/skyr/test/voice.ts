@@ -24,6 +24,7 @@ import {
 import { type Mock, onTestFinished, vi } from "vitest";
 // biome-ignore lint/style/noRestrictedImports: Pi builds its app bindings with this class but does not export it from its root
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
+import { createWorking } from "../src/chrome/working.js";
 import { registerSkyr } from "../src/index.js";
 import type { Tier } from "../src/ui/caps.js";
 import type { Paint, ThemeLike } from "../src/ui/palette.js";
@@ -381,7 +382,7 @@ export function registeredVoice(
     signIns.push(url);
     return new Response("unavailable", { status: 503 });
   }) as unknown as typeof fetch;
-  wireVoice(pi, { fetch: signIn, ...o });
+  wireVoice(pi, createWorking(), { fetch: signIn, ...o });
   return { ...captured, signIns };
 }
 

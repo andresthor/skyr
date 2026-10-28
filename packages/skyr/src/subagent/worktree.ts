@@ -4,6 +4,7 @@
  * text tells the parent how to diff, merge and prune.
  */
 import { execFile, execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 export interface WorktreePlan {
@@ -94,7 +95,7 @@ const runGit = (
   args: string[],
   signal: AbortSignal | undefined,
 ) =>
-  new Promise<void>((resolve, reject) =>
+  new Promise<string>((resolve, reject) =>
     execFile(
       "git",
       ["-C", root, ...args],
@@ -102,12 +103,12 @@ const runGit = (
         ...(signal ? { signal } : {}),
         timeout: 120_000,
       },
-      (error, _stdout, stderr) => {
+      (error, stdout, stderr) => {
         if (error)
           reject(
             new Error(`git ${args[0]}: ${stderr.trim() || error.message}`),
           );
-        else resolve();
+        else resolve(stdout);
       },
     ),
   );
@@ -142,10 +143,38 @@ export async function addWorktree(
 }
 
 /**
+ * What a worktree holds of its run's work: `absent` when the directory is not there, `writes`
+ * for uncommitted changes (untracked files included, whatever the user's git config says) or
+ * commits past the point it was cut from, else `clean`. A git that cannot answer counts as
+ * `writes`: a recipe nobody needs costs one command, a false "nothing to merge" costs the work.
+ */
+export async function worktreeState(
+  plan: WorktreePlan,
+): Promise<"absent" | "clean" | "writes"> {
+  if (!existsSync(plan.path)) return "absent";
+  try {
+    const [status, head] = await Promise.all([
+      runGit(
+        plan.path,
+        ["status", "--porcelain", "--untracked-files=normal"],
+        undefined,
+      ),
+      runGit(plan.path, ["rev-parse", "HEAD"], undefined),
+    ]);
+    return status.trim() !== "" || head.trim() !== plan.sha
+      ? "writes"
+      : "clean";
+  } catch {
+    return "writes";
+  }
+}
+
+/**
  * The result-text lines a worktree child carries, in the tool result and in a delivery.
  * Pi's edit/write never commit, so the work's files are untracked (or uncommitted edits);
- * a bare "git merge" without a commit first is a no-op. Without `mayHoldWrites` (a fresh run
- * that was stopped or failed) a merge recipe would advertise nothing.
+ * a bare "git merge" without a commit first is a no-op. `mayHoldWrites` is false only for a
+ * worktree known to hold nothing (see `worktreeState`), where a merge recipe would advertise
+ * nothing.
  */
 export function worktreeNote(
   plan: WorktreePlan,

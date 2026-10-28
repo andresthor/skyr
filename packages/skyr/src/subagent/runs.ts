@@ -32,6 +32,7 @@ import {
   planWorktree,
   type WorktreePlan,
   worktreeNote,
+  worktreeState,
 } from "./worktree.js";
 
 export const MESSAGE_TYPE = "skyr.subagent";
@@ -692,7 +693,7 @@ export function createRuns(
               : " because the session ended";
       const id = call.id;
 
-      // A continue's worktree may hold its earlier run's writes; only a fresh one is known empty.
+      // A continue's worktree may hold its earlier run's writes; only a fresh one can be known empty.
       const fresh = resumed === undefined ? call.worktree : undefined;
       // The store's snapshot while the child is live, else the one this call last started it with
       // (the store is empty once the child has ended, or when a reload cleared it mid-run);
@@ -710,26 +711,50 @@ export function createRuns(
           run: { ...last, status, endedAt: Date.now(), ...extra },
         };
       };
-      const stoppedBeforeStart = (): LaneOutcome => {
+      // Set once the runner is called: a stop after it may follow writes.
+      let began = false;
+      const stoppedWithoutResult = async (): Promise<LaneOutcome> => {
         const why = noAnswer(label, {
           stoppedBy: stoppedBy(),
-          before: "started",
+          before: began ? "answered" : "started",
         });
+        // A stop can land once the fresh worktree exists, and nothing deletes it.
+        const state = fresh && (await worktreeState(fresh));
         return {
           ...ended("aborted", why.body, { error: why.error }),
-          // A stop can land once the fresh worktree exists, and nothing deletes it.
           notes:
-            fresh !== undefined && existsSync(fresh.path)
-              ? [{ kind: "line", text: worktreeNote(fresh, false) }]
+            fresh && state !== "absent"
+              ? [
+                  {
+                    kind: "line",
+                    text: worktreeNote(fresh, state === "writes"),
+                  },
+                ]
               : [],
         };
+      };
+
+      const failed = async (error: unknown): Promise<LaneOutcome> => {
+        const state = fresh && (await worktreeState(fresh));
+        const why = noAnswer(label, {
+          cause: errorText(error),
+          context:
+            fresh === undefined
+              ? undefined
+              : state === "absent"
+                ? `git could not create worktree ${fresh.path} on branch ${fresh.branch}; `
+                : state === "writes"
+                  ? `worktree ${fresh.path} on branch ${fresh.branch} may hold uncommitted writes (git -C ${fresh.path} status --porcelain); `
+                  : `created worktree ${fresh.path} on branch ${fresh.branch}; it is empty — `,
+        });
+        return ended("failed", why.body, { error: why.error });
       };
 
       const finish = async (): Promise<LaneOutcome> => {
         try {
           if (slot?.behind) {
             await slot.wait(childSignal);
-            if (childSignal.aborted) return stoppedBeforeStart();
+            if (childSignal.aborted) return stoppedWithoutResult();
             const { behind: _, ...rest } = started;
             started = { ...rest, status: "running" };
             store.apply(id, { type: "start", snapshot: started });
@@ -742,6 +767,7 @@ export function createRuns(
             resumed !== undefined
               ? resumed.trusted
               : await trustFor(key, call.parentKey, ctx.isProjectTrusted());
+          began = true;
           const result = await runnerFor(
             ctx.modelRegistry,
             registerChildTools,
@@ -773,6 +799,11 @@ export function createRuns(
           const { body, spill, error } = await answer(label, id, result, {
             stoppedBy: stoppedBy(),
           });
+          // A fresh run that did not finish may have written before it stopped, or not at all.
+          const mayHoldWrites =
+            fresh === undefined ||
+            result.status === "done" ||
+            (await worktreeState(fresh)) === "writes";
           if (result.sessionFile !== undefined && result.sessionFile !== "")
             records.set(id, {
               id,
@@ -799,10 +830,7 @@ export function createRuns(
                 ? [
                     {
                       kind: "line" as const,
-                      text: worktreeNote(
-                        call.worktree,
-                        result.status === "done" || resumed !== undefined,
-                      ),
+                      text: worktreeNote(call.worktree, mayHoldWrites),
                     },
                   ]
                 : call.worktreeWhy !== undefined
@@ -828,16 +856,9 @@ export function createRuns(
         started: snapshot,
         // A throw after the claim is this run's failure, not the call's: Pi keeps a tool's own
         // result after Esc, so a stopped run still hands back its details.
-        settled: finish().catch((error: unknown) => {
-          if (childSignal.aborted) return stoppedBeforeStart();
-          const why = noAnswer(label, {
-            cause: errorText(error),
-            context: fresh
-              ? `created worktree ${fresh.path} on branch ${fresh.branch}; it is empty — `
-              : undefined,
-          });
-          return ended("failed", why.body, { error: why.error });
-        }),
+        settled: finish().catch((error: unknown) =>
+          childSignal.aborted ? stoppedWithoutResult() : failed(error),
+        ),
       };
     });
   }

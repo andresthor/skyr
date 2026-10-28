@@ -1,13 +1,18 @@
 // Worktree creation for bare writers: isolation parallel, in-tree writes keep queueing.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type FauxResponseFactory,
   fauxAssistantMessage,
+  fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { expect, test, vi } from "vitest";
-import { addWorktree, planWorktree } from "../src/subagent/worktree.js";
+import {
+  addWorktree,
+  planWorktree,
+  worktreeState,
+} from "../src/subagent/worktree.js";
 import {
   agentFile,
   call,
@@ -173,6 +178,44 @@ test("an aborted bare writer leaves its worktree on disk; nothing deletes it", a
   expect(list.includes("/worktrees/")).toBe(true);
 });
 
+/** Esc on a fresh bare writer that first writes `note.txt` (or nothing), then stops mid-run. */
+async function stoppedWriterText(writes: boolean): Promise<string> {
+  const held = hold();
+  const parent = await parentSession({
+    git: true,
+    respond: turnRunner(
+      (context, ...rest) =>
+        writes && !context.messages.some((m) => m.role === "toolResult")
+          ? fauxAssistantMessage([
+              fauxToolCall("write", { path: "note.txt", content: "x" }),
+            ])
+          : held.step(context, ...rest),
+      [call({ prompt: "w", tools: ["write"] })],
+    ),
+  });
+
+  const run = parent.session.prompt("go");
+  await held.entered;
+  await parent.session.abort();
+  await run;
+  return texts(parent).get("w")!;
+}
+
+test("a stopped fresh writer that left a file gets the merge recipe", async () => {
+  const text = await stoppedWriterText(true);
+  expect(text).toContain("was stopped by the user before it answered");
+  expect(text).toMatch(/Wrote in worktree \S+ on branch/);
+  expect(text).toContain("To merge them: git -C ");
+  expect(text).not.toContain("Nothing is there to merge");
+});
+
+test("a stopped fresh writer that left nothing is told there is nothing to merge", async () => {
+  const text = await stoppedWriterText(false);
+  expect(text).toContain("was stopped by the user before it answered");
+  expect(text).toContain("Nothing is there to merge");
+  expect(text).not.toContain("To merge them");
+});
+
 test("planWorktree reserves unique paths and branches and refuses what cannot be honoured", async () => {
   const repo = gitRepo("unit-repo");
   const sessionDir = scratchDir("sessions");
@@ -229,4 +272,53 @@ test("planWorktree reserves unique paths and branches and refuses what cannot be
     encoding: "utf8",
   });
   expect(list.includes(a.path)).toBe(true);
+});
+
+test("worktreeState sees an untracked file and a commit, counts a worktree git cannot read as holding writes, and knows an absent one", async () => {
+  const repo = gitRepo("holds-repo");
+  const plan = planWorktree(
+    repo,
+    scratchDir("holds-sessions"),
+    "ffffffff-1111-4111-8111-111111111111",
+    "x",
+  );
+  if (!("path" in plan)) throw new Error("a seeded repo must yield a plan");
+  await addWorktree(repo, plan, undefined);
+  expect(await worktreeState(plan)).toBe("clean");
+
+  // The user's git may hide untracked files from status; the state must not.
+  execFileSync("git", [
+    "-C",
+    plan.path,
+    "config",
+    "status.showUntrackedFiles",
+    "no",
+  ]);
+  writeFileSync(join(plan.path, "note.txt"), "x");
+  expect(await worktreeState(plan)).toBe("writes");
+
+  execFileSync("git", ["-C", plan.path, "add", "-A"]);
+  execFileSync(
+    "git",
+    [
+      "-C",
+      plan.path,
+      "-c",
+      "user.name=skyr-test",
+      "-c",
+      "user.email=skyr-test@example.com",
+      "commit",
+      "-m",
+      "note",
+    ],
+    { stdio: "ignore" },
+  );
+  expect(await worktreeState(plan)).toBe("writes");
+
+  // A directory git cannot read is not known to be clean.
+  writeFileSync(join(plan.path, ".git"), "garbage");
+  expect(await worktreeState(plan)).toBe("writes");
+
+  rmSync(plan.path, { recursive: true, force: true });
+  expect(await worktreeState(plan)).toBe("absent");
 });

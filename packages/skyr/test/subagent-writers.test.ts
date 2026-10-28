@@ -421,7 +421,21 @@ test("a stopped queued writer keeps the directory locked until the writer ahead 
   const w2 = /- task 2: "run w2" \(id ([0-9a-f]{8})\)/.exec(
     textOf(results(parent.session).get("bg")!),
   )?.[1];
+  // The stopped run's notice is a message, delivered once its worktree question is answered.
+  const noticed = new Promise<void>((resolve) => {
+    const off = parent.session.subscribe((event) => {
+      if (
+        event.type === "message_end" &&
+        event.message.role === "custom" &&
+        event.message.customType === "skyr.subagent"
+      ) {
+        off();
+        resolve();
+      }
+    });
+  });
   await parent.session.prompt(`/subagents stop ${w2}`);
+  await noticed;
   await vi.waitFor(() =>
     expect(parent.widgets.at(-1)).toEqual([expect.stringContaining("run w1")]),
   );

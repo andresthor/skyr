@@ -3,8 +3,10 @@
  * sanitized and cut to a hundred columns, which the widget fits to its pane; ended ones for a
  * delivered answer and a call's row, sanitized and left for their rows to cut.
  */
-import { truncateToWidth } from "@earendil-works/pi-tui";
-import { type Segment, secondsText, tokens } from "../tools/render.js";
+import { type Segment, tokens } from "../tools/render.js";
+import { glyphsOf, tierOf } from "../ui/caps.js";
+import { fitToWidth } from "../ui/fit.js";
+import { formatDuration, formatElapsed } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
 import { count, labelOf, progressOf, type RunSnapshot } from "./store.js";
 
@@ -24,8 +26,12 @@ export function widgetLines(
           ? "↗ running"
           : "● running";
     const progress = progressOf(run);
-    const line = `${mark} ${labelOf(run)}${progress ? ` · ${progress}` : ""} · ${Math.round((now - run.startedAt) / 1000)}s · ${run.id.slice(0, 8)}`;
-    return truncateToWidth(sanitize(line), WIDGET_WIDTH);
+    const line = `${mark} ${labelOf(run)}${progress ? ` · ${progress}` : ""} · ${formatElapsed(now - run.startedAt)} · ${run.id.slice(0, 8)}`;
+    return fitToWidth(
+      sanitize(line),
+      WIDGET_WIDTH,
+      glyphsOf(tierOf(process.env)).ellipsis,
+    );
   });
 }
 
@@ -61,7 +67,7 @@ export function laneLine(run: RunSnapshot): Segment[] {
     tokens(run.tokens),
     !recovered &&
       run.endedAt !== undefined &&
-      secondsText(run.endedAt - run.startedAt),
+      formatDuration(run.endedAt - run.startedAt),
     run.id.slice(0, 8),
   ];
   return [
@@ -111,7 +117,7 @@ export function laneTree(runs: readonly RunSnapshot[]): Segment[][] {
       mark,
       [
         "muted",
-        ` ${counts.join(", ")} · ${tokens(total)} · ${secondsText(wall)}`,
+        ` ${counts.join(", ")} · ${tokens(total)} · ${formatDuration(wall)}`,
       ],
     ],
     ...runs.map((run, i): Segment[] => [branch(i), ...laneLine(run)]),

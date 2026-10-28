@@ -13,13 +13,14 @@ import {
   firstLine,
   messageLines,
   type Segment,
-  seconds,
   segmentRow,
   textMessageRenderer,
+  timeFact,
   tokens,
   toolRow,
 } from "../tools/render.js";
 import { liveWidget } from "../tools/widget.js";
+import { formatDuration, formatElapsed } from "../ui/format.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { addUsage } from "./child/protocol.js";
 import { resultText, startedText } from "./result.js";
@@ -324,7 +325,11 @@ function summary(run: RunSnapshot): Segment[] {
 
 // From the snapshot, not the web rows' row-state clock: a resumed row has only its details.
 function runTime(run: RunSnapshot): Segment[] {
-  return seconds((run.endedAt ?? Date.now()) - run.startedAt);
+  return timeFact(
+    run.endedAt === undefined
+      ? formatElapsed(Date.now() - run.startedAt)
+      : formatDuration(run.endedAt - run.startedAt),
+  );
 }
 
 /** One tool row per line. */

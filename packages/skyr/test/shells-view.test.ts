@@ -51,11 +51,11 @@ test.each([
   ],
   [
     stopped,
-    'eeee0005 "npm run dev" · stopped after 7s · /jobs/eeee0005/out.log',
+    'eeee0005 "npm run dev" · stopped after 7.0s · /jobs/eeee0005/out.log',
   ],
   [
     lost,
-    'ffff0006 "npm run dev" · ended after 9s, exit status lost · /jobs/ffff0006/out.log',
+    'ffff0006 "npm run dev" · ended after 9.0s, exit status lost · /jobs/ffff0006/out.log',
   ],
 ])("the listing reads a job as one line: %#", (shown, line) => {
   expect(listingLines([shown], 13_000)).toEqual([line]);
@@ -68,6 +68,17 @@ test("the listing puts running and lingering jobs before ended ones, and says wh
     ),
   ).toEqual(["aaaa0001", "bbbb0002", "cccc0003", "eeee0005"]);
   expect(listingLines([], 0)).toEqual(["No background jobs in this session."]);
+});
+
+test("a job past a quarter of an hour reads 18m58s, running or ended, never 1138s", () => {
+  expect(widgetLines([running], 1_139_900)?.[0]).toContain(" · 18m58s · ");
+  expect(listingLines([running], 1_139_900)[0]).toContain("running for 18m58s");
+  const over = job("cccc0003", {
+    status: "done",
+    exitCode: 0,
+    endedAt: 1_138_000,
+  });
+  expect(listingLines([over], 2_000_000)[0]).toContain("exited 0 after 18m58s");
 });
 
 test("a terminal sequence or newline in a command, id or log path never reaches a line", () => {

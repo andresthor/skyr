@@ -527,7 +527,7 @@ describe("registerWebFetch", () => {
         plainTheme,
         context,
       );
-      expect(running && row(running)).toBe("web_fetch https://x.dev/a · 2.3s");
+      expect(running && row(running)).toBe("web_fetch https://x.dev/a · 2s");
       const done = tool.renderResult?.(
         {
           content: [],

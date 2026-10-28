@@ -187,12 +187,12 @@ describe("row timing", () => {
     const state: Timing = {};
     const invalidate = vi.fn();
     expect(elapsed(call(state, true, invalidate))).toEqual([
-      ["muted", " · 0.0s"],
+      ["muted", " · 0s"],
     ]);
     vi.advanceTimersByTime(2_300);
     expect(invalidate).toHaveBeenCalledTimes(2);
     expect(elapsed(call(state, true, invalidate))).toEqual([
-      ["muted", " · 2.3s"],
+      ["muted", " · 2s"],
     ]);
 
     expect(took({ state })).toEqual([["muted", " · 2.3s"]]);
@@ -241,7 +241,7 @@ describe("row timing", () => {
     const state: Timing = {};
     elapsed(call(state, true));
     vi.advanceTimersByTime(1_000);
-    expect(took({ state, isPartial: true })).toEqual([["muted", " · 1.0s"]]);
+    expect(took({ state, isPartial: true })).toEqual([["muted", " · 1s"]]);
     expect(vi.getTimerCount()).toBe(1);
     expect(took({ state })).toEqual([["muted", " · 1.0s"]]);
     expect(vi.getTimerCount()).toBe(0);

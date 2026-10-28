@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { glyphsOf, tierOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
+import { formatDuration, formatElapsed } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
 
 export type Segment = [color: ThemeColor, text: string, bold?: boolean];
@@ -101,11 +102,9 @@ export function tokens(n: number): string {
   return n < 1000 ? `${n} tok` : `${Math.round(n / 1000)}k tok`;
 }
 
-/** A span as a row shows it, to a tenth of a second: `3.0s`. */
-export const secondsText = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-
-export function seconds(ms: number): Segment[] {
-  return [["muted", ` · ${secondsText(ms)}`]];
+/** ` · <text>` in muted, the time fact of a row. */
+export function timeFact(text: string): Segment[] {
+  return [["muted", ` · ${text}`]];
 }
 
 // Only `took` stops a row's ticking, and Pi can drop a running row first (a chat rebuild, an
@@ -139,7 +138,8 @@ function stopTicking(state: Timing): void {
  * For `renderCall`: starts the clock when Pi starts executing the call and redraws the row each
  * second until `took` stops it. Returns the running time as a row suffix; nothing before the start
  * or after the result. A row the TUI rebuilds from a saved session never starts; an HTML export
- * starts and ends each row at once, so it shows ` · 0.0s`, as Pi's bash row shows `Took 0.0s`.
+ * starts and ends each row at once, so the call shows ` · 0s` and `took` ` · 0.0s`, as Pi's bash
+ * row shows `Took 0.0s`.
  */
 export function elapsed(context: {
   state: Timing;
@@ -152,7 +152,7 @@ export function elapsed(context: {
     startTicking(state, context.invalidate);
   }
   if (state.startedAt === undefined || state.endedAt !== undefined) return [];
-  return seconds(Date.now() - state.startedAt);
+  return timeFact(formatElapsed(Date.now() - state.startedAt));
 }
 
 /**
@@ -170,15 +170,16 @@ export function took(context: {
   if (context.isPartial && !context.isError)
     return state.startedAt === undefined
       ? []
-      : seconds(Date.now() - state.startedAt);
+      : timeFact(formatElapsed(Date.now() - state.startedAt));
   if (state.startedAt !== undefined) {
     state.endedAt ??= Date.now();
     stopTicking(state);
   }
-  if (context.durationMs !== undefined) return seconds(context.durationMs);
+  if (context.durationMs !== undefined)
+    return timeFact(formatDuration(context.durationMs));
   return state.startedAt === undefined || state.endedAt === undefined
     ? []
-    : seconds(state.endedAt - state.startedAt);
+    : timeFact(formatDuration(state.endedAt - state.startedAt));
 }
 
 /** A message's text, one sanitized line per line. */

@@ -74,7 +74,7 @@ export function titleOf(command: string): string {
 export const active = (job: ShellSnapshot) =>
   job.status === "running" || job.lingering === true;
 
-/** A span of milliseconds, whole seconds: `41s`, `12m05s`, `4h00m`. */
+/** Whole seconds, for the model's messages: `41s`, `12m05s`, `4h00m`. */
 export function duration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s`;

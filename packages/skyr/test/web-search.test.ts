@@ -775,7 +775,7 @@ describe("registerWebSearch", () => {
       vi.advanceTimersByTime(2_300);
       expect(
         row(tool.renderCall?.({ query: "pi docs" }, plainTheme, context)),
-      ).toBe('web_search "pi docs" · 2.3s');
+      ).toBe('web_search "pi docs" · 2s');
       const done = tool.renderResult?.(
         { content: [], details: { provider: "tavily", count: 3 } },
         {},

@@ -38,7 +38,7 @@ describe("readSkyrFile", () => {
     );
     expect(data).toEqual({ voice: {} });
     expect(problems).toEqual([
-      'skyr.json: "voicee" is not a section; ignored (sections: voice, advisor)',
+      'skyr.json: "voicee" is not a section; ignored (sections: voice, advisor, ui)',
     ]);
   });
 
@@ -48,9 +48,17 @@ describe("readSkyrFile", () => {
     );
     expect(data).toEqual({});
     expect(problems).toEqual([
-      'skyr.json: "webSearch" is not a section; ignored (sections: voice, advisor)',
-      'skyr.json: "subagent" is not a section; ignored (sections: voice, advisor)',
+      'skyr.json: "webSearch" is not a section; ignored (sections: voice, advisor, ui)',
+      'skyr.json: "subagent" is not a section; ignored (sections: voice, advisor, ui)',
     ]);
+  });
+
+  test("a ui section is accepted, not reported as unknown", () => {
+    const { data, problems } = readSkyrFile(
+      agentDir('{"ui":{"footer":false}}'),
+    );
+    expect(data).toEqual({ ui: { footer: false } });
+    expect(problems).toEqual([]);
   });
 
   test("a non-object file degrades to defaults with one problem", () => {
@@ -108,7 +116,7 @@ describe("reporting", () => {
       skyr: { voicee: {}, voice: { frobnicate: true } },
     });
     expect([...parent.notices].sort()).toEqual([
-      'skyr.json: "voicee" is not a section; ignored (sections: voice, advisor)',
+      'skyr.json: "voicee" is not a section; ignored (sections: voice, advisor, ui)',
       expect.stringMatching(
         /^skyr\.json: voice\."frobnicate" is not a setting; ignored/,
       ),

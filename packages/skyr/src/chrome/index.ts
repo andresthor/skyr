@@ -32,7 +32,7 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
       loaderIndicator({ theme: ctx.ui.theme, mode: tierOf(process.env) }),
     );
   const footer = createFooter();
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
     bar.stop();
     working.clear();
     footer.stop();
@@ -44,7 +44,7 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
       try {
         setIndicator(ctx);
       } finally {
-        footer.start(ctx);
+        await footer.start(ctx);
       }
     }
   });

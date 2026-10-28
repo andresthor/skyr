@@ -2,17 +2,26 @@
 // are built from facts computed when events fire.
 import { tmpdir } from "node:os";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { expect, test, vi } from "vitest";
-import { expectInert, HOSTILE, parentSession, plainTheme } from "./session.js";
+import { createFooter } from "../src/chrome/footer.js";
+import {
+  expectInert,
+  HOSTILE,
+  parentSession,
+  plainTheme,
+  scratchDir,
+} from "./session.js";
 import { piScreen, recordingUi } from "./ui.js";
 
 /** A tui session whose footer is held as Pi holds it. */
-async function tuiSession() {
+async function tuiSession(skyr?: unknown) {
   const host = recordingUi();
   const parent = await parentSession({
     respond: () => fauxAssistantMessage("ok"),
     mode: "tui",
     ui: host.ui,
+    skyr,
   });
   const lines = (width = 100) => host.footer()?.render(width) ?? [];
   const sets = () => host.calls.filter(({ method }) => method === "setFooter");
@@ -191,4 +200,60 @@ test("the footer never crashes Pi's renderer at 20, 40 and 86 columns", async ()
     expect(firstFrameCrash).toBeUndefined();
     expect(crash).toBeUndefined();
   }
+});
+
+test("ui.footer false never calls setFooter", async () => {
+  const { sets, notices } = await tuiSession({ ui: { footer: false } });
+  expect(sets()).toEqual([]);
+  expect(notices()).toEqual([]);
+});
+
+test("a ui section with a non-boolean footer or an unknown key is reported once and the footer stays on", async () => {
+  const { sets, notices } = await tuiSession({
+    ui: { footer: "yes", colour: 1 },
+  });
+  expect(sets()).toHaveLength(1);
+  expect(notices()).toHaveLength(1);
+  expect(notices()[0]?.args).toEqual([
+    [
+      'skyr.json: ui."colour" is not a setting; ignored (settings: footer)',
+      "skyr.json: ui.footer must be true or false; using true",
+    ].join("\n"),
+    "warning",
+  ]);
+});
+
+test("a ui section that is not an object is reported and the footer stays on", async () => {
+  const { sets, notices } = await tuiSession({ ui: [] });
+  expect(sets()).toHaveLength(1);
+  expect(notices()).toHaveLength(1);
+});
+
+test("a malformed skyr.json still gets the footer", async () => {
+  const { sets, footer } = await tuiSession("{not json");
+  expect(sets()).toHaveLength(1);
+  expect(footer()).toBeDefined();
+});
+
+test("a start overtaken while the settings are read installs nothing, and the latest start installs once", async () => {
+  vi.stubEnv("PI_CODING_AGENT_DIR", scratchDir("agent"));
+  const host = recordingUi();
+  const ctx = {
+    mode: "tui",
+    ui: host.ui,
+    sessionManager: { getCwd: () => "/x", getSessionName: () => undefined },
+  } as unknown as ExtensionContext;
+  const footer = createFooter();
+
+  const stopped = footer.start(ctx);
+  footer.stop();
+  await stopped;
+  expect(host.calls.filter(({ method }) => method === "setFooter")).toEqual([]);
+
+  const first = footer.start(ctx);
+  const second = footer.start(ctx);
+  await Promise.all([first, second]);
+  expect(
+    host.calls.filter(({ method }) => method === "setFooter"),
+  ).toHaveLength(1);
 });

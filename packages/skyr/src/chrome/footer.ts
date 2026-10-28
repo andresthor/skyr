@@ -10,11 +10,16 @@ import type {
 import { canDraw, tierOf } from "../ui/caps.js";
 import { guard } from "../ui/guard.js";
 import { describeCause, oneLine } from "../ui/text.js";
+import { readUiSettings } from "../ui-config.js";
 import { type FooterFacts, footerLines, statusesLine } from "./footer-view.js";
 
 export interface Footer {
-  /** Replaces Pi's footer in the terminal UI; a no-op elsewhere. */
-  start(ctx: ExtensionContext): void;
+  /**
+   * Replaces Pi's footer in the terminal UI unless `ui.footer` is false; a no-op elsewhere. A
+   * `start` that `stop` or a later `start` overtakes while it reads the settings installs nothing.
+   * Call it after `stop`: a footer still mounted is not released here, only by Pi disposing it.
+   */
+  start(ctx: ExtensionContext): Promise<void>;
   /** Recomputes the facts from `ctx`, which is not kept; a no-op while nothing is mounted. */
   refresh(ctx: ExtensionContext): void;
   /** Lets go of everything the footer holds; never calls Pi's UI, and is idempotent. */
@@ -54,6 +59,8 @@ export function createFooter(): Footer {
   let mounted: Mounted | undefined;
   let facts: FooterFacts | undefined;
   let reported = false;
+  // Counts the starts and stops, so a start that was overtaken can tell
+  let current = 0;
 
   /**
    * Gives the slot back to Pi's footer and tells the user once. Only for a footer still mounted:
@@ -90,10 +97,17 @@ export function createFooter(): Footer {
   };
 
   return {
-    start(ctx) {
+    async start(ctx) {
       if (!canDraw(ctx)) return;
-      reported = false;
+      const generation = ++current;
       const target = ctx.ui;
+      const settings = await readUiSettings();
+      // `ctx` is only safe to read while its session is the current one
+      if (generation !== current) return;
+      if (settings.problems.length > 0)
+        target.notify(settings.problems.join("\n"), "warning");
+      if (!settings.footer) return;
+      reported = false;
       ui = target;
       facts = factsOf(ctx);
       target.setFooter((tui, theme, data) => {
@@ -172,6 +186,9 @@ export function createFooter(): Footer {
         fail(cause);
       }
     },
-    stop: teardown,
+    stop() {
+      current += 1;
+      teardown();
+    },
   };
 }

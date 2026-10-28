@@ -14,7 +14,7 @@ import { loadPi } from "./pi.js";
 import { clip, quoted } from "./ui/text.js";
 
 /** One key per module that reads the file; a section is added with the code that reads it. */
-const SECTIONS = ["voice", "advisor"] as const;
+const SECTIONS = ["voice", "advisor", "ui"] as const;
 
 type Section = (typeof SECTIONS)[number];
 type ConfigFile = Partial<Record<Section, unknown>>;

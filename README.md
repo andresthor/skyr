@@ -289,7 +289,8 @@ part misses the cache.
 ## Footer
 
 skyr replaces Pi's footer in the terminal UI: the directory, git branch and session name, and a
-line of other extensions' statuses. It is drawn nowhere else.
+line of other extensions' statuses. It is drawn nowhere else. `{"ui": {"footer": false}}` in
+`<agentDir>/skyr.json` leaves Pi's footer, from the next session.
 
 ## Embedding it
 

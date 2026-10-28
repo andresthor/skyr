@@ -28,9 +28,21 @@ export function sanitize(raw: string): string {
   return stripInvisible(stripTerminalSequences(raw).replace(/\s+/g, " "));
 }
 
-/** Model-supplied text bound for an error message: its length is unbounded, so keep it readable. */
+/**
+ * Model-supplied text bound for an error message: its length is unbounded, so keep it readable.
+ * Cuts between grapheme clusters, so an emoji sequence, a flag or a letter with its accents is
+ * kept whole or dropped whole.
+ */
 export function clip(text: string, max = 120): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
+  // A cluster is at least one code unit, so text this short cannot hold more than `max`
+  if (text.length <= max) return text;
+  const kept: string[] = [];
+  const segments = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  for (const { segment } of segments.segment(text)) {
+    if (kept.length === max) return `${kept.join("")}…`;
+    kept.push(segment);
+  }
+  return text;
 }
 
 /** Server- or vendor-written text bound for a one-line message: sanitized, trimmed, clipped. */

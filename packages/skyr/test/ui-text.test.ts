@@ -1,6 +1,12 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
-import { quoted, sanitize, stripInvisible } from "../src/ui/text.js";
+import {
+  clip,
+  oneLine,
+  quoted,
+  sanitize,
+  stripInvisible,
+} from "../src/ui/text.js";
 
 const OSC52 = "\u001b]52;c;cHduZWQ=\u0007";
 
@@ -101,5 +107,31 @@ describe("quoted", () => {
     const family = "\u{1F468}\u200d\u{1F469}";
     const persian = "\u0628\u200c\u0631";
     expect(quoted(`${family} ${persian}`, 40)).toBe(`"${family} ${persian}"`);
+  });
+});
+
+describe("clip", () => {
+  test("a cut never splits a surrogate pair", () => {
+    const text = `${"a".repeat(9)}\u{1F642}\u{1F642}`;
+    expect(clip(text, 10)).toBe(`${"a".repeat(9)}\u{1F642}…`);
+    expect(oneLine(text, 10)).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
+  test.each([
+    ["a ZWJ family", "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}"],
+    ["a flag", "\u{1F1E9}\u{1F1EA}"],
+    ["a skin-toned emoji", "\u{1F44D}\u{1F3FD}"],
+    ["a letter with a combining accent", "e\u0301"],
+  ])("a cut keeps %s whole or drops it whole", (_, cluster) => {
+    expect(clip(`ab${cluster}cd`, 3)).toBe(`ab${cluster}…`);
+    expect(clip(`ab${cluster}cd`, 2)).toBe("ab…");
+    expect(clip(`${cluster}${cluster}`, 1)).toBe(`${cluster}…`);
+  });
+
+  test("text within the limit is returned whole", () => {
+    expect(clip("abc", 3)).toBe("abc");
+    expect(clip("\u{1F642}\u{1F642}", 2)).toBe("\u{1F642}\u{1F642}");
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+    expect(clip(family, 1)).toBe(family);
   });
 });

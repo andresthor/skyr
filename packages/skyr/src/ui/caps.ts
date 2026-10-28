@@ -19,8 +19,14 @@ export function tierOf(env: NodeJS.ProcessEnv): Tier {
     : "color";
 }
 
-/** What a row of the bar is doing; each has its own glyph, so a state never rests on colour. */
-export type Mark = "queued" | "running" | "failed";
+/** What a row of the bar or the transcript is doing; each has its own glyph, so a state never rests on colour. */
+export type Mark =
+  | "queued"
+  | "running"
+  | "failed"
+  | "done"
+  | "stopped"
+  | "mixed";
 
 export interface Glyphs {
   /** What a cut line ends in. */
@@ -28,21 +34,43 @@ export interface Glyphs {
   readonly mark: Readonly<Record<Mark, string>>;
   /** Leads a current action. */
   readonly now: string;
+  /** The left edge of the lines under a record. */
+  readonly rail: string;
+  /** What leads a child record: one that has siblings after it, and the last one. */
+  readonly branch: { readonly mid: string; readonly last: string };
   /** Between the facts of a line, spaces included. */
   readonly sep: string;
 }
 
 const UNICODE: Glyphs = {
   ellipsis: "…",
-  mark: { queued: "□", running: "•", failed: "×" },
+  mark: {
+    queued: "□",
+    running: "•",
+    failed: "×",
+    done: "✓",
+    stopped: "■",
+    mixed: "!",
+  },
   now: "›",
+  rail: "│",
+  branch: { mid: "├", last: "└" },
   sep: " · ",
 };
 
 const ASCII: Glyphs = {
   ellipsis: "...",
-  mark: { queued: "o", running: "*", failed: "x" },
+  mark: {
+    queued: "o",
+    running: "*",
+    failed: "x",
+    done: "+",
+    stopped: "#",
+    mixed: "!",
+  },
   now: ">",
+  rail: "|",
+  branch: { mid: "|", last: "`" },
   sep: " - ",
 };
 

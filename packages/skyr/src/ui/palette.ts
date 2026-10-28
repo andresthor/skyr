@@ -7,13 +7,15 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TextStyle } from "@earendil-works/pi-tui";
 import type { Mark, Tier } from "./caps.js";
 
-type Token =
+export type Token =
   | "accent"
   | "text"
   | "muted"
   | "dim"
   | "error"
   | "warning"
+  | "success"
+  | "toolTitle"
   | "selectedBg";
 
 /**
@@ -39,6 +41,9 @@ export const markToken: Readonly<Record<Mark, Token>> = {
   queued: "dim",
   running: "accent",
   failed: "error",
+  done: "success",
+  stopped: "muted",
+  mixed: "warning",
 };
 
 /** `text` in `style`, in the theme's colour mode; `mono` drops the colour and keeps the attributes, `ascii` draws plain text. */

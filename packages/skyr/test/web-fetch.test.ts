@@ -1,8 +1,11 @@
 import { readFile } from "node:fs/promises";
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test, vi } from "vitest";
+import type {
+  ExtensionAPI,
+  ToolRenderers,
+} from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, test } from "vitest";
 import { registerSkyr } from "../src/index.js";
-import type { Timing } from "../src/tools/render.js";
 import {
   assertPublicUrl,
   type FetchDeps,
@@ -11,6 +14,10 @@ import {
   type Lookup,
   webFetch,
 } from "../src/tools/web-fetch.js";
+import { piScreen, toolRowHost } from "./ui.js";
+
+const ESC = "\u001b";
+const BEL = "\u0007";
 
 const publicLookup: Lookup = async () => [
   { address: "93.184.215.14", family: 4 },
@@ -402,45 +409,13 @@ describe("htmlToMarkdown", () => {
   });
 });
 
-/** Only what these tests call: a narrow shape keeps them free of Pi's generics. */
-interface Captured {
+/** Only what these tests read of a registered tool: a narrow shape keeps them free of Pi's generics. */
+interface Captured extends ToolRenderers {
   name: string;
   label: string;
   annotations?: { readOnlyHint?: boolean; openWorldHint?: boolean };
   promptGuidelines?: string[];
-  renderCall?: (
-    args: { url?: string },
-    theme: Theme,
-    context: CallContext,
-  ) => { render(width: number): string[] };
-  renderResult?: (
-    result: {
-      content: { type: string; text?: string }[];
-      details: FetchDetails;
-    },
-    options: unknown,
-    theme: Theme,
-    context: { state: Timing; isError: boolean },
-  ) => { render(width: number): string[] };
 }
-
-const plainTheme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as unknown as Theme;
-
-type CallContext = {
-  state: Timing;
-  executionStarted: boolean;
-  invalidate: () => void;
-};
-
-/** A row as Pi rebuilds it from a saved session: never started, so never timed. */
-const untimed = (): CallContext => ({
-  state: {},
-  executionStarted: false,
-  invalidate: () => {},
-});
 
 /** registerSkyr is the entry a host calls, so register through it rather than the tool. */
 function registered(): Captured {
@@ -461,8 +436,12 @@ function registered(): Captured {
   return tool;
 }
 
-const row = (component: { render(width: number): string[] }) =>
-  (component.render(200)[0] ?? "").trimEnd();
+/** The row's lines at `width`, escapes stripped, the blank line Pi leads a row with dropped. */
+const rowAt = (host: ReturnType<typeof toolRowHost>, width = 200) =>
+  host
+    .lines(width)
+    .slice(1)
+    .map((line) => stripTerminalSequences(line).trimEnd());
 
 describe("registerWebFetch", () => {
   test("registerSkyr registers web_fetch", () => {
@@ -483,83 +462,95 @@ describe("registerWebFetch", () => {
     );
   });
 
-  test("the call row names the tool and the url", () => {
-    const component = registered().renderCall?.(
-      { url: "https://x.dev/a" },
-      plainTheme,
-      untimed(),
-    );
-    expect(component && row(component)).toBe("web_fetch https://x.dev/a");
+  test("the row names the url without its scheme", () => {
+    const host = toolRowHost(registered(), { url: "https://x.dev/a" });
+    expect(rowAt(host)).toEqual([" • fetch    x.dev/a"]);
   });
 
   test("arguments still streaming show no placeholder text, not undefined", () => {
-    const component = registered().renderCall?.({}, plainTheme, untimed());
-    expect(component && row(component)).toBe("web_fetch");
+    const host = toolRowHost(registered(), {});
+    expect(rowAt(host)).toEqual([" • fetch"]);
   });
 
-  test("the result row reports the size, and says when the page was cut", () => {
-    const renderResult = registered().renderResult;
-    if (!renderResult) throw new Error("web_fetch registered no renderResult");
-    const render = (details: FetchDetails) =>
-      row(
-        renderResult({ content: [], details }, {}, plainTheme, {
-          state: {},
-          isError: false,
-        }),
-      );
+  test("the finished row reports the size, and says when the page was cut", () => {
+    const finished = (details: FetchDetails) => {
+      const host = toolRowHost(registered(), { url: "https://x.dev/a" });
+      host.update({ content: [], details });
+      return rowAt(host);
+    };
     expect(
-      render({ url: "https://x.dev/a", bytes: 12_288, truncated: false }),
-    ).toBe("12 KB");
+      finished({ url: "https://x.dev/a", bytes: 12_288, truncated: false }),
+    ).toEqual([expect.stringMatching(/^ ✓ fetch {4}x\.dev\/a +12 KB$/)]);
     expect(
-      render({ url: "https://x.dev/a", bytes: 512, truncated: true }),
-    ).toBe("512 B · truncated");
+      finished({ url: "https://x.dev/a", bytes: 512, truncated: true }),
+    ).toEqual([expect.stringMatching(/512 B · truncated$/)]);
   });
 
-  test("a live call shows its running time, and its result the time it took", () => {
-    vi.useFakeTimers();
-    try {
-      const tool = registered();
-      const context = { ...untimed(), executionStarted: true };
-      tool.renderCall?.({ url: "https://x.dev/a" }, plainTheme, context);
-      vi.advanceTimersByTime(2_300);
-      const running = tool.renderCall?.(
-        { url: "https://x.dev/a" },
-        plainTheme,
-        context,
-      );
-      expect(running && row(running)).toBe("web_fetch https://x.dev/a · 2s");
-      const done = tool.renderResult?.(
+  test("the time shown is Pi's measure of the call, and a row without one shows none", () => {
+    const host = toolRowHost(registered(), { url: "https://x.dev/a" });
+    host.update({
+      content: [],
+      details: { url: "https://x.dev/a", bytes: 2048, truncated: false },
+      durationMs: 2300,
+    });
+    expect(rowAt(host)[0]).toMatch(/2 KB · 2\.3s$/);
+    const saved = toolRowHost(registered(), { url: "https://x.dev/a" });
+    saved.update({
+      content: [],
+      details: { url: "https://x.dev/a", bytes: 2048, truncated: false },
+    });
+    expect(rowAt(saved)[0]).toMatch(/2 KB$/);
+  });
+
+  test("a failure shows its reason without the tool's name, and the rest of the message on a rail", () => {
+    const host = toolRowHost(registered(), { url: "https://x.dev/a" });
+    host.update({
+      content: [
         {
-          content: [],
-          details: { url: "https://x.dev/a", bytes: 2048, truncated: false },
+          type: "text",
+          text: "web_fetch: HTTP 404 from https://x.dev/a\nmore\nand more",
         },
-        {},
-        plainTheme,
-        { state: context.state, isError: false },
-      );
-      expect(done && row(done)).toBe("2 KB · 2.3s");
-    } finally {
-      vi.useRealTimers();
+      ],
+      isError: true,
+      durationMs: 400,
+    });
+    const [head, ...rail] = rowAt(host);
+    expect(head).toMatch(
+      /^ × fetch +x\.dev\/a +HTTP 404 from https:\/\/x\.dev\/a · 0\.4s$/,
+    );
+    expect(rail).toEqual(["   │ more", "   │ and more"]);
+  });
+
+  test("details of another shape, or none, draw a plain record rather than throw", () => {
+    for (const details of [undefined, null, 42, "text", {}, { bytes: "12" }]) {
+      const host = toolRowHost(registered(), { url: "https://x.dev/a" });
+      host.update({
+        content: [{ type: "text", text: "the page's first line\nsecond" }],
+        details,
+      });
+      const [line] = rowAt(host);
+      expect(line).toMatch(/^ ✓ fetch +x\.dev\/a +the page's first line$/);
     }
   });
 
-  test("the result row shows the first line of a failure", () => {
-    const component = registered().renderResult?.(
-      {
-        content: [
-          {
-            type: "text",
-            text: "web_fetch: HTTP 404 from https://x.dev/a\nmore",
-          },
-        ],
-        details: { url: "", bytes: 0, truncated: false },
-      },
-      {},
-      plainTheme,
-      { state: {}, isError: true },
-    );
-    expect(component && row(component)).toBe(
-      "web_fetch: HTTP 404 from https://x.dev/a",
-    );
+  test("a hostile url is inert and the row fits 20 columns", () => {
+    const url = `https://x.dev/${ESC}]52;c;cHduZWQ=${BEL}${ESC}[2J\u202e${"漢".repeat(40)}`;
+    const host = toolRowHost(registered(), { url });
+    for (const phase of ["running", "done"]) {
+      if (phase === "done")
+        host.update({
+          content: [],
+          details: { url, bytes: 1, truncated: false },
+        });
+      const lines = host.lines(20);
+      for (const line of lines) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(20);
+        expect(line).not.toContain(`${ESC}]`);
+        expect(line).not.toContain("\u202e");
+      }
+      expect(piScreen({ invalidate() {}, render: host.lines }, 20).crash).toBe(
+        undefined,
+      );
+    }
   });
 });

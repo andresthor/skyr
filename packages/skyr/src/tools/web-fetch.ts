@@ -10,12 +10,20 @@
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import TurndownService from "turndown";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { errnoOf } from "../errno.js";
 import { loadPi } from "../pi.js";
-import { clip, stripInvisible } from "../ui/text.js";
+import type { Fact } from "../ui/record.js";
+import {
+  durationFact,
+  failedRow,
+  plainRow,
+  type Row,
+  type ToolView,
+  toolRenderers,
+} from "../ui/row.js";
+import { clip, sanitize, stripInvisible } from "../ui/text.js";
 import { isPrivateAddress, redactUrl, withTimeout } from "./net.js";
-import { elapsed, errorRow, took, toolRow } from "./render.js";
 import { spill } from "./spill.js";
 
 const TIMEOUT_MS = 30_000;
@@ -346,6 +354,39 @@ const Params = Type.Object({
   url: Type.String({ description: "Absolute http or https URL" }),
 });
 
+function isFetchDetails(details: unknown): details is FetchDetails {
+  if (typeof details !== "object" || details === null) return false;
+  const d = details as Partial<FetchDetails>;
+  return (
+    typeof d.url === "string" &&
+    typeof d.bytes === "number" &&
+    typeof d.truncated === "boolean"
+  );
+}
+
+/** The ledger record of a fetch: the address, then what came back. */
+function fetchRow({ args, settled }: ToolView<Static<typeof Params>>): Row {
+  const url = typeof args.url === "string" ? args.url : "";
+  const head = {
+    verb: "fetch",
+    subject: [sanitize(url).replace(/^https:\/\//, "")],
+    subjectKind: "path",
+  } as const;
+  if (!settled) return { head: { ...head, mark: "running", facts: [] } };
+  const duration = durationFact(settled);
+  if (settled.isError) return failedRow(head, settled, "web_fetch");
+  if (!isFetchDetails(settled.details))
+    return plainRow(head, settled, "web_fetch");
+  const facts: Fact[] = [
+    { text: kb(settled.details.bytes), kind: "measure" },
+    ...(settled.details.truncated
+      ? [{ text: "truncated", kind: "extra" } as const]
+      : []),
+    ...duration,
+  ];
+  return { head: { ...head, mark: "done", facts } };
+}
+
 export function registerWebFetch(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "web_fetch",
@@ -362,21 +403,6 @@ export function registerWebFetch(pi: ExtensionAPI): void {
       const { text, details } = await webFetch(params.url, toolCallId, signal);
       return { content: [{ type: "text", text }], details };
     },
-    renderCall(args, theme, context) {
-      return toolRow(theme, [
-        ["toolTitle", "web_fetch ", true],
-        ["muted", args.url ?? ""],
-        ...elapsed(context),
-      ]);
-    },
-    renderResult(result, _options, theme, context) {
-      const time = took(context);
-      if (context.isError) return errorRow(theme, result.content, time);
-      const { bytes, truncated } = result.details;
-      return toolRow(theme, [
-        ["muted", `${kb(bytes)}${truncated ? " · truncated" : ""}`],
-        ...time,
-      ]);
-    },
+    ...toolRenderers<Static<typeof Params>>(fetchRow),
   });
 }

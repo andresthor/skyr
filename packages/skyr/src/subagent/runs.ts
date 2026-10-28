@@ -187,6 +187,10 @@ class UnknownAgent extends Error {}
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+/** What follows "was stopped" when the session's end, not the user, stopped a child. */
+const sessionStop = (reason: unknown) =>
+  reason === "reload" ? " because Pi reloaded" : " because the session ended";
+
 /** The directory where one session's child sessions live, next to the parent's .jsonl. */
 function childSessionDir(parentFile: string | undefined): string | undefined {
   return parentFile === undefined
@@ -688,9 +692,7 @@ export function createRuns(
           ? ""
           : childSignal.reason !== sessionSignal.reason
             ? " by the user"
-            : sessionSignal.reason === "reload"
-              ? " because Pi reloaded"
-              : " because the session ended";
+            : sessionStop(sessionSignal.reason);
       const id = call.id;
 
       // A continue's worktree may hold its earlier run's writes; only a fresh one can be known empty.

@@ -24,13 +24,7 @@ import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { addUsage } from "./child/protocol.js";
 import { resultText, startedText } from "./result.js";
 import { createRuns, MESSAGE_TYPE, Task } from "./runs.js";
-import {
-  count,
-  labelOf,
-  RUN_STATUSES,
-  type RunSnapshot,
-  taskOf,
-} from "./store.js";
+import { count, isRun, labelOf, type RunSnapshot, taskOf } from "./store.js";
 import { laneLine, laneTree, widgetLines } from "./view.js";
 import { repoRoot } from "./worktree.js";
 
@@ -72,19 +66,6 @@ function describe(agents: Map<string, AgentDef>): string {
   const list =
     lines.length > 0 ? `Agents:\n${lines.join("\n")}` : "Agents: none defined.";
   return `${ABOUT}\n\n${ADHOC}\n\n${list}`;
-}
-
-function isRun(details: unknown): details is RunSnapshot {
-  if (typeof details !== "object" || details === null) return false;
-  const run: Record<string, unknown> = { ...details };
-  return (
-    typeof run.id === "string" &&
-    typeof run.description === "string" &&
-    (run.agent === undefined || typeof run.agent === "string") &&
-    (run.error === undefined || typeof run.error === "string") &&
-    RUN_STATUSES.some((status) => status === run.status) &&
-    [run.startedAt, run.turns, run.toolCalls, run.tokens].every(Number.isFinite)
-  );
 }
 
 /**

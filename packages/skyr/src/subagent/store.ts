@@ -6,7 +6,7 @@ import type { TaskItem } from "../tengi.js";
 import { clip } from "../tools/render.js";
 import type { ChildEvent } from "./runner.js";
 
-export const RUN_STATUSES = [
+const RUN_STATUSES = [
   "queued",
   "running",
   "done",
@@ -44,6 +44,20 @@ export interface RunSnapshot {
   spillFile?: string;
   /** Why an ended run gave no answer; present exactly when it gave none, so never while live. */
   error?: string;
+}
+
+/** Whether `details` has every field of a run that anything here reads. */
+export function isRun(details: unknown): details is RunSnapshot {
+  if (typeof details !== "object" || details === null) return false;
+  const run: Record<string, unknown> = { ...details };
+  return (
+    typeof run.id === "string" &&
+    typeof run.description === "string" &&
+    (run.agent === undefined || typeof run.agent === "string") &&
+    (run.error === undefined || typeof run.error === "string") &&
+    RUN_STATUSES.some((status) => status === run.status) &&
+    [run.startedAt, run.turns, run.toolCalls, run.tokens].every(Number.isFinite)
+  );
 }
 
 type RunEvent =

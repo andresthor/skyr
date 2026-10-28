@@ -283,7 +283,7 @@ export function messageComponent(
   message: { content: string | readonly { type: string; text?: string }[] },
   options: { expanded: boolean; outputPad: number },
   previewLines: number,
-  records: (text: string) => readonly Row[] | undefined,
+  records: (text: string, expanded: boolean) => readonly Row[] | undefined,
 ): Component {
   const { expanded, outputPad } = options;
   const text =
@@ -307,7 +307,7 @@ export function messageComponent(
       );
     });
   try {
-    const rows = records(text);
+    const rows = records(text, expanded);
     if (!rows) return asText();
     const memos = rows.map((): Memo => ({}));
     return drawn((width) =>

@@ -5,9 +5,11 @@
 import type { TaskItem } from "../tengi.js";
 import { oneLine } from "../ui/text.js";
 
-type ShellStatus = "running" | "done" | "failed" | "aborted" | "unknown";
+const STATUSES = ["running", "done", "failed", "aborted", "unknown"] as const;
+type ShellStatus = (typeof STATUSES)[number];
+const STOP_REASONS = ["agent", "user", "session", "pi"] as const;
 /** `pi`: stopped by a later session's cleanup after the Pi that started the job was gone. */
-export type StopReason = "agent" | "user" | "session" | "pi";
+export type StopReason = (typeof STOP_REASONS)[number];
 
 export interface ShellSnapshot {
   /** 8 hex chars; the only id the model sees. */
@@ -26,6 +28,23 @@ export interface ShellSnapshot {
   stopReason?: StopReason;
   /** The shell exited; its process group still has members. */
   lingering?: true;
+}
+
+/** Whether `details` has every field of a snapshot that a transcript record reads. */
+export function isShellSnapshot(details: unknown): details is ShellSnapshot {
+  if (typeof details !== "object" || details === null) return false;
+  const job: Record<string, unknown> = { ...details };
+  return (
+    typeof job.id === "string" &&
+    typeof job.command === "string" &&
+    typeof job.log === "string" &&
+    STATUSES.some((status) => status === job.status) &&
+    Number.isFinite(job.startedAt) &&
+    (job.endedAt === undefined || Number.isFinite(job.endedAt)) &&
+    (job.exitCode === undefined || Number.isFinite(job.exitCode)) &&
+    (job.stopReason === undefined ||
+      STOP_REASONS.some((reason) => reason === job.stopReason))
+  );
 }
 
 export interface ShellStore {

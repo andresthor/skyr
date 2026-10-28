@@ -9,8 +9,10 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
   type ExtensionFactory,
+  type MessageRenderer,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
 import type { BarHandle } from "../src/chrome/bar.js";
@@ -37,6 +39,7 @@ import {
   toolNamed,
   useAgentDir,
 } from "./shells-runtime.js";
+import { messageHost, piScreen, toolRowHost } from "./ui.js";
 
 const replacement = {
   ...createBashToolDefinition(process.cwd()),
@@ -646,15 +649,12 @@ describe("bash_stop's place in the active tools", () => {
   });
 });
 
-test("the message a job's end is delivered in is drawn with no escape sequence from the job's output", async () => {
-  let draw!: (
-    message: unknown,
-    options: object,
-    theme: object,
-  ) => { render(width: number): string[] };
+/** The renderer skyr registers for the messages that tell a job's end. */
+async function shellMessageRenderer(): Promise<MessageRenderer> {
+  let draw: MessageRenderer | undefined;
   wireShells(
     fakePi({
-      registerMessageRenderer: (type: string, fn: typeof draw) => {
+      registerMessageRenderer: (type: string, fn: MessageRenderer) => {
         if (type === "skyr.shell") draw = fn;
       },
     }),
@@ -662,14 +662,192 @@ test("the message a job's end is delivered in is drawn with no escape sequence f
     "owner-token",
     NO_BAR,
   );
-  const plain = (_color: string, text: string) => text;
-  const text = `[background job "x" (id ab12cd34): exited with code 0 after 1s]\n${HOSTILE}`;
-  const lines = draw(
-    { content: [{ type: "text", text }] },
-    { expanded: true, outputPad: 1 },
-    { bg: plain, fg: plain },
-  ).render(80);
-  expect(lines.join("\n")).toContain("evil");
-  expect(lines.join("\n")).not.toContain("\u001b");
-  expectInert(lines, 80);
+  if (!draw) throw new Error("skyr registered no renderer for skyr.shell");
+  return draw;
+}
+
+const SNAPSHOT: ShellSnapshot = {
+  id: "ab12cd34",
+  command: "sleep 40; echo done",
+  cwd: "/repo",
+  log: "/jobs/ab12cd34/out.log",
+  startedAt: 1_000,
+  endedAt: 41_000,
+  status: "done",
+  exitCode: 0,
+};
+
+const DELIVERY = `[background job "sleep 40; echo done" (id ab12cd34): exited with code 0 after 40s. Log: /jobs/ab12cd34/out.log. Do not poll.]\nLast output:\nthe tail of the job's output`;
+
+const screenOf = (lines: string[]) =>
+  lines.map((line) => stripTerminalSequences(line).trimEnd());
+
+describe("the transcript", () => {
+  const message = (details: unknown, text = DELIVERY) => ({
+    customType: "skyr.shell",
+    content: [{ type: "text", text }],
+    details,
+  });
+
+  test("a delivered job's end is one record with its exit and time, and no bracket text, instruction or output tail", async () => {
+    const draw = await shellMessageRenderer();
+    const failed = {
+      ...SNAPSHOT,
+      id: "ff00ff00",
+      status: "failed" as const,
+      exitCode: 3,
+    };
+    for (const expanded of [false, true]) {
+      const rows = screenOf(
+        messageHost(draw, message([SNAPSHOT, failed]), { expanded }).lines(120),
+      ).slice(1);
+      expect(rows[0]).toMatch(
+        /^ ✓ bash & +sleep 40; echo done +← delivered · exit 0 · 40s +ab12cd34$/,
+      );
+      expect(rows.find((row) => row.includes("ff00ff00"))).toMatch(
+        /^ × bash & .*← delivered · exit 3 · 40s +ff00ff00$/,
+      );
+      const screen = rows.join("\n");
+      for (const leaked of [
+        "background job",
+        "Do not poll",
+        "Last output",
+        "the tail of",
+      ])
+        expect(screen).not.toContain(leaked);
+    }
+  });
+
+  test("expanded names the log, and the record above it does not change", async () => {
+    const draw = await shellMessageRenderer();
+    const collapsed = screenOf(
+      messageHost(draw, message([SNAPSHOT])).lines(120),
+    );
+    const expanded = screenOf(
+      messageHost(draw, message([SNAPSHOT]), { expanded: true }).lines(120),
+    );
+    expect(collapsed).toHaveLength(2);
+    expect(expanded[1]).toBe(collapsed[1]);
+    expect(expanded[2]).toBe("   │ log /jobs/ab12cd34/out.log");
+  });
+
+  test("a roll call and a lingering job draw their own states", async () => {
+    const draw = await shellMessageRenderer();
+    const rows = screenOf(
+      messageHost(
+        draw,
+        message([
+          {
+            ...SNAPSHOT,
+            status: "running",
+            endedAt: undefined,
+            exitCode: undefined,
+          },
+          { ...SNAPSHOT, id: "11112222", lingering: true },
+        ]),
+      ).lines(120),
+    ).slice(1);
+    expect(rows[0]).toMatch(
+      /^ • bash & +sleep 40; echo done +still running +ab12cd34$/,
+    );
+    expect(rows[1]).toMatch(/^ ! bash & .*lingering · exit 0 · 40s +11112222$/);
+  });
+
+  test("details of another shape fall back to the sanitized text, without a box", async () => {
+    const draw = await shellMessageRenderer();
+    for (const details of [undefined, [], [{ id: "x" }], { ...SNAPSHOT }]) {
+      const lines = messageHost(draw, message(details, HOSTILE), {}).lines(60);
+      expect(lines.join("")).not.toContain("\u001b[48");
+      expect(lines.join("")).not.toContain("[skyr.shell]");
+      expect(stripTerminalSequences(lines.join("\n"))).toContain("evil");
+      expectInert(lines, 60);
+    }
+  });
+
+  test("a job's hostile command and the message's hostile text are inert at 20 columns", async () => {
+    const draw = await shellMessageRenderer();
+    const hostile = { ...SNAPSHOT, command: HOSTILE, log: HOSTILE };
+    for (const expanded of [false, true])
+      expectInert(
+        messageHost(draw, message([hostile], HOSTILE), { expanded }).lines(20),
+        20,
+      );
+  });
+});
+
+describe("bash_stop's row", () => {
+  test("is the call, then a stop record with the job's time, and fits 20 columns", async () => {
+    let reply = call(slow(gateFile()), "c1");
+    const rt = await shellRuntime({
+      extensions: [shells],
+      respond: () => {
+        const next = reply;
+        reply = fauxAssistantMessage("ok");
+        return next;
+      },
+    });
+    await rt.session.prompt("go");
+    const { id } = resultOf(rt.session, "c1").job as ShellSnapshot;
+    reply = fauxAssistantMessage([
+      fauxToolCall("bash_stop", { id }, { id: "stop" }),
+    ]);
+    await rt.session.prompt("now stop it");
+    const stop = resultOf(rt.session, "stop");
+    const tool = rt.session.getToolDefinition("bash_stop");
+    if (!tool) throw new Error("no bash_stop");
+
+    const host = toolRowHost(tool, { id });
+    expect(screenOf(host.lines(100)).slice(1)).toEqual([
+      expect.stringMatching(new RegExp(`^ • stop +${id}$`)),
+    ]);
+    host.update({
+      content: [{ type: "text", text: stop.text }],
+      details: stop.details,
+    });
+    const rows = screenOf(host.lines(240)).slice(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatch(/^ ■ stop +.+ +stopped · \d+\.\ds +[0-9a-f]{8}$/);
+    for (const width of [20, 40]) {
+      expectInert(host.lines(width), width);
+      expect(
+        piScreen({ invalidate() {}, render: host.lines }, width).crash,
+      ).toBe(undefined);
+    }
+    host.expand(true);
+    expect(screenOf(host.lines(240))[2]).toMatch(/^ {3}│ log .+out\.log$/);
+  });
+
+  test("an error shows its reason and the rest on a rail, and another shape of details a plain record", async () => {
+    const rt = await shellRuntime({
+      extensions: [shells],
+      respond: () => fauxAssistantMessage("ok"),
+    });
+    await rt.session.prompt("go");
+    const tool = rt.session.getToolDefinition("bash_stop");
+    if (!tool) throw new Error("no bash_stop");
+    const failed = toolRowHost(tool, { id: "nope" });
+    failed.update({
+      content: [
+        {
+          type: "text",
+          text: 'bash_stop: no job "nope". Running: none.\nmore',
+        },
+      ],
+      isError: true,
+    });
+    expect(screenOf(failed.lines(100)).slice(1)).toEqual([
+      expect.stringMatching(/^ × stop +nope +no job "nope"\. Running: none\.$/),
+      "   │ more",
+    ]);
+    for (const details of [undefined, {}, "x", { id: 1 }]) {
+      const odd = toolRowHost(tool, { id: "ab" });
+      odd.update({
+        content: [{ type: "text", text: "Stopped job ab" }],
+        details,
+      });
+      expect(screenOf(odd.lines(100))[1]).toMatch(
+        /^ ✓ stop +ab +Stopped job ab$/,
+      );
+    }
+  });
 });

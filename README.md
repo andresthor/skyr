@@ -226,7 +226,8 @@ is not lost to a timeout or a wait: it can keep running, and the model is told w
 - **Messages.** A job's end arrives when the session is idle and starts a turn: its exit code or
   how it was stopped, the last lines of output and the log path. After a `/compact` the model is
   reminded of the jobs still running. A shell that exits and leaves processes in its group is
-  reported once as lingering, and `bash_stop` ends them.
+  reported once as lingering, and `bash_stop` ends them. In the transcript a job's end is one record, with its exit code and time, and
+  its log path under `ctrl+o`; the output and the model's instructions are not drawn.
 
 **When skyr leaves `bash` alone.** Print and json runs and Windows keep Pi's `bash`, silently, and
 so do a subagent's children. skyr steps aside, with a warning that names the cause ("background

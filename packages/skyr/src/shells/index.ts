@@ -20,13 +20,26 @@ import { type Static, Type } from "typebox";
 import type { BarHandle } from "../chrome/bar.js";
 import type { PiModule } from "../pi.js";
 import { publishTasks, type TaskRef } from "../tengi.js";
-import { textMessageRenderer } from "../tools/render.js";
 import { canDraw } from "../ui/caps.js";
+import {
+  failedRow,
+  messageComponent,
+  plainRow,
+  type Row,
+  type ToolView,
+  toolRenderers,
+} from "../ui/row.js";
+import { sanitize } from "../ui/text.js";
 import { Moved, movingOperations } from "./exec.js";
 import { identify } from "./job.js";
 import { createShellSession, snapshotOf, stopHandedOver } from "./session.js";
-import { active, type ShellSnapshot, taskItems } from "./store.js";
-import { barRow, listingLines } from "./view.js";
+import {
+  active,
+  isShellSnapshot,
+  type ShellSnapshot,
+  taskItems,
+} from "./store.js";
+import { barRow, listingLines, shellRow } from "./view.js";
 
 const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
 
@@ -102,6 +115,24 @@ export interface ShellsDeps {
   identify?: typeof identify;
 }
 
+/** The ledger record of a stop: the job asked about, then how it ended. */
+function stopRow({
+  args,
+  settled,
+  expanded,
+}: ToolView<Static<typeof StopParams>>): Row {
+  const head = {
+    verb: "stop",
+    subject: [typeof args.id === "string" ? sanitize(args.id) : ""],
+    subjectKind: "text",
+  } as const;
+  if (!settled) return { head: { ...head, mark: "running", facts: [] } };
+  if (settled.isError) return failedRow(head, settled, "bash_stop");
+  if (!isShellSnapshot(settled.details))
+    return plainRow(head, settled, "bash_stop");
+  return shellRow(settled.details, { verb: "stop", expanded });
+}
+
 type Route = "plain" | "move" | "start";
 
 /**
@@ -170,7 +201,22 @@ export function wireShells(
       pi.setActiveTools([...names, "bash_stop"]);
   };
 
-  pi.registerMessageRenderer(MESSAGE_TYPE, textMessageRenderer(PREVIEW_LINES));
+  pi.registerMessageRenderer(MESSAGE_TYPE, (message, options, theme) =>
+    messageComponent(
+      theme,
+      message,
+      options,
+      PREVIEW_LINES,
+      (_text, expanded) => {
+        const { details } = message;
+        return Array.isArray(details) &&
+          details.length > 0 &&
+          details.every(isShellSnapshot)
+          ? details.map((job) => shellRow(job, { verb: "bash", expanded }))
+          : undefined;
+      },
+    ),
+  );
 
   let session: ReturnType<typeof createShellSession> | undefined;
   let detachBar: (() => void) | undefined;
@@ -383,6 +429,7 @@ export function wireShells(
         const { text, job } = await own.stopJob(params.id);
         return { content: [{ type: "text", text }], details: job };
       },
+      ...toolRenderers<Static<typeof StopParams>>(stopRow),
     });
     activateBashStop();
     await own.start();

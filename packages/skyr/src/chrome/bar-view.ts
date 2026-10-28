@@ -8,7 +8,7 @@ import { glyphsOf, type Mark, tierOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
 import { formatDuration, formatElapsed, plural } from "../ui/format.js";
 import { keyLabel } from "../ui/hint.js";
-import { type Paint, styled } from "../ui/palette.js";
+import { markToken, type Paint, selected, styled } from "../ui/palette.js";
 import type { BarRow, BarTab } from "./bar.js";
 
 /** A background run that failed, and whether the user has opened the bar on it. */
@@ -30,11 +30,6 @@ export interface BarView {
 }
 
 const NOUN: Record<BarTab, string> = { agents: "agent", shells: "shell" };
-const MARK_TOKEN = {
-  queued: "dim",
-  running: "accent",
-  failed: "error",
-} as const;
 const MAX_PIPS = 8;
 /** The open bar needs this much terminal to be worth the rows it takes. */
 const MIN_ROWS = 30;
@@ -160,7 +155,7 @@ function pulse(
     out: styled(paint, text, { fg: colors[fg], bold }),
     cols: visibleWidth(text),
   });
-  const pip = (mark: Mark) => ink(glyphs.mark[mark], MARK_TOKEN[mark]);
+  const pip = (mark: Mark) => ink(glyphs.mark[mark], markToken[mark]);
   const space = width < 100 ? 2 : 3;
   const inner = width - 2;
 
@@ -312,14 +307,8 @@ function tabLines(
     const pill = (tab: BarTab, title: string): Piece => {
       const text = `${title} ${rowsOf(tab).length}`;
       if (tab !== view.tab) return ink(` ${text} `, "muted");
-      if (paint.mode === "ascii") return ink(`[${text}]`, "text");
       return {
-        out: styled(paint, ` ${text} `, {
-          bold: true,
-          ...(paint.mode === "color"
-            ? { fg: colors.text, bg: colors.selectedBg }
-            : { inverse: true }),
-        }),
+        out: selected(paint, ` ${text} `, `[${text}]`),
         cols: visibleWidth(text) + 2,
       };
     };
@@ -344,7 +333,7 @@ function tabLines(
     const label = columns.label + 2;
     const left = join([
       gap(1),
-      ink(glyphs.mark[r.mark], MARK_TOKEN[r.mark]),
+      ink(glyphs.mark[r.mark], markToken[r.mark]),
       gap(1),
       ink(cell(slotOf, 2), "accent"),
       gap(1),

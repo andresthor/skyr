@@ -1,6 +1,6 @@
 // The one shared interval that running rows and the bar redraw on.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { everySecond } from "../src/ui/clock.js";
+import { everySecond, stopClock } from "../src/ui/clock.js";
 
 const stops: (() => void)[] = [];
 const sub = (tick: () => void) => {
@@ -76,4 +76,27 @@ test("a throwing subscriber is dropped, its cause reported once, and the others 
   expect(good).toHaveBeenCalledTimes(3);
   expect(reported).toHaveBeenCalledTimes(1);
   expect(reported).toHaveBeenCalledWith(cause);
+});
+
+test("stopClock leaves no timer and a later subscription starts one again", () => {
+  const tick = vi.fn();
+  sub(tick);
+  sub(tick);
+  stopClock();
+  expect(vi.getTimerCount()).toBe(0);
+  vi.advanceTimersByTime(3_000);
+  expect(tick).not.toHaveBeenCalled();
+
+  sub(tick);
+  expect(vi.getTimerCount()).toBe(1);
+  vi.advanceTimersByTime(1_000);
+  expect(tick).toHaveBeenCalledTimes(1);
+});
+
+test("the interval does not keep the process alive", () => {
+  const started = vi.spyOn(globalThis, "setInterval");
+  sub(() => {});
+
+  const handle = started.mock.results[0]?.value as NodeJS.Timeout;
+  expect(handle.hasRef()).toBe(false);
 });

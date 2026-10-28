@@ -2,6 +2,7 @@
 // itself while anything runs so a clock in its pulse moves.
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { expect, onTestFinished, test, vi } from "vitest";
+import { elapsed } from "../src/tools/render.js";
 import {
   call,
   expectInert,
@@ -199,6 +200,25 @@ test("a reload with a child running leaves one bar, set once by the new session,
   expect(parent.widgetSets).toEqual([BAR, BAR]);
   expect(parent.mounted(BAR)).toBeDefined();
   expect(parent.widgets.at(-1)).toEqual([]);
+  await vi.waitFor(() => expect(vi.getTimerCount()).toBe(intervals));
+});
+
+test("no interval is left after a session ends with a running row and a running child", async () => {
+  fakeTicks();
+  const held = hold();
+  const parent = await parentSession({
+    mode: "tui",
+    respond: router([call({ prompt: "s", background: true })], held.step),
+  });
+  const intervals = vi.getTimerCount();
+
+  await parent.session.prompt("go");
+  await held.entered;
+  // A tool row of this session, still running when it ends
+  elapsed({ state: {}, executionStarted: true, invalidate() {} });
+  expect(vi.getTimerCount()).toBe(intervals + 1);
+
+  await parent.session.reload();
   await vi.waitFor(() => expect(vi.getTimerCount()).toBe(intervals));
 });
 

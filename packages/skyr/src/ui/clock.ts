@@ -40,9 +40,19 @@ export function everySecond(
 ): () => void {
   const entry = { tick, onThrow };
   entries.add(entry);
-  interval ??= setInterval(run, 1000);
+  if (interval === undefined) {
+    interval = setInterval(run, 1000);
+    // Redraws are never worth keeping a finished process alive
+    interval.unref();
+  }
   return () => {
     entries.delete(entry);
     idle();
   };
+}
+
+/** Ends every subscription and the interval, as a session's end does; a later subscription starts it again. */
+export function stopClock(): void {
+  entries.clear();
+  idle();
 }

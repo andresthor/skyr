@@ -76,6 +76,13 @@ cannot carry its rule — a card has the keyboard, another extension owns the ed
 rule drawing failed. Under `NO_COLOR` the marks stay and lose their colour; `TERM=dumb` gets
 ASCII.
 
+While Pi works, the voice editor (installed when the credentials below resolve, so the line needs them today) draws a working line above its top rule: a spinner that follows
+what the agent does (a star pulse while it thinks, a line while a tool runs, sand while it waits
+on subagents, a sparkle while Pi retries or compacts), the running tool and what it works on or
+else Pi's working message, the time since the run began and the interrupt key. Pi's own loader,
+shown where skyr's editor is not installed, uses the same star pulse. `NO_COLOR` drops the
+shimmer on the text, and `TERM=dumb` gets an ASCII line.
+
 Credentials, like every other secret here, come from the environment:
 
 ```

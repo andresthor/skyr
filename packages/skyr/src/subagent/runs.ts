@@ -107,7 +107,7 @@ type CallContext = Pick<
 type Agents = Pick<Awaited<ReturnType<typeof loadAgents>>, "agents" | "errors">;
 
 interface Runs {
-  /** Running children, for the widget, ACP and `/subagents`; read-only. */
+  /** Running children, for the bar, ACP and `/subagents`; read-only. */
   readonly store: Pick<RunStore, "running" | "subscribe">;
   /**
    * Foreground. Resolves every task, then claims each in task order, before the first await; any

@@ -5,6 +5,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAdvisor } from "./advisor/index.js";
 import { registerAskUser } from "./ask-user/index.js";
+import { registerChrome } from "./chrome/index.js";
 import { reportSkyrFile } from "./config.js";
 import { loadPi } from "./pi.js";
 import { registerShells } from "./shells/index.js";
@@ -21,17 +22,18 @@ import { registerVoice } from "./voice/index.js";
  */
 export async function registerSkyr(pi: ExtensionAPI): Promise<void> {
   reportSkyrFile(pi);
+  const chrome = registerChrome(pi);
   registerWebFetch(pi);
   registerWebSearch(pi);
   registerVoice(pi);
-  registerSubagent(pi);
+  registerSubagent(pi, chrome.bar);
   registerAskUser(pi);
   registerAdvisor(pi);
   const piModule = await loadPi();
   // Read in the factory, so the shells' `session_start` registers `bash` before its first await.
   // A ps that does not answer leaves Pi unidentified, so the shells step aside
   const self = (await identify(process.pid).catch(() => undefined))?.token;
-  registerShells(pi, piModule, self);
+  registerShells(pi, piModule, self, chrome.bar);
 }
 
 export default async function skyr(pi: ExtensionAPI): Promise<void> {

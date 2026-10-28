@@ -17,16 +17,15 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import type { BarHandle } from "../chrome/bar.js";
 import type { PiModule } from "../pi.js";
 import { publishTasks, type TaskRef } from "../tengi.js";
 import { textMessageRenderer } from "../tools/render.js";
-import { liveWidget } from "../tools/widget.js";
-import { canDraw } from "../ui/caps.js";
 import { Moved, movingOperations } from "./exec.js";
 import { identify } from "./job.js";
 import { createShellSession, snapshotOf, stopHandedOver } from "./session.js";
-import { type ShellSnapshot, taskItems } from "./store.js";
-import { listingLines, widgetLines } from "./view.js";
+import { active, type ShellSnapshot, taskItems } from "./store.js";
+import { barRow, listingLines } from "./view.js";
 
 const POSIX_SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
 
@@ -78,7 +77,6 @@ function stepAsideCause(
 
 const MESSAGE_TYPE = "skyr.shell";
 const TASK_SOURCE = "skyr/shells";
-const WIDGET_KEY = "skyr.shells";
 const PREVIEW_LINES = 12;
 const DEFAULT_LIMIT_MS = 120_000;
 const DEFAULT_GRACE_MS = 5_000;
@@ -141,8 +139,9 @@ export function registerShells(
   pi: ExtensionAPI,
   piModule: PiModule,
   self: string | undefined,
+  bar: BarHandle,
 ): void {
-  wireShells(pi, piModule, self);
+  wireShells(pi, piModule, self, bar);
 }
 
 /**
@@ -153,6 +152,7 @@ export function wireShells(
   pi: ExtensionAPI,
   piModule: PiModule,
   self: string | undefined,
+  bar: BarHandle,
   deps: ShellsDeps = {},
 ): void {
   const limitMs = deps.limitMs ?? DEFAULT_LIMIT_MS;
@@ -172,7 +172,7 @@ export function wireShells(
   pi.registerMessageRenderer(MESSAGE_TYPE, textMessageRenderer(PREVIEW_LINES));
 
   let session: ReturnType<typeof createShellSession> | undefined;
-  let stopWidget: (() => void) | undefined;
+  let detachBar: (() => void) | undefined;
 
   pi.registerCommand("shells", {
     description:
@@ -265,14 +265,12 @@ export function wireShells(
     const publish = () =>
       publishTasks(pi.events, TASK_SOURCE, taskItems(own.jobs()));
     own.subscribe(publish);
-    stopWidget?.();
-    stopWidget = undefined;
-    if (canDraw(ctx))
-      stopWidget = liveWidget(ctx, WIDGET_KEY, {
-        subscribe: own.subscribe,
-        lines: () => widgetLines(own.jobs(), Date.now()),
-        lists: "/shells",
-      });
+    detachBar?.();
+    detachBar = bar.attach({
+      tab: "shells",
+      rows: () => own.jobs().filter(active).map(barRow),
+      subscribe: (changed) => own.subscribe(changed),
+    });
 
     pi.registerTool({
       ...base,
@@ -379,8 +377,8 @@ export function wireShells(
     serving = false;
     const ending = session;
     session = undefined;
-    stopWidget?.();
-    stopWidget = undefined;
+    detachBar?.();
+    detachBar = undefined;
     await ending?.stop({ handOver: event.reason === "reload" });
   });
 }

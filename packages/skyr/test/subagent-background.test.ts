@@ -223,7 +223,7 @@ test("Esc does not stop a background child, and /subagents stop <id> does", asyn
   expect(await listing(parent)).toEqual([]);
 });
 
-test("session_shutdown aborts background children and clears the widget, and their answers are not delivered to the next session", async () => {
+test("session_shutdown aborts background children and empties the listing, and their answers are not delivered to the next session", async () => {
   const held = hold();
   let childAborted = false;
   const parent = await parentSession({
@@ -249,7 +249,7 @@ test("session_shutdown aborts background children and clears the widget, and the
   expect(parentTurns(parent)).toHaveLength(2);
 });
 
-test("the widget lists live children with sanitised text within the width, and clears when none are left", async () => {
+test("the listing shows live children with sanitised text within the width, and clears when none are left", async () => {
   const hostile = `${HOSTILE} ${"x".repeat(120)}`;
   const holds = new Map(["bg", "fg"].map((task) => [task, hold()]));
   const parent = await parentSession({

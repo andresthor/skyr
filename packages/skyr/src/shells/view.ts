@@ -1,23 +1,22 @@
 /**
- * The jobs as lines: the widget above the editor and the `/shells` listing. Lines are sanitized
- * but not cut to a width; the caller fits them to its surface.
+ * The jobs as rows: a bar row for each running or lingering job, and the `/shells` listing.
+ * Strings are sanitized but not cut to a width; the caller fits them to its surface.
  */
+import type { BarRow } from "../chrome/bar.js";
 import { formatDuration, formatElapsed } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
 import { active, type ShellSnapshot, titleOf } from "./store.js";
 
-/** One line per running or lingering job, `$ <title> · <elapsed> · <id>`; undefined when none. */
-export function widgetLines(
-  jobs: readonly ShellSnapshot[],
-  now: number,
-): string[] | undefined {
-  const lines = jobs
-    .filter(active)
-    .map(
-      (job) =>
-        `$ ${titleOf(job.command)} · ${formatElapsed(now - job.startedAt)} · ${sanitize(job.id)}${job.lingering ? " · lingering" : ""}`,
-    );
-  return lines.length > 0 ? lines : undefined;
+/** A running or lingering job as a bar row. */
+export function barRow(job: ShellSnapshot): BarRow {
+  return {
+    id: sanitize(job.id),
+    mark: "running",
+    label: titleOf(job.command),
+    background: true,
+    ...(job.lingering && { now: "lingering" }),
+    startedAt: job.startedAt,
+  };
 }
 
 function state(job: ShellSnapshot, now: number): string {

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
+import type { BarHandle } from "../chrome/bar.js";
 import { loadPi } from "../pi.js";
 import { isRecord, publishTasks } from "../tengi.js";
 import {
@@ -18,18 +19,15 @@ import {
   timeFact,
   toolRow,
 } from "../tools/render.js";
-import { liveWidget } from "../tools/widget.js";
-import { canDraw } from "../ui/caps.js";
 import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { addUsage } from "./child/protocol.js";
 import { resultText, startedText } from "./result.js";
 import { createRuns, MESSAGE_TYPE, Task } from "./runs.js";
 import { count, isRun, labelOf, type RunSnapshot, taskOf } from "./store.js";
-import { laneLine, laneTree, widgetLines } from "./view.js";
+import { barRow, laneLine, laneTree, listingLines } from "./view.js";
 import { repoRoot } from "./worktree.js";
 
-const WIDGET_KEY = "skyr.subagents";
 const TASK_SOURCE = "skyr/subagents";
 const PREVIEW_LINES = 12;
 
@@ -113,7 +111,7 @@ function tasksOf(
   });
 }
 
-export function registerSubagent(pi: ExtensionAPI): void {
+export function registerSubagent(pi: ExtensionAPI, bar: BarHandle): void {
   let loaded: Awaited<ReturnType<typeof loadAgents>> = {
     agents: new Map(),
     errors: [],
@@ -125,7 +123,11 @@ export function registerSubagent(pi: ExtensionAPI): void {
   store.subscribe(() =>
     publishTasks(pi.events, TASK_SOURCE, store.running().map(taskOf)),
   );
-  let stopWidget: (() => void) | undefined;
+  bar.attach({
+    tab: "agents",
+    rows: () => store.running().map(barRow),
+    subscribe: (changed) => store.subscribe(changed),
+  });
 
   pi.registerTool({
     name: "subagent",
@@ -262,7 +264,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
         return;
       }
       ctx.ui.notify(
-        widgetLines(store.running(), Date.now())?.join("\n") ??
+        listingLines(store.running(), Date.now())?.join("\n") ??
           "subagent: none running",
         "info",
       );
@@ -296,20 +298,9 @@ export function registerSubagent(pi: ExtensionAPI): void {
         `subagent: agent files with fields skyr ignores (it reads ${READ_FIELDS.join(", ")}):\n${loaded.warnings.join("\n")}`,
         "warning",
       );
-
-    stopWidget?.();
-    stopWidget = undefined;
-    if (!canDraw(ctx)) return;
-    stopWidget = liveWidget(ctx, WIDGET_KEY, {
-      subscribe: store.subscribe,
-      lines: () => widgetLines(store.running(), Date.now()),
-      lists: "/subagents",
-    });
   });
 
   pi.on("session_shutdown", (event) => {
-    stopWidget?.();
-    stopWidget = undefined;
     runs.close(event.reason);
   });
 }

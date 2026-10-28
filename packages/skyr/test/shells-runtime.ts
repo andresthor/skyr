@@ -24,12 +24,28 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { onTestFinished } from "vitest";
+import type { BarHandle, BarSource } from "../src/chrome/bar.js";
 import { registerSkyr } from "../src/index.js";
 import { loadPi } from "../src/pi.js";
 import { type ShellsDeps, wireShells } from "../src/shells/index.js";
 import { identify } from "../src/shells/job.js";
 import { registerWebFetch } from "../src/tools/web-fetch.js";
 import { textOf, widgetHost } from "./session.js";
+
+/** A bar that draws nothing, for a test that does not look at it. */
+export const NO_BAR: BarHandle = { attach: () => () => {} };
+
+/** A bar that keeps the sources attached to it, for a test to read their rows from. */
+export function recordingBar() {
+  const attached = new Set<BarSource>();
+  const bar: BarHandle = {
+    attach(source) {
+      attached.add(source);
+      return () => void attached.delete(source);
+    },
+  };
+  return { bar, attached };
+}
 
 /**
  * skyr's shells alone, with their test seams. `web_fetch` is registered because skyr's reload
@@ -39,6 +55,7 @@ import { textOf, widgetHost } from "./session.js";
 export function shellsWith(
   deps: ShellsDeps,
   spy?: (before: string[], requested: string[]) => void,
+  bar: BarHandle = NO_BAR,
 ): ExtensionFactory {
   return async (pi) => {
     registerWebFetch(pi);
@@ -57,13 +74,13 @@ export function shellsWith(
       seen,
       await loadPi(),
       (await identify(process.pid))?.token,
+      bar,
       deps,
     );
   };
 }
 
-export interface ShellRuntime
-  extends Omit<ReturnType<typeof widgetHost>, "setWidget"> {
+export interface ShellRuntime {
   /** The current session; `/new` and `/resume` replace it. */
   session: AgentSession;
   notices: string[];
@@ -178,7 +195,7 @@ export async function shellRuntime(
   };
 
   const notices: string[] = [];
-  const { setWidget, ...widgets } = widgetHost();
+  const { setWidget } = widgetHost();
   const ui = {
     setWidget,
     notify: (message: string) => notices.push(message),
@@ -226,7 +243,6 @@ export async function shellRuntime(
         onTestFinished(off);
       }),
     notices,
-    ...widgets,
     requests,
     structured,
     updates,

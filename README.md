@@ -156,9 +156,9 @@ message that starts a new turn, once the parent is idle; answers that end while 
 arrive together. Esc does not stop a background subagent; `/subagents` lists the live ones and
 `/subagents stop <id|all>` stops them, one task at a time or all. A `/reload` stops background
 subagents; the reloaded session receives one message naming each, so the model knows their answers
-will not come. A widget above the editor shows every live subagent, running, queued or in the
-background; past ten, it shows nine and a count of the rest. The widget is drawn only in Pi's
-terminal UI; rpc clients and print mode get none. A delivered message shows one line per subagent,
+will not come. A bar above the editor shows what runs: nothing at rest; while subagents or shells
+run, one line with a mark per run, the latest action and the longest running time. The bar is
+drawn only in Pi's terminal UI; rpc clients and print mode get none. A delivered message shows one line per subagent,
 naming why any of them gave no answer; expand it to read the answers. A background subagent's token
 usage is in the delivered message, not in the footer.
 
@@ -175,7 +175,7 @@ load (a jiti-backed TypeScript child, checked by a one shot smoke probe per sess
 call's model works from the agent dir's own `auth.json` + `models.json` — a model that only
 resolves in the parent's runtime (faux, registered providers, `--api-key` keys) stays in-process.
 Progress crosses back over a file protocol: a 500 ms heartbeat snapshot plus one final result.
-A stopped heart's widget line shows `· stalled`; nothing kills a stalled child, the user decides
+A stopped heart's bar row shows `stalled`; nothing kills a stalled child, the user decides
 via `/subagents stop`. A child process that is killed reports no token usage. A crashed host's
 finished answers are collected and delivered on the next session start; nothing keeps a stale
 child crossing sessions. Pi saves a turn's tool results only once its slowest call ends, so a
@@ -201,10 +201,9 @@ is not lost to a timeout or a wait: it can keep running, and the model is told w
   Stopping a job that has ended is not an error. Processes that leave the group (`setsid`,
   `docker run -d`, `tmux`) are neither tracked nor stopped.
 - **`/shells`** lists this session's jobs, running first, with their state and log. `/shells stop
-  <id|all>` stops them; the model is told, without a new turn. Running jobs also show in a
-  widget above the editor (past ten, nine and a count of the rest; in Pi's terminal UI only, as
-  with the subagent widget), and in an ACP client's task list, where a moved call's
-  card points to its job's task instead of showing an exit code.
+  <id|all>` stops them; the model is told, without a new turn. Running jobs also show in the
+  bar above the editor (see Subagents; Pi's terminal UI only), and in an ACP client's task list,
+  where a moved call's card points to its job's task instead of showing an exit code.
 - **Messages.** A job's end arrives when the session is idle and starts a turn: its exit code or
   how it was stopped, the last lines of output and the log path. After a `/compact` the model is
   reminded of the jobs still running. A shell that exits and leaves processes in its group is

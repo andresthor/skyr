@@ -5,7 +5,7 @@ import { call, hold, parentSession, router } from "./session.js";
 import { recordingUi } from "./ui.js";
 
 test.each(["print", "json"] as const)(
-  "outside tui, skyr calls no UI setter but notify and setWidget (%s)",
+  "outside tui, skyr calls no UI method but notify (%s)",
   async (mode) => {
     const { ui, calls } = recordingUi();
     const parent = await parentSession({
@@ -19,9 +19,7 @@ test.each(["print", "json"] as const)(
     await parent.session.prompt("/subagents");
 
     const methods = new Set(calls.map(({ method }) => method));
-    expect(
-      [...methods].filter((m) => m !== "notify" && m !== "setWidget"),
-    ).toEqual([]);
+    expect([...methods].filter((m) => m !== "notify")).toEqual([]);
   },
 );
 
@@ -59,9 +57,9 @@ test.each(["rpc", "json", "print"] as const)(
   },
 );
 
-test("in tui the subagent widget is set", async () => {
+test("in tui the bar is set once, however many children run", async () => {
   const child = await withRunningChild("tui");
-  expect(child.widgetKeys()).toEqual(["skyr.subagents"]);
+  expect(child.widgetKeys()).toEqual(["skyr.bar"]);
   await child.finish();
 });
 

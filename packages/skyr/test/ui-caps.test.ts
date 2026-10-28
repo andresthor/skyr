@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { tierOf } from "../src/ui/caps.js";
+import { canDraw, glyphsOf, tierOf } from "../src/ui/caps.js";
 
 test.each([
   [{ TERM: "dumb" }],
@@ -27,3 +27,26 @@ test.each([
     expect(tierOf(env)).toBe(tier);
   },
 );
+
+test("the glyph table: unicode in colour and mono, ASCII under TERM=dumb", () => {
+  const unicode = {
+    ellipsis: "…",
+    mark: { queued: "□", running: "•", failed: "×" },
+    now: "›",
+    sep: " · ",
+  };
+  expect(glyphsOf("color")).toEqual(unicode);
+  expect(glyphsOf("mono")).toEqual(unicode);
+  expect(glyphsOf("ascii")).toEqual({
+    ellipsis: "...",
+    mark: { queued: "o", running: "*", failed: "x" },
+    now: ">",
+    sep: " - ",
+  });
+});
+
+test("only the terminal UI can draw: rpc has a UI for dialogs and ignores components", () => {
+  expect(canDraw({ mode: "tui" })).toBe(true);
+  for (const mode of ["rpc", "json", "print"] as const)
+    expect(canDraw({ mode })).toBe(false);
+});

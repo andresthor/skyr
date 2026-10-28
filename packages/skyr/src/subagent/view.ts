@@ -1,8 +1,8 @@
 /**
- * Subagents as lines. Running ones for the widget above the editor and the `/subagents` listing,
- * sanitized and cut to a hundred columns, which the widget fits to its pane; ended ones for a
- * delivered answer and a call's row, sanitized and left for their rows to cut.
+ * Subagents as lines. Running ones for the bar and the `/subagents` listing, sanitized; ended ones
+ * for a delivered answer and a call's row, sanitized and left for their rows to cut.
  */
+import type { BarRow } from "../chrome/bar.js";
 import type { Segment } from "../tools/render.js";
 import { glyphsOf, tierOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
@@ -10,10 +10,10 @@ import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
 import { sanitize } from "../ui/text.js";
 import { count, labelOf, progressOf, type RunSnapshot } from "./store.js";
 
-const WIDGET_WIDTH = 100;
+const LISTING_WIDTH = 100;
 
 /** One line per running child, `<mark> <label> · <progress> · <elapsed> · <id>`; undefined when none. */
-export function widgetLines(
+export function listingLines(
   runs: readonly RunSnapshot[],
   now: number,
 ): string[] | undefined {
@@ -29,10 +29,28 @@ export function widgetLines(
     const line = `${mark} ${labelOf(run)}${progress ? ` · ${progress}` : ""} · ${formatElapsed(now - run.startedAt)} · ${run.id.slice(0, 8)}`;
     return fitToWidth(
       sanitize(line),
-      WIDGET_WIDTH,
+      LISTING_WIDTH,
       glyphsOf(tierOf(process.env)).ellipsis,
     );
   });
+}
+
+/** A live run as a bar row. */
+export function barRow(run: RunSnapshot): BarRow {
+  const now =
+    run.status === "queued"
+      ? run.behind && `behind ${run.behind}`
+      : run.activity === "unknown"
+        ? "stalled"
+        : run.tool;
+  return {
+    id: run.id,
+    mark: run.status === "queued" ? "queued" : "running",
+    label: sanitize(labelOf(run)),
+    background: run.background === true,
+    ...(now && { now: sanitize(now) }),
+    startedAt: run.startedAt,
+  };
 }
 
 /** An ended run's mark, by the status the model reads, in the order a call's header counts them. */

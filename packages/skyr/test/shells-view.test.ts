@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { ShellSnapshot } from "../src/shells/store.js";
-import { listingLines, widgetLines } from "../src/shells/view.js";
+import { barRow, listingLines } from "../src/shells/view.js";
 
 const job = (id: string, fields: Partial<ShellSnapshot>): ShellSnapshot => ({
   id,
@@ -27,13 +27,21 @@ const stopped = job("eeee0005", {
 });
 const lost = job("ffff0006", { status: "unknown", endedAt: 9_000 });
 
-test("the widget has one line per running or lingering job, and none once all have ended", () => {
-  expect(widgetLines([running, lingering, done], 13_000)).toEqual([
-    "$ npm run dev · 12s · aaaa0001",
-    "$ make watch · 13s · bbbb0002 · lingering",
-  ]);
-  expect(widgetLines([done], 13_000)).toBeUndefined();
-  expect(widgetLines([], 0)).toBeUndefined();
+test("a running job is a running, background bar row with its title", () => {
+  expect(barRow(running)).toEqual({
+    id: "aaaa0001",
+    mark: "running",
+    label: "npm run dev",
+    background: true,
+    startedAt: 1_000,
+  });
+});
+
+test("a lingering job's row says lingering", () => {
+  expect(barRow(lingering)).toMatchObject({
+    label: "make watch",
+    now: "lingering",
+  });
 });
 
 test.each([
@@ -71,7 +79,6 @@ test("the listing puts running and lingering jobs before ended ones, and says wh
 });
 
 test("a job past a quarter of an hour reads 18m58s, running or ended, never 1138s", () => {
-  expect(widgetLines([running], 1_139_900)?.[0]).toContain(" · 18m58s · ");
   expect(listingLines([running], 1_139_900)[0]).toContain("running for 18m58s");
   const over = job("cccc0003", {
     status: "done",
@@ -81,15 +88,13 @@ test("a job past a quarter of an hour reads 18m58s, running or ended, never 1138
   expect(listingLines([over], 2_000_000)[0]).toContain("exited 0 after 18m58s");
 });
 
-test("a terminal sequence or newline in a command, id or log path never reaches a line", () => {
+test("a terminal sequence or newline in a command, id or log path never reaches a line or a bar row", () => {
   const hostile = job("aaaa\u001b]52;c;aGk=\u00070001", {
     command: "echo \u001b]52;c;aGk=\u0007hi\nsecond",
     log: "/jobs/\u001b[31mx/out.log",
   });
-  for (const line of [
-    ...(widgetLines([hostile], 0) ?? []),
-    ...listingLines([hostile], 0),
-  ]) {
+  const row = barRow(hostile);
+  for (const line of [row.id, row.label, ...listingLines([hostile], 0)]) {
     expect(line).not.toContain("\n");
     expect(line.includes("\u001b")).toBe(false);
   }

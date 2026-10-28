@@ -19,14 +19,35 @@ export function tierOf(env: NodeJS.ProcessEnv): Tier {
     : "color";
 }
 
+/** What a row of the bar is doing; each has its own glyph, so a state never rests on colour. */
+export type Mark = "queued" | "running" | "failed";
+
 export interface Glyphs {
   /** What a cut line ends in. */
   readonly ellipsis: string;
+  readonly mark: Readonly<Record<Mark, string>>;
+  /** Leads a current action. */
+  readonly now: string;
+  /** Between the facts of a line, spaces included. */
+  readonly sep: string;
 }
 
-export function glyphsOf(tier: Tier): Glyphs {
-  return { ellipsis: tier === "ascii" ? "..." : "…" };
-}
+const UNICODE: Glyphs = {
+  ellipsis: "…",
+  mark: { queued: "□", running: "•", failed: "×" },
+  now: "›",
+  sep: " · ",
+};
+
+const ASCII: Glyphs = {
+  ellipsis: "...",
+  mark: { queued: "o", running: "*", failed: "x" },
+  now: ">",
+  sep: " - ",
+};
+
+export const glyphsOf = (tier: Tier): Glyphs =>
+  tier === "ascii" ? ASCII : UNICODE;
 
 /**
  * Whether widgets and working indicators can be drawn: the terminal UI only. `ctx.hasUI` is also

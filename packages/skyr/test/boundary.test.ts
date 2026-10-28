@@ -36,6 +36,28 @@ test("nothing under src/ui imports from src outside src/ui", () => {
   expect(offenders).toEqual([]);
 });
 
+test("nothing under src/chrome imports a feature module", () => {
+  const FEATURES = new Set(
+    ["subagent", "shells", "voice", "ask-user", "advisor", "tools"].map((d) =>
+      join(KIT, d),
+    ),
+  );
+  const CHROME = join(KIT, "chrome");
+  const offenders: string[] = [];
+  for (const f of readdirSync(CHROME, { recursive: true }) as string[]) {
+    if (!f.endsWith(".ts")) continue;
+    const src = readFileSync(join(CHROME, f), "utf8");
+    for (const [, spec = ""] of src.matchAll(
+      /(?:from|import\()\s*"(\.[^"]+)"/g,
+    )) {
+      const target = resolve(dirname(join(CHROME, f)), spec);
+      if ([...FEATURES].some((dir) => target.startsWith(dir + sep)))
+        offenders.push(`${f} → ${spec}`);
+    }
+  }
+  expect(offenders).toEqual([]);
+});
+
 test("nothing under src/ imports a pi-coding-agent value statically", () => {
   const offenders: string[] = [];
   for (const f of readdirSync(KIT, { recursive: true }) as string[]) {

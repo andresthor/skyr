@@ -9,7 +9,11 @@ export function keyName(
   keys: Pick<KeybindingsManager, "getKeys">,
   id: Parameters<KeybindingsManager["getKeys"]>[0],
 ): string {
-  const key = keys.getKeys(id)[0] ?? "";
+  return keyLabel(keys.getKeys(id)[0] ?? "");
+}
+
+/** A key as Pi spells it in hints: `option` for `alt` on macOS. */
+export function keyLabel(key: string): string {
   return process.platform === "darwin"
     ? key.replace(/\balt\b/g, "option")
     : key;

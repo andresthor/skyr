@@ -1,4 +1,4 @@
-// The in-process runner never reports stall: a stalled widget line can only come from the
+// The in-process runner never reports stall: a stalled listing line can only come from the
 // subprocess runner's heartbeat poll, however long a quiet faux turn keeps the child running.
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { expect, test } from "vitest";

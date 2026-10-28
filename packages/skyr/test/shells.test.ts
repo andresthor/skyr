@@ -13,11 +13,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
+import type { BarHandle } from "../src/chrome/bar.js";
 import { registerSkyr } from "../src/index.js";
 import { loadPi } from "../src/pi.js";
 import { registerShells, wireShells } from "../src/shells/index.js";
 import { groupAlive, readOutcome } from "../src/shells/job.js";
-import type { ShellSnapshot } from "../src/shells/store.js";
+import { type ShellSnapshot, titleOf } from "../src/shells/store.js";
 import {
   expectInert,
   HOSTILE,
@@ -27,7 +28,9 @@ import {
 } from "./session.js";
 import { gated, gateFile } from "./shells-jobs.js";
 import {
+  NO_BAR,
   nestTool,
+  recordingBar,
   shellRuntime,
   shellsWith,
   skyrServesBash,
@@ -145,6 +148,7 @@ async function sessionStart(
       }),
     } as unknown as typeof piModule,
     "self" in o ? o.self : "owner-token",
+    NO_BAR,
   );
   const ctx = {
     mode: "tui",
@@ -228,6 +232,8 @@ const slow = (gate: string) =>
 const call = (command: string, id: string, more = {}) =>
   fauxAssistantMessage([fauxToolCall("bash", { command, ...more }, { id })]);
 const shells = shellsWith({ limitMs: 100, graceMs: 50 });
+const shellsOn = (bar: BarHandle) =>
+  shellsWith({ limitMs: 100, graceMs: 50 }, undefined, bar);
 
 const resultOf = (session: AgentSession, id: string) => {
   const result = session.messages.find(
@@ -247,11 +253,11 @@ const pgidOf = (job: ShellSnapshot): number =>
   JSON.parse(readFileSync(join(dirname(job.log), "job.json"), "utf8")).pgid;
 
 /** A session whose first prompt runs `slow` past the limit, so it comes back as a moved job. */
-async function runningJob(o: { eventBus?: EventBus } = {}) {
+async function runningJob(o: { eventBus?: EventBus; bar?: BarHandle } = {}) {
   const gate = gateFile();
   const command = slow(gate);
   const rt = await shellRuntime({
-    extensions: [shells],
+    extensions: [o.bar ? shellsOn(o.bar) : shells],
     respond: script(call(command, "c1")),
     eventBus: o.eventBus,
   });
@@ -400,10 +406,59 @@ describe("a slow bash call in a session", () => {
     expect(host.last(SHELLS)).toEqual([]);
   });
 
-  test("the widget follows a job and /shells lists and stops it, telling the model without starting a turn", async () => {
-    const { rt, job } = await runningJob();
-    expect(rt.widgets.at(-1)?.join("\n")).toContain(job.id);
+  test("a running job is a bar row with its title, and leaves the rows when it ends", async () => {
+    const { bar, attached } = recordingBar();
+    const { rt, job } = await runningJob({ bar });
+    const [source] = attached;
+    expect(source?.tab).toBe("shells");
+    expect(source?.rows()).toEqual([
+      {
+        id: job.id,
+        mark: "running",
+        label: titleOf(job.command),
+        background: true,
+        startedAt: job.startedAt,
+      },
+    ]);
 
+    await rt.session.prompt("/shells stop all");
+    expect(source?.rows()).toEqual([]);
+  });
+
+  test("the source tells the bar of every change to the jobs", async () => {
+    const { bar, attached } = recordingBar();
+    const changes = vi.fn();
+    const rt = await shellRuntime({
+      extensions: [shellsOn(bar)],
+      respond: script(call(slow(gateFile()), "c1")),
+    });
+    const [source] = attached;
+    const off = source!.subscribe(changes);
+    await rt.session.prompt("go");
+    expect(changes).toHaveBeenCalled();
+
+    const seen = changes.mock.calls.length;
+    off();
+    await rt.session.prompt("/shells stop all");
+    expect(changes).toHaveBeenCalledTimes(seen);
+  });
+
+  test("the source detaches at session end and a new session attaches its own", async () => {
+    const { bar, attached } = recordingBar();
+    const { rt } = await runningJob({ bar });
+    const [first] = attached;
+    expect(attached.size).toBe(1);
+
+    await rt.newSession();
+    expect(attached.size).toBe(1);
+    expect([...attached][0]).not.toBe(first);
+
+    await rt.quit();
+    expect(attached.size).toBe(0);
+  });
+
+  test("/shells lists and stops a job, telling the model without starting a turn", async () => {
+    const { rt, job } = await runningJob();
     await rt.session.prompt("/shells");
     expect(rt.notices.at(-1)).toContain(job.id);
     expect(rt.notices.at(-1)).toContain(job.log);
@@ -414,50 +469,6 @@ describe("a slow bash call in a session", () => {
     expect(await delivery).toContain("stopped by the user after");
     await rt.session.waitForIdle();
     expect(rt.requests.length).toBe(requests);
-    expect(rt.widgets.at(-1)).toBeUndefined();
-  });
-
-  test("the widget is set once per appearance, its clock moving by repaint", async () => {
-    // Date too, so a tick that re-set the widget would draw new lines; setTimeout stays real.
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    const { rt, job } = await runningJob();
-    const frames = rt.widgets.length;
-    vi.advanceTimersByTime(3_000);
-    expect(rt.widgets.length).toBe(frames + 3);
-    expect(rt.widgets.at(-1)?.[0]).toMatch(new RegExp(`· 3s · ${job.id}$`));
-
-    // The end's message waits for a watcher tick, which is faked; the widget goes with the stop.
-    await rt.session.prompt("/shells stop all");
-    expect(rt.widgets.at(-1)).toBeUndefined();
-    expect(rt.widgetSets.filter((key) => key === "skyr.shells")).toHaveLength(
-      2,
-    );
-  });
-
-  test("past ten running jobs, the widget shows nine and a count of the rest", async () => {
-    const gate = gateFile();
-    const rt = await shellRuntime({
-      extensions: [shells],
-      respond: script(
-        fauxAssistantMessage(
-          Array.from({ length: 11 }, (_, i) =>
-            fauxToolCall(
-              "bash",
-              { command: slow(gate), background: true },
-              { id: `bg${i}` },
-            ),
-          ),
-        ),
-      ),
-    });
-    await rt.session.prompt("go");
-
-    const lines = rt.widgets.at(-1) ?? [];
-    expect(lines).toHaveLength(10);
-    expect(lines[9]).toBe("… +2 more · /shells lists all");
   });
 
   test("quit stops a running job and records why", async () => {
@@ -606,6 +617,7 @@ test("the message a job's end is delivered in is drawn with no escape sequence f
     }),
     await loadPi(),
     "owner-token",
+    NO_BAR,
   );
   const plain = (_color: string, text: string) => text;
   const text = `[background job "x" (id ab12cd34): exited with code 0 after 1s]\n${HOSTILE}`;

@@ -290,7 +290,8 @@ part misses the cache.
 
 skyr replaces Pi's footer in the terminal UI. The first line shows the context window's use as a
 percentage, a meter and tokens over the window, then the session's turns and cost, the model and
-its thinking level. The second shows the directory, git branch and session name, then the token totals (`↑` input,
+its thinking level, then the profile (the agent dir's parent: `experimental`, or `pi` for
+`~/.pi/agent`) and the time. The second shows the directory, git branch and session name, then the token totals (`↑` input,
 `↓` output, `R` cache read, `W` cache write) and the latest response's cache hit rate (`CH`),
 which are the first to go on a narrow pane. A third
 holds other extensions' statuses when there are any. On a narrow pane the first line gives up

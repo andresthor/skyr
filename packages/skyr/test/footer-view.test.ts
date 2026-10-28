@@ -29,6 +29,8 @@ const facts: FooterFacts = {
   cost: 1.82,
   model: "claude-sonnet-5-5",
   thinking: "high",
+  profile: "experimental",
+  clock: "22:05",
 };
 
 /** Facts with the context at `percent` of a `window` and nothing else that varies. */
@@ -106,10 +108,10 @@ test("statuses are key-sorted and lose their colour outside the color tier", () 
 
 test("line one reads context, turns, cost, model and thinking level", () => {
   expect(head(facts)).toBe(
-    " 41% ▪▪▪▪▪▪ ▪▫▫▫ 412k/1M · 12 turns $1.82 · claude-sonnet-5-5 high",
+    " 41% ▪▪▪▪▪▪ ▪▫▫▫ 412k/1M · 12 turns $1.82 · claude-sonnet-5-5 high · experimental 22:05",
   );
   expect(head(facts, 200, "ascii")).toBe(
-    " 41% ###### #--- 412k/1M - 12 turns $1.82 - claude-sonnet-5-5 high",
+    " 41% ###### #--- 412k/1M - 12 turns $1.82 - claude-sonnet-5-5 high - experimental 22:05",
   );
 });
 
@@ -161,6 +163,19 @@ test("an unknown context reads ? and an empty meter", () => {
     context: { tokens: null, percent: null, window: 1_000_000 },
   };
   expect(head(unknown)).toContain("? ▫▫▫▫▫▫ ▫▫▫▫ ?/1M");
+});
+
+test("the clock goes first, then the profile, both before the model prefix", () => {
+  const narrowest = (needle: string) =>
+    Math.min(...WIDTHS_SWEEP.filter((w) => head(facts, w).includes(needle)));
+  const clock = narrowest("22:05");
+  const profile = narrowest("experimental");
+  const prefix = narrowest("claude-sonnet");
+  expect(clock).toBeGreaterThan(profile);
+  expect(profile).toBeGreaterThan(prefix);
+  // The widest pane that drops both still draws the whole of the rest
+  expect(head(facts, prefix)).toContain("claude-sonnet-5-5 high");
+  expect(head(facts, prefix)).not.toContain("experimental");
 });
 
 test("the ladder drops the model prefix before the context tokens and the meter last", () => {

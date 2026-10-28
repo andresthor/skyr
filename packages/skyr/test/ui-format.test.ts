@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  formatClock,
   formatCost,
   formatCount,
   formatDuration,
@@ -104,4 +105,8 @@ test("positiveOrZero keeps only finite numbers above zero", () => {
       positiveOrZero,
     ),
   ).toEqual([3, 0, 0, 0, 0, 0, 0]);
+});
+
+test("the clock is local and zero-padded", () => {
+  expect(formatClock(new Date(2026, 0, 5, 3, 7))).toBe("03:07");
 });

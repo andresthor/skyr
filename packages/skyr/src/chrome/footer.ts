@@ -2,14 +2,23 @@
  * Pi's footer, replaced: mounted once per terminal session, facts computed when events fire, so
  * a frame touches no session and no ctx.
  */
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import type {
   ExtensionContext,
   ExtensionUIContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { loadPi } from "../pi.js";
 import { canDraw, tierOf } from "../ui/caps.js";
-import { positiveOrZero } from "../ui/format.js";
+import { everySecond } from "../ui/clock.js";
+import { formatClock, positiveOrZero } from "../ui/format.js";
 import { guard } from "../ui/guard.js";
 import { describeCause, oneLine } from "../ui/text.js";
 import { readUiSettings } from "../ui-config.js";
@@ -47,6 +56,12 @@ type FooterUi = Pick<ExtensionUIContext, "setFooter" | "notify">;
 interface Mounted {
   readonly tui: { requestRender(): void };
   offBranch?: () => void;
+  offClock?: () => void;
+}
+
+/** The profile an agent dir belongs to: the name of its parent, without the dot of `~/.pi`. */
+function profileOf(agentDir: string): string {
+  return basename(dirname(resolve(agentDir))).replace(/^\./, "");
 }
 
 /** The directory as Pi's footer writes it: under the home directory, `~` for the prefix. */
@@ -150,6 +165,11 @@ export function createFooter(): Footer {
   let ui: FooterUi | undefined;
   let mounted: Mounted | undefined;
   let facts: FooterFacts | undefined;
+  // What `facts` is made of: the session's, written on events, and the footer's own
+  let held: Omit<FooterFacts, "branch" | "profile" | "clock"> | undefined;
+  let branch: string | undefined;
+  let profile: string | undefined;
+  let clock: string | undefined;
   let counted: Counted | undefined;
   let reported = false;
   // Counts the starts and stops, so a start that was overtaken can tell
@@ -182,10 +202,20 @@ export function createFooter(): Footer {
     });
   };
 
+  const publish = () => {
+    facts = held && { ...held, branch, profile, clock };
+  };
+
+  const release = (here: Mounted) => {
+    here.offBranch?.();
+    here.offClock?.();
+  };
+
   const teardown = () => {
-    mounted?.offBranch?.();
+    if (mounted) release(mounted);
     mounted = undefined;
     ui = undefined;
+    held = undefined;
     facts = undefined;
     counted = undefined;
   };
@@ -194,7 +224,7 @@ export function createFooter(): Footer {
    * The facts `ctx` holds, as plain values. The passes over the session run only when its leaf
    * or the model moved: every append moves the leaf, so the key is as fine as the data.
    */
-  const factsOf = (ctx: ExtensionContext): Omit<FooterFacts, "branch"> => {
+  const factsOf = (ctx: ExtensionContext): NonNullable<typeof held> => {
     const manager = ctx.sessionManager;
     const model = ctx.model;
     const key = [
@@ -239,7 +269,8 @@ export function createFooter(): Footer {
   const refresh = (ctx: ExtensionContext) => {
     if (!mounted) return;
     try {
-      if (facts) facts = { ...factsOf(ctx), branch: facts.branch };
+      held = factsOf(ctx);
+      publish();
       mounted.tui.requestRender();
     } catch (cause) {
       fail(cause);
@@ -251,7 +282,10 @@ export function createFooter(): Footer {
       if (!canDraw(ctx)) return;
       const generation = ++current;
       const target = ctx.ui;
-      const settings = await readUiSettings();
+      const [settings, { getAgentDir }] = await Promise.all([
+        readUiSettings(),
+        loadPi(),
+      ]);
       // `ctx` is only safe to read while its session is the current one
       if (generation !== current) return;
       if (settings.problems.length > 0)
@@ -260,17 +294,33 @@ export function createFooter(): Footer {
       reported = false;
       ui = target;
       counted = undefined;
-      facts = factsOf(ctx);
+      held = factsOf(ctx);
+      profile = oneLine(profileOf(getAgentDir()), 120);
+      branch = undefined;
+      clock = undefined;
+      publish();
       target.setFooter((tui, theme, data) => {
         const here: Mounted = { tui };
         mounted = here;
         // Pi calls this outside any handler, and an empty footer hides its own
         try {
           const readBranch = () => {
-            if (facts)
-              facts = { ...facts, branch: data.getGitBranch() ?? undefined };
+            branch = oneLine(data.getGitBranch() ?? "", 120) || undefined;
+            publish();
           };
           readBranch();
+          /** Whether the minute changed. */
+          const tick = (): boolean => {
+            const next = formatClock(new Date());
+            if (next === clock) return false;
+            clock = next;
+            publish();
+            return true;
+          };
+          tick();
+          here.offClock = everySecond(() => {
+            if (tick()) tui.requestRender();
+          }, fail);
           here.offBranch = data.onBranchChange(() => {
             try {
               readBranch();
@@ -316,9 +366,10 @@ export function createFooter(): Footer {
               cached = undefined;
             },
             dispose() {
-              here.offBranch?.();
+              release(here);
               if (mounted !== here) return;
               mounted = undefined;
+              held = undefined;
               facts = undefined;
             },
           };

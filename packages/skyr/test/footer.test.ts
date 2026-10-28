@@ -1,13 +1,15 @@
 // The footer skyr puts in Pi's slot: a component mounted once per terminal session whose frames
 // are built from facts computed when events fire.
 import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type {
   ExtensionContext,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { createFooter } from "../src/chrome/footer.js";
+import { stopClock } from "../src/ui/clock.js";
 import {
   expectInert,
   HOSTILE,
@@ -199,11 +201,12 @@ test("three reloads leave one footer and no branch subscriber", async () => {
 });
 
 test("the footer never crashes Pi's renderer at 20, 40 and 86 columns", async () => {
-  const { parent, footer, statuses, setBranch } = await tuiSession();
+  const { parent, footer, statuses, setBranch, lines } = await tuiSession();
   parent.session.setSessionName(HOSTILE);
   setBranch(HOSTILE);
   statuses.set("x", HOSTILE);
   for (const width of [20, 40, 86]) {
+    expectInert(lines(width), width);
     const { firstFrameCrash, crash } = piScreen(footer()!, width);
     expect(firstFrameCrash).toBeUndefined();
     expect(crash).toBeUndefined();
@@ -516,4 +519,58 @@ test("CH is the latest assistant's cache read over its prompt tokens and absent 
   parent.session.setSessionName("y");
   expect(lines()[1]).toContain("↑60 R1k W20");
   expect(lines()[1]).not.toContain("CH");
+});
+
+/** Fakes the clock the footer reads and ticks on; setTimeout stays real, as Pi's own waits need it. */
+function fakeClock(at: Date): void {
+  // An earlier test's session may still hold the shared interval, which would then be a real one
+  stopClock();
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.setSystemTime(at);
+  onTestFinished(() => {
+    stopClock();
+    vi.useRealTimers();
+  });
+}
+
+test("the clock shows HH:MM and repaints once a minute, not once a second", async () => {
+  fakeClock(new Date(2026, 9, 28, 22, 5, 0));
+  const { lines, renders } = await tuiSession();
+  expect(lines()[0]).toMatch(/ 22:05$/);
+
+  const before = renders();
+  vi.advanceTimersByTime(59_000);
+  expect(renders()).toBe(before);
+  vi.advanceTimersByTime(1_000);
+  expect(renders()).toBe(before + 1);
+  expect(lines()[0]).toMatch(/ 22:06$/);
+});
+
+test("no timer is left after a dispose, and three reloads leave one", async () => {
+  fakeClock(new Date(2026, 9, 28, 22, 5, 0));
+  const { parent, resetFooter } = await tuiSession();
+  expect(vi.getTimerCount()).toBe(1);
+  resetFooter();
+  expect(vi.getTimerCount()).toBe(0);
+
+  for (let i = 0; i < 3; i++) await parent.session.reload();
+  expect(vi.getTimerCount()).toBe(1);
+});
+
+test("the profile is the agent dir's parent name, and pi for ~/.pi/agent", async () => {
+  const { parent, lines } = await tuiSession();
+  expect(lines()[0]).toContain(` ${basename(dirname(parent.agentDir))} `);
+
+  for (const [agentDir, profile] of [
+    [join(".pi", "agent"), "pi"],
+    [join("experimental", "agent"), "experimental"],
+  ] as const) {
+    vi.stubEnv("PI_CODING_AGENT_DIR", join(scratchDir("home"), agentDir));
+    const host = recordingUi();
+    const footer = createFooter();
+    await footer.start(stubContext(host.ui).ctx);
+    expect(host.footer()?.render(200)[0]).toMatch(
+      new RegExp(`${profile} \\d\\d:\\d\\d$`),
+    );
+  }
 });

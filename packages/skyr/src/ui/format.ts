@@ -5,6 +5,10 @@
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
+/** Local `HH:MM`. */
+export const formatClock = (date: Date): string =>
+  `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+
 /** `value` when it is a finite number above zero, else 0: a usage count or cost that an old session may hold badly. */
 export const positiveOrZero = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;

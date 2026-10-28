@@ -37,6 +37,10 @@ export interface FooterFacts {
   readonly model?: string;
   /** Present only for a model that reasons. */
   readonly thinking?: string;
+  /** The agent dir's profile, such as `experimental`. */
+  readonly profile?: string;
+  /** Local `HH:MM`. */
+  readonly clock?: string;
 }
 
 type Ink = keyof Paint["theme"]["colors"];
@@ -74,6 +78,8 @@ const WHERE_STEPS: readonly ((state: Where) => Where)[] = [
 ];
 
 interface Head {
+  clock: boolean;
+  profile: boolean;
   claude: boolean;
   turns: "turns" | "t" | false;
   coarse: boolean;
@@ -85,6 +91,8 @@ interface Head {
 }
 
 const HEAD_STEPS: readonly ((state: Head) => Head)[] = [
+  (state) => ({ ...state, clock: false }),
+  (state) => ({ ...state, profile: false }),
   (state) => ({ ...state, claude: false }),
   (state) => ({ ...state, turns: "t" }),
   (state) => ({ ...state, turns: false }),
@@ -224,8 +232,18 @@ export function footerLines(
     ].join(" ");
   };
 
+  const session = (show: Head): string =>
+    [
+      show.profile && facts.profile ? ink(facts.profile, "accent") : "",
+      show.clock && facts.clock ? ink(facts.clock, "muted") : "",
+    ]
+      .filter((part) => part !== "")
+      .join(" ");
+
   const head = degrade<Head>(
     {
+      clock: true,
+      profile: true,
       claude: true,
       turns: "turns",
       coarse: true,
@@ -236,7 +254,7 @@ export function footerLines(
       cost: true,
     },
     HEAD_STEPS,
-    (show) => joined([context(show), tally(show), model(show)]),
+    (show) => joined([context(show), tally(show), model(show), session(show)]),
     room,
   );
 

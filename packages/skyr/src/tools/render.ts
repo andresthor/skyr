@@ -4,13 +4,20 @@ import type {
   Theme,
   ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Text, TruncatedText } from "@earendil-works/pi-tui";
+import {
+  Box,
+  type Component,
+  Text,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
+import { glyphsOf, tierOf } from "../ui/caps.js";
+import { fitToWidth } from "../ui/fit.js";
 import { sanitize } from "../ui/text.js";
 
 export type Segment = [color: ThemeColor, text: string, bold?: boolean];
 
 /** Segments in their colours, as given: the caller has made their text safe to draw. */
-export function styled(
+function styled(
   theme: Pick<Theme, "fg" | "bold">,
   segments: Segment[],
 ): string {
@@ -21,12 +28,48 @@ export function styled(
     .join("");
 }
 
-export function toolRow(theme: Theme, segments: Segment[]): TruncatedText {
-  return new TruncatedText(
-    styled(
-      theme,
-      segments.map(([color, raw, bold]) => [color, sanitize(raw), bold]),
-    ),
+/**
+ * One line of `segments` (their text already safe to draw), cut by columns at render with the
+ * tier's ellipsis before styling, and padded to the width. Unlike `TruncatedText`, whose cut
+ * puts an SGR reset before its ellipsis, the colours run unbroken to the edge.
+ */
+export function segmentRow(
+  theme: Pick<Theme, "fg" | "bold">,
+  segments: Segment[],
+): Component {
+  const padded = (line: string, width: number) =>
+    line + " ".repeat(Math.max(0, width - visibleWidth(line)));
+  return {
+    invalidate() {},
+    render(width) {
+      if (width <= 0) return [""];
+      const plain = segments.map(([, text]) => text).join("");
+      if (visibleWidth(plain) <= width)
+        return [padded(styled(theme, segments), width)];
+      const { ellipsis } = glyphsOf(tierOf(process.env));
+      const withEllipsis = visibleWidth(ellipsis) < width;
+      let left = fitToWidth(
+        plain,
+        withEllipsis ? width - visibleWidth(ellipsis) : width,
+        "",
+      ).length;
+      const shown: Segment[] = [];
+      for (const [color, text, bold] of segments) {
+        if (left <= 0 && shown.length > 0) break;
+        shown.push([color, text.slice(0, left), bold]);
+        left -= text.length;
+      }
+      const last = shown.at(-1);
+      if (withEllipsis && last) shown.push([last[0], ellipsis]);
+      return [padded(styled(theme, shown), width)];
+    },
+  };
+}
+
+export function toolRow(theme: Theme, segments: Segment[]): Component {
+  return segmentRow(
+    theme,
+    segments.map(([color, raw, bold]) => [color, sanitize(raw), bold]),
   );
 }
 
@@ -41,7 +84,7 @@ export function errorRow(
   theme: Theme,
   content: { type: string; text?: string }[],
   after: Segment[] = [],
-): TruncatedText {
+): Component {
   return toolRow(theme, [["error", firstLine(content)], ...after]);
 }
 

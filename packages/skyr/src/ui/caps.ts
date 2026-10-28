@@ -16,3 +16,12 @@ export function tierOf(env: NodeJS.ProcessEnv): Tier {
     ? "mono"
     : "color";
 }
+
+export interface Glyphs {
+  /** What a cut line ends in. */
+  readonly ellipsis: string;
+}
+
+export function glyphsOf(tier: Tier): Glyphs {
+  return { ellipsis: tier === "ascii" ? "..." : "…" };
+}

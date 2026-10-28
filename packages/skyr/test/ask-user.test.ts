@@ -601,6 +601,25 @@ test("the call row survives arguments that are still streaming in", () => {
   ]);
 });
 
+test("a header cut for the transcript ends in the terminal's ellipsis, and the twin-header refusal names it with … whatever the terminal", async () => {
+  const tool = registered();
+  const long = { questions: [{ header: "Storage engine" }] };
+  vi.stubEnv("TERM", "xterm-256color");
+  expect(callRows(tool, long)).toEqual(["ask_user Storage eng…"]);
+  vi.stubEnv("TERM", "dumb");
+  expect(callRows(tool, long)).toEqual(["ask_user Storage e..."]);
+  const twins = {
+    questions: [
+      { ...STORAGE, header: "Storage engine" },
+      { ...NAME, header: "Storage engines" },
+    ],
+  };
+  await expect(execute(tool, dialogs().ui, twins)).rejects.toThrow(
+    /both show the header "Storage eng…"/,
+  );
+  vi.unstubAllEnvs();
+});
+
 test("a question left unanswered reaches the model as not answered, with a line against guessing it, and its row says so after a resume", async () => {
   const fake = dialogs();
   const call = execute(registered(), fake.ui, TWO);

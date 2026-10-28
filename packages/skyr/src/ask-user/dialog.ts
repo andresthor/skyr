@@ -45,9 +45,13 @@ interface Deps {
 const PLACEHOLDER = "type an answer";
 export const HEADER_WIDTH = 12;
 
-/** A question's header as every ask_user surface draws it: sanitized, cut to `HEADER_WIDTH` columns. */
-export function shortHeader(raw: string): string {
-  return fitToWidth(sanitize(raw).trim(), HEADER_WIDTH, "…");
+/**
+ * A question's header as every ask_user surface draws it: sanitized, cut to `HEADER_WIDTH` columns.
+ * The transcript rows pass the tier's ellipsis; the checks on what the model sent keep the default,
+ * so a refusal never depends on the terminal.
+ */
+export function shortHeader(raw: string, ellipsis = "…"): string {
+  return fitToWidth(sanitize(raw).trim(), HEADER_WIDTH, ellipsis);
 }
 
 /**

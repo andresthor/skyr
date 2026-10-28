@@ -13,6 +13,7 @@ import {
   oklchColor,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { glyphsOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
 import { type DictationFacts, SPEECH_DBFS } from "./dictation.js";
 import { clamp01, type Paint, styled } from "./palette.js";
@@ -143,7 +144,7 @@ function marks(paint: Paint) {
   const T = paint.theme.colors;
   const ascii = paint.mode === "ascii";
   const fg = (c: Color, text: string) => styled(paint, text, { fg: c });
-  const ellipsis = ascii ? "..." : "…";
+  const { ellipsis } = glyphsOf(paint.mode);
   return {
     sep: ascii ? ", " : fg(T.dim, " · "),
     cut: (text: string, cols: number) => fitToWidth(text, cols, ellipsis),

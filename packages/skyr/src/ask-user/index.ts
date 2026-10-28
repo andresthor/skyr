@@ -8,10 +8,17 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, TruncatedText } from "@earendil-works/pi-tui";
+import { Container } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { hostCapabilities } from "../tengi.js";
-import { errorRow, firstLine, styled, took, toolRow } from "../tools/render.js";
+import {
+  errorRow,
+  firstLine,
+  segmentRow,
+  took,
+  toolRow,
+} from "../tools/render.js";
+import { glyphsOf, tierOf } from "../ui/caps.js";
 import { clip, oneLine, quoted, sanitize } from "../ui/text.js";
 import {
   type Answers,
@@ -348,12 +355,13 @@ export function registerAskUser(pi: ExtensionAPI): void {
     },
 
     renderCall(args, theme) {
+      const { ellipsis } = glyphsOf(tierOf(process.env));
       // Streaming arguments arrive partial, so nothing in them is guaranteed yet
       const headers = Array.isArray(args.questions)
         ? args.questions
             .map((q) => q?.header)
             .filter((h): h is string => typeof h === "string")
-            .map(shortHeader)
+            .map((h) => shortHeader(h, ellipsis))
         : [];
       return toolRow(theme, [
         ["toolTitle", "ask_user", true],
@@ -370,20 +378,20 @@ export function registerAskUser(pi: ExtensionAPI): void {
       if (details.outcome === "declined")
         return toolRow(theme, [["warning", "declined"], ...time]);
       // Built outside toolRow, whose sanitize would collapse the padding that aligns the answers
+      const { ellipsis } = glyphsOf(tierOf(process.env));
       const headers = alignHeaders(
-        details.answers.map((a) => shortHeader(a.header)),
+        details.answers.map((a) => shortHeader(a.header, ellipsis)),
       );
-      const suffix = styled(theme, time);
       const box = new Container();
       details.answers.forEach((a, i) => {
         box.addChild(
-          new TruncatedText(
-            theme.fg("muted", headers[i] ?? "") +
-              (a.answer
-                ? theme.fg("text", sanitize(a.answer))
-                : theme.fg("warning", "not answered")) +
-              (i === 0 ? suffix : ""),
-          ),
+          segmentRow(theme, [
+            ["muted", headers[i] ?? ""],
+            a.answer
+              ? ["text", sanitize(a.answer)]
+              : ["warning", "not answered"],
+            ...(i === 0 ? time : []),
+          ]),
         );
       });
       return box;

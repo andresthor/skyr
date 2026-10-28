@@ -5,7 +5,7 @@
  */
 import { join } from "node:path";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Text, TruncatedText } from "@earendil-works/pi-tui";
+import { Box, Container, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { loadPi } from "../pi.js";
 import { isRecord, publishTasks } from "../tengi.js";
@@ -14,7 +14,7 @@ import {
   messageLines,
   type Segment,
   seconds,
-  styled,
+  segmentRow,
   textMessageRenderer,
   tokens,
   toolRow,
@@ -244,8 +244,7 @@ export function registerSubagent(pi: ExtensionAPI): void {
     const box = new Box(options.outputPad, 1, (t) =>
       theme.bg("customMessageBg", t),
     );
-    for (const run of lanes)
-      box.addChild(new TruncatedText(styled(theme, laneLine(run))));
+    for (const run of lanes) box.addChild(segmentRow(theme, laneLine(run)));
     if (options.expanded)
       box.addChild(new Text(["", ...messageLines(message)].join("\n"), 0, 0));
     return box;

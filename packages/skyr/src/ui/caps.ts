@@ -34,6 +34,8 @@ export interface Glyphs {
   readonly mark: Readonly<Record<Mark, string>>;
   /** Leads a current action. */
   readonly now: string;
+  /** Marks something that came back to the transcript from elsewhere. */
+  readonly from: string;
   /** Between a question and its answer. */
   readonly to: string;
   /** The left edge of the lines under a record. */
@@ -55,6 +57,7 @@ const UNICODE: Glyphs = {
     mixed: "!",
   },
   now: "›",
+  from: "←",
   to: "→",
   rail: "│",
   branch: { mid: "├", last: "└" },
@@ -72,6 +75,7 @@ const ASCII: Glyphs = {
     mixed: "!",
   },
   now: ">",
+  from: "<-",
   to: "->",
   rail: "|",
   branch: { mid: "|", last: "`" },

@@ -5,9 +5,10 @@
  */
 import { loadPi } from "../pi.js";
 import { spill } from "../tools/spill.js";
+import { plural } from "../ui/format.js";
 import { clip, oneLine, stripInvisible } from "../ui/text.js";
 import type { ChildResult } from "./runner.js";
-import { count, labelOf, type RunSnapshot } from "./store.js";
+import { labelOf, type RunSnapshot } from "./store.js";
 
 const MAX_ANSWER_BYTES = 10_000;
 
@@ -120,14 +121,14 @@ const attribute = (name: string, value: string) =>
 
 // ZWJ and ZWNJ survive `stripInvisible`, so they may sit anywhere in a tag the escape must find.
 const JOINERS = "[\u200C\u200D]*";
-const TAG = new RegExp(
-  `<(?=[\\s\u200C\u200D]*\\/?[\\s\u200C\u200D]*${[..."subagent-answer"].join(JOINERS)})`,
-  "gi",
-);
+const TAG_AHEAD = `(?=[\\s\u200C\u200D]*\\/?[\\s\u200C\u200D]*${[..."subagent-answer"].join(JOINERS)})`;
+const TAG = new RegExp(`<${TAG_AHEAD}`, "gi");
+const ESCAPED_TAG = new RegExp(`&lt;${TAG_AHEAD}`, "gi");
 
 /**
  * One child's answer in its frame, then its notes. Only the child writes the body, and any tag
  * it writes, opening or closing, arrives escaped, so nothing it writes leaves or forges a frame.
+ * `answersOf` reads these frames back, so a change to the frame changes it too.
  */
 function block({ lane, run, body, notes }: LaneOutcome): string {
   const whose = lane ? `task ${lane.n}'s` : "the";
@@ -156,6 +157,21 @@ function block({ lane, run, body, notes }: LaneOutcome): string {
   return [open, text, "</subagent-answer>", ...after].join("\n");
 }
 
+const FRAME =
+  /<subagent-answer\b[^>]*? id="([^"]*)">\n([\s\S]*?)\n<\/subagent-answer>/g;
+
+/**
+ * The answers in a delivered message, keyed by the 8-character id on their frame: the inverse of
+ * `block` for the body, with the child's own tags restored. The frames' attributes and notes
+ * are the harness's and are not returned.
+ */
+export function answersOf(text: string): ReadonlyMap<string, string> {
+  const answers = new Map<string, string>();
+  for (const [, id = "", body = ""] of text.matchAll(FRAME))
+    answers.set(id, body.replace(ESCAPED_TAG, "<"));
+  return answers;
+}
+
 /**
  * A foreground call's result: a header counting the outcomes, then each framed answer in task
  * order. One task's header names its status alone.
@@ -171,7 +187,7 @@ export function resultText(outcomes: readonly LaneOutcome[]): string {
         });
   const total = outcomes.reduce((sum, { run }) => sum + run.tokens, 0);
   return [
-    `subagent: ${count(outcomes.length, "task")} · ${counts.join(", ")} · ${tokenText(total)}\n${FRAMING}`,
+    `subagent: ${plural(outcomes.length, "task")} · ${counts.join(", ")} · ${tokenText(total)}\n${FRAMING}`,
     ...outcomes.map(block),
   ].join("\n\n");
 }
@@ -191,7 +207,7 @@ export function startedText(runs: readonly RunSnapshot[]): string {
       ? "Its answer arrives as a message when the task finishes."
       : "Each answer arrives in a message when its task finishes.";
   return [
-    `subagent: started ${count(runs.length, "task")} in the background:`,
+    `subagent: started ${plural(runs.length, "task")} in the background:`,
     ...lines,
     `${arrives} Keep working and never poll; do not start the same work again.`,
   ].join("\n");

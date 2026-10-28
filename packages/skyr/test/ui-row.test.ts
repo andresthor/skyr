@@ -166,14 +166,15 @@ describe("a markdown rail", () => {
     }),
   );
 
-  test("is drawn as markdown on the rail, and collapsed counts the lines it came to", () => {
+  test("is drawn as markdown on the rail, and collapsed counts the text lines it came to", () => {
     const host = toolRowHost(markdown, {});
     host.update({ content: [] });
     const collapsed = host.lines(40);
+    // a preview spends its lines on text, not on the blank between blocks
     expect(plain(collapsed).slice(2)).toEqual([
       "   │ a bold word",
-      "   │ ",
-      "   │ … 3 more lines",
+      "   │ - one",
+      "   │ … 2 more lines",
     ]);
     expect(collapsed.join("")).toContain("\u001b[1m");
     host.expand(true);

@@ -5,20 +5,18 @@
  */
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Box, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import type { BarHandle } from "../chrome/bar.js";
 import { failureLine } from "../chrome/bar-view.js";
 import { loadPi } from "../pi.js";
 import { isRecord, publishTasks } from "../tengi.js";
-import {
-  messageLines,
-  segmentRow,
-  textMessageRenderer,
-} from "../tools/render.js";
 import { canDraw } from "../ui/caps.js";
+import { plural } from "../ui/format.js";
 import type { Fact } from "../ui/record.js";
 import {
+  failedRow,
+  messageComponent,
+  plainRow,
   type Row,
   reasonOf,
   restOf,
@@ -29,13 +27,14 @@ import {
 import { sanitize } from "../ui/text.js";
 import { type AgentDef, loadAgents, READ_FIELDS } from "./agents.js";
 import { addUsage } from "./child/protocol.js";
-import { resultText, startedText } from "./result.js";
+import { answersOf, resultText, startedText } from "./result.js";
 import { createRuns, MESSAGE_TYPE, Task } from "./runs.js";
-import { count, isRun, labelOf, type RunSnapshot, taskOf } from "./store.js";
+import { isRun, labelOf, type RunSnapshot, taskOf } from "./store.js";
 import {
   barRow,
+  deliveredRecord,
   headRecord,
-  laneLine,
+  idOf,
   laneRecord,
   listingLines,
   startedRecord,
@@ -160,7 +159,7 @@ function startingRow(args: Partial<Static<typeof Params>>): Row {
         ...head,
         subject: nameLists(names),
         facts: [
-          { text: count(tasks.length, "lane"), kind: "measure" },
+          { text: plural(tasks.length, "lane"), kind: "measure" },
           ...live,
         ],
       },
@@ -186,21 +185,21 @@ function startingRow(args: Partial<Static<typeof Params>>): Row {
 }
 
 /** A call refused or thrown before any run: its cause, and the problems the validator listed. */
-function refusedRow(settled: Settled): Row {
+function refusedRow(
+  args: ToolView<Static<typeof Params>>["args"],
+  settled: Settled,
+): Row {
   const rest = restOf(settled.content);
   // Pi's validator echoes the arguments after the problems
   const end = rest.findIndex((line) => line.startsWith("Received arguments"));
   const problems = rest
     .slice(0, end < 0 ? undefined : end)
     .filter((line) => line.startsWith("- "));
+  const { verb, subject, subjectKind } = startingRow(args).head;
+  const head = { verb, subject, subjectKind };
+  if (!settled.isError) return plainRow(head, settled, "subagent");
   return {
-    head: {
-      mark: settled.isError ? "failed" : "done",
-      verb: "agent",
-      subject: [reasonOf(settled.content, "subagent")],
-      subjectKind: "text",
-      facts: [],
-    },
+    ...failedRow(head, settled, "subagent"),
     rail: { lines: problems, collapsed: 3, ink: "muted" },
   };
 }
@@ -210,7 +209,7 @@ function callRow({ args, settled }: ToolView<Static<typeof Params>>): Row {
   if (!settled) return startingRow(args);
   const lanes = lanesOf(settled.details);
   const [only] = lanes ?? [];
-  if (!lanes || !only) return refusedRow(settled);
+  if (!lanes || !only) return refusedRow(args, settled);
   const branchOf = (i: number) => (i === lanes.length - 1 ? "last" : "mid");
   if (lanes.length > 1)
     return lanes.some((run) => run.background)
@@ -219,11 +218,9 @@ function callRow({ args, settled }: ToolView<Static<typeof Params>>): Row {
             mark: "running",
             verb: "agent",
             background: true,
-            subject: [count(lanes.length, "lane")],
+            subject: [plural(lanes.length, "lane")],
             subjectKind: "text",
-            facts: [
-              { text: "background · answers arrive here", kind: "explain" },
-            ],
+            facts: [{ text: "answers arrive here", kind: "explain" }],
           },
           children: lanes.map((run, i) => startedRecord(run, branchOf(i))),
         }
@@ -237,7 +234,7 @@ function callRow({ args, settled }: ToolView<Static<typeof Params>>): Row {
         ...startedRecord(only),
         verb: "agent",
         background: true,
-        facts: [{ text: "background · answer arrives here", kind: "explain" }],
+        facts: [{ text: "answer arrives here", kind: "explain" }],
       },
     };
   const record = laneRecord(only);
@@ -329,19 +326,14 @@ export function registerSubagent(pi: ExtensionAPI, bar: BarHandle): void {
     ...toolRenderers<Static<typeof Params>>(callRow),
   });
 
-  const asText = textMessageRenderer(PREVIEW_LINES);
-  // Collapsed, a line per run, so a later run's failure is not hidden below an earlier answer.
-  pi.registerMessageRenderer(MESSAGE_TYPE, (message, options, theme) => {
-    const lanes = lanesOf(message.details);
-    if (!lanes) return asText(message, options, theme);
-    const box = new Box(options.outputPad, 1, (t) =>
-      theme.bg("customMessageBg", t),
-    );
-    for (const run of lanes) box.addChild(segmentRow(theme, laneLine(run)));
-    if (options.expanded)
-      box.addChild(new Text(["", ...messageLines(message)].join("\n"), 0, 0));
-    return box;
-  });
+  pi.registerMessageRenderer(MESSAGE_TYPE, (message, options, theme) =>
+    messageComponent(theme, message, options, PREVIEW_LINES, (text) => {
+      const lanes = lanesOf(message.details);
+      if (!lanes) return undefined;
+      const answers = answersOf(text);
+      return lanes.map((run) => deliveredRecord(run, answers.get(idOf(run))));
+    }),
+  );
 
   pi.registerCommand("subagents", {
     description:

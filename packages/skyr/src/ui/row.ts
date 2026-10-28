@@ -22,8 +22,8 @@ import {
 } from "@earendil-works/pi-tui";
 import { glyphsOf, tierOf } from "./caps.js";
 import { fitToWidth } from "./fit.js";
-import { formatDuration } from "./format.js";
-import type { Paint } from "./palette.js";
+import { formatDuration, plural } from "./format.js";
+import { type Paint, styled } from "./palette.js";
 import {
   drawRail,
   drawRecord,
@@ -98,6 +98,8 @@ const markdownThemeOf = (theme: Theme): MarkdownTheme => ({
   strikethrough: (text) => theme.strikethrough(text),
 });
 
+const isDrawn = (line: string) => stripTerminalSequences(line).trim() !== "";
+
 /** What a drawn component keeps between paints: markdown caches its parse by text and width. */
 interface Memo {
   markdown?: Markdown;
@@ -116,11 +118,7 @@ function markdownLines(
   memo.source = source;
   // Markdown pads each line out to the width
   const lines = memo.markdown.render(width).map((line) => line.trimEnd());
-  while (
-    lines.length > 0 &&
-    stripTerminalSequences(lines.at(-1) ?? "").trim() === ""
-  )
-    lines.pop();
+  while (lines.length > 0 && !isDrawn(lines.at(-1) ?? "")) lines.pop();
   return lines;
 }
 
@@ -142,7 +140,7 @@ function linesOf(
   const wantsMarkdown = rail.ink === "markdown";
   // Markdown draws 24-bit colour, hyperlinks and Unicode rules, which NO_COLOR and TERM=dumb forbid
   const markdown = wantsMarkdown && paint.mode === "color";
-  const lines = markdown
+  const rendered = markdown
     ? markdownLines(
         theme,
         memo,
@@ -150,6 +148,9 @@ function linesOf(
         railRoom(paint, width, pad),
       )
     : rail.lines;
+  // A preview of markdown spends its lines on text, not on the blank lines between blocks
+  const lines =
+    wantsMarkdown && !expanded ? rendered.filter(isDrawn) : rendered;
   const shown = expanded ? lines : lines.slice(0, rail.collapsed);
   const ink = markdown ? "styled" : wantsMarkdown ? "text" : rail.ink;
   out.push(...drawRail(paint, shown, ink, width, pad));
@@ -158,7 +159,7 @@ function linesOf(
     out.push(
       ...drawRail(
         paint,
-        [`${ellipsis} ${hidden} more line${hidden === 1 ? "" : "s"}`],
+        [`${ellipsis} ${plural(hidden, "more line")}`],
         "muted",
         width,
         pad,
@@ -269,6 +270,58 @@ export function durationFact(settled: Settled | undefined): Fact[] {
   return settled?.durationMs === undefined
     ? []
     : [{ text: formatDuration(settled.durationMs), kind: "measure" }];
+}
+
+/**
+ * A custom message as ledger records, or as its text where `records` finds none or throws.
+ * Returning undefined or throwing would hand the message to Pi's purple box, which draws a
+ * model's or a process's text as markdown with its escape sequences intact, so this does
+ * neither. Collapsed, the text shows `previewLines` of its lines.
+ */
+export function messageComponent(
+  theme: Theme,
+  message: { content: string | readonly { type: string; text?: string }[] },
+  options: { expanded: boolean; outputPad: number },
+  previewLines: number,
+  records: (text: string) => readonly Row[] | undefined,
+): Component {
+  const { expanded, outputPad } = options;
+  const text =
+    typeof message.content === "string"
+      ? message.content
+      : message.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+  const asText = (before: string[] = []) =>
+    drawn((width) => {
+      const paint = paintOf(theme);
+      const lines = [...before, ...text.split("\n").map(sanitize)];
+      const shown = expanded ? lines : lines.slice(0, previewLines);
+      const hidden = lines.length - shown.length;
+      return [
+        ...shown,
+        ...(hidden > 0
+          ? [`${glyphsOf(paint.mode).ellipsis} ${plural(hidden, "more line")}`]
+          : []),
+      ].map(
+        (line) =>
+          `${" ".repeat(outputPad)}${styled(paint, fitToWidth(line, Math.max(0, width - 2 * outputPad), glyphsOf(paint.mode).ellipsis), { fg: paint.theme.colors.muted })}`,
+      );
+    });
+  try {
+    const rows = records(text);
+    if (!rows) return asText();
+    const memos = rows.map((): Memo => ({}));
+    return drawn((width) =>
+      rows.flatMap((row, i) =>
+        linesOf(theme, memos[i] ?? {}, row, expanded, width, outputPad),
+      ),
+    );
+  } catch (cause) {
+    const mark = glyphsOf(tierOf(process.env)).mark.failed;
+    const why = sanitize(
+      cause instanceof Error ? cause.message : String(cause),
+    );
+    return asText([`${mark} could not draw this message: ${why}`]);
+  }
 }
 
 type Head = Omit<RecordSpec, "mark" | "facts">;

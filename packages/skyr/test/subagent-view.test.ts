@@ -4,7 +4,6 @@ import type { RunSnapshot } from "../src/subagent/store.js";
 import {
   barRow,
   headRecord,
-  laneLine,
   laneRecord,
   listingLines,
 } from "../src/subagent/view.js";
@@ -69,7 +68,7 @@ test("a queued run's bar row says who it waits behind, and a hostile label arriv
   expect(barRow(running)).toMatchObject({ mark: "running", background: false });
 });
 
-test("a run past a quarter of an hour reads 18m58s in the listing, a delivered line and a lane record, never 1138s", () => {
+test("a run past a quarter of an hour reads 18m58s in the listing and a lane record, never 1138s", () => {
   const ended = {
     ...running,
     status: "done" as const,
@@ -77,9 +76,6 @@ test("a run past a quarter of an hour reads 18m58s in the listing, a delivered l
     endedAt: 1_139_000,
   };
   expect(listingLines([running], 1_138_900)?.[0]).toContain(" · 18m58s · ");
-  const text = (segments: [string, string, boolean?][]) =>
-    segments.map(([, s]) => s).join("");
-  expect(text(laneLine(ended))).toContain(" · 18m58s · ");
   expect(laneRecord(ended).facts.map((f) => f.text)).toContain("18m58s");
 });
 

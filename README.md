@@ -176,8 +176,8 @@ each run with its slot number, latest action, turns, tools, time and id, droppin
 pane narrows; under 30 terminal rows or 44 columns it stays a pulse, and `/subagents` and `/shells`
 list in a notice instead. The bar is drawn only in Pi's terminal UI;
 rpc clients and print mode get none, and there `/subagents` and `/shells` list in a notice. A
-delivered message shows one line per subagent, naming why any of them gave no answer; expand it
-to read the answers. A background subagent's token usage is in the delivered message, not in the
+delivered message shows one record per subagent, with the first lines of its answer under it, or
+why it gave none; expand it to read the rest. A background subagent's token usage is in the delivered message, not in the
 footer.
 
 The model reads each answer inside a `<subagent-answer>` block, foreground or delivered, whose

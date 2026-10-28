@@ -1,17 +1,20 @@
 /**
  * Subagents as lines. Running ones, and failed ones, for the bar; running ones for the `/subagents`
- * listing, sanitized; ended ones
- * for a delivered answer and a call's row, sanitized and left for their rows to cut.
+ * listing, sanitized; ended ones as ledger records, for a call's row and a delivered answer.
  */
 import type { BarRow } from "../chrome/bar.js";
-import type { Segment } from "../tools/render.js";
 import { glyphsOf, type Mark, tierOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
-import { formatDuration, formatElapsed, formatTokens } from "../ui/format.js";
-import type { Fact, RecordSpec } from "../ui/record.js";
-import { sanitize } from "../ui/text.js";
 import {
-  count,
+  formatDuration,
+  formatElapsed,
+  formatTokens,
+  plural,
+} from "../ui/format.js";
+import type { Fact, RecordSpec } from "../ui/record.js";
+import type { Row } from "../ui/row.js";
+import { sanitize, sanitizeBlock } from "../ui/text.js";
+import {
   endedWithoutAnswer,
   labelOf,
   progressOf,
@@ -68,55 +71,22 @@ export function barRow(run: RunSnapshot): BarRow {
 }
 
 /** An ended run's mark, by the status the model reads, in the order a call's header counts them. */
-const MARKS: Record<"done" | "empty" | "failed" | "stopped", Segment> = {
-  done: ["success", "✓"],
-  empty: ["error", "✗"],
-  failed: ["error", "✗"],
-  stopped: ["muted", "■"],
-};
-
-/** Stopped, answered, ended without an answer, or failed. */
-function outcomeOf(run: RunSnapshot): keyof typeof MARKS {
-  if (run.status === "aborted") return "stopped";
-  if (run.status !== "done") return "failed";
-  return run.error === undefined ? "done" : "empty";
-}
-
-const markOf = (run: RunSnapshot): Segment => MARKS[outcomeOf(run)];
-
-/**
- * One ended run, `<mark> <label> · <error> · <turns> · <tools> · <tokens> · <time> · <id>`. A
- * recovered run has no counters or start time, so it says so in their place.
- */
-export function laneLine(run: RunSnapshot): Segment[] {
-  const recovered = run.recovered || run.startedAt === 0;
-  const cells = [
-    labelOf(run),
-    run.error,
-    ...(recovered
-      ? ["recovered after a restart"]
-      : [count(run.turns, "turn"), count(run.toolCalls, "tool")]),
-    formatTokens(run.tokens),
-    !recovered &&
-      run.endedAt !== undefined &&
-      formatDuration(run.endedAt - run.startedAt),
-    run.id.slice(0, 8),
-  ];
-  return [
-    markOf(run),
-    ["text", ` ${sanitize(cells.filter(Boolean).join(" · "))}`],
-  ];
-}
-
 const OUTCOME_MARK = {
   done: "done",
   empty: "failed",
   failed: "failed",
   stopped: "stopped",
-} as const satisfies Record<keyof typeof MARKS, Mark>;
+} as const satisfies Record<string, Mark>;
+
+/** Stopped, answered, ended without an answer, or failed. */
+function outcomeOf(run: RunSnapshot): keyof typeof OUTCOME_MARK {
+  if (run.status === "aborted") return "stopped";
+  if (run.status !== "done") return "failed";
+  return run.error === undefined ? "done" : "empty";
+}
 
 /** The 8 characters of a run's id that a record, a frame and a lookup share. */
-const idOf = (run: RunSnapshot) => sanitize(run.id.slice(0, 8));
+export const idOf = (run: RunSnapshot) => sanitize(run.id.slice(0, 8));
 
 /** A recovered run has no counters or start time. */
 const recoveredRun = (run: RunSnapshot) => run.recovered || run.startedAt === 0;
@@ -135,8 +105,8 @@ export function laneRecord(
     ...(recovered
       ? [fact("recovered after a restart", "measure")]
       : [
-          fact(count(run.turns, "turn"), "measure"),
-          fact(count(run.toolCalls, "tool"), "measure"),
+          fact(plural(run.turns, "turn"), "measure"),
+          fact(plural(run.toolCalls, "tool"), "measure"),
         ]),
     fact(formatTokens(run.tokens), "measure"),
     ...(!recovered && run.endedAt !== undefined
@@ -156,7 +126,7 @@ export function laneRecord(
 /** A call's ended runs as the head of its lane tree: the shared mark or `mixed`, and the totals. */
 export function headRecord(runs: readonly RunSnapshot[]): RecordSpec {
   const outcomes = runs.map(outcomeOf);
-  const counts = Object.keys(MARKS).flatMap((outcome) => {
+  const counts = Object.keys(OUTCOME_MARK).flatMap((outcome) => {
     const n = outcomes.filter((o) => o === outcome).length;
     return n > 0 ? [`${n} ${outcome}`] : [];
   });
@@ -170,7 +140,7 @@ export function headRecord(runs: readonly RunSnapshot[]): RecordSpec {
       Math.min(...runs.map((run) => run.startedAt));
   return {
     mark: marks.size === 1 && only ? only : "mixed",
-    subject: [count(runs.length, "lane")],
+    subject: [plural(runs.length, "lane")],
     subjectKind: "text",
     facts: [
       ...(agents.length > 0
@@ -202,3 +172,41 @@ const fact = (text: string, kind: Fact["kind"]): Fact => ({
   text: sanitize(text),
   kind,
 });
+
+/**
+ * A delivered answer as the record of the run that gave it: its lane, `← delivered`, and under it
+ * the answer, which is shown only for a run that gave one. Delivery explains the mark of a run
+ * that answered and is decoration on one that did not, where its reason comes first.
+ */
+export function deliveredRecord(
+  run: RunSnapshot,
+  body: string | undefined,
+): Row {
+  const { from } = glyphsOf(tierOf(process.env));
+  const lane = laneRecord(run);
+  const answered = outcomeOf(run) === "done";
+  return {
+    head: {
+      ...lane,
+      verb: "agent",
+      background: true,
+      facts: [
+        {
+          text: `${from} delivered`,
+          kind: answered ? "explain" : "extra",
+          accent: true,
+        },
+        ...lane.facts,
+      ],
+    },
+    ...(answered && body
+      ? {
+          rail: {
+            lines: sanitizeBlock(body).split("\n"),
+            collapsed: 2,
+            ink: "markdown" as const,
+          },
+        }
+      : {}),
+  };
+}

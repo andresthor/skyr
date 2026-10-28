@@ -5,9 +5,10 @@ import {
   type FauxResponseFactory,
   fauxAssistantMessage,
 } from "@earendil-works/pi-ai";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { expect, test, vi } from "vitest";
 import { call, type Parent, parentSession, taskOf, textOf } from "./session.js";
+import { messageHost } from "./ui.js";
 
 const usage = {
   input: 5,
@@ -29,12 +30,6 @@ function turnRouter(calls: ReturnType<typeof call>[]): FauxResponseFactory {
       : fauxAssistantMessage("done");
   };
 }
-
-const plain = {
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as unknown as Theme;
 
 const parentTurns = (parent: Parent) =>
   parent.requests.filter((r) => taskOf(r) === "go");
@@ -169,18 +164,21 @@ test("a recovered run's delivered line says it was recovered, with no time, and 
     (m) => m.role === "custom" && m.customType === "skyr.subagent",
   );
   if (message?.role !== "custom") throw new Error("nothing was delivered");
-  const lines = parent.session.extensionRunner
-    .getMessageRenderer("skyr.subagent")?.(
-      message,
-      { expanded: false, outputPad: 0 },
-      plain,
-    )
-    ?.render(200)
-    .map((line) => line.trimEnd())
-    .filter(Boolean);
-  expect(lines?.sort()).toEqual([
-    '✓ scout "answers the old call" · recovered after a restart · 42 tok · deadbeef',
-    '✗ "fails the old call" · disk full · recovered after a restart · 42 tok · cafebabe',
+  const renderer =
+    parent.session.extensionRunner.getMessageRenderer("skyr.subagent");
+  if (!renderer) throw new Error("no renderer for delivered answers");
+  const lines = messageHost(renderer, message, { outputPad: 0 })
+    .lines(200)
+    .map((line) => stripTerminalSequences(line).trimEnd())
+    .filter((line) => line.startsWith("✓") || line.startsWith("×"));
+  // The sweep delivers runs in directory order
+  expect(lines.sort()).toEqual([
+    expect.stringMatching(
+      /^× agent & +"fails the old call" +← delivered · disk full · recovered after a restart · 42 tok +cafebabe$/,
+    ),
+    expect.stringMatching(
+      /^✓ agent & +scout "answers the old call" +← delivered · recovered after a restart · 42 tok +deadbeef$/,
+    ),
   ]);
   // The sweep knows the run's usage from its stored result; the delivery must carry it too.
   const runs = message.details as Array<{ usage: typeof usage }>;

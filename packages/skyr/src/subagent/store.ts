@@ -3,6 +3,7 @@
  * name a run and its progress.
  */
 import type { TaskItem } from "../tengi.js";
+import { plural } from "../ui/format.js";
 import { clip } from "../ui/text.js";
 import type { ChildEvent } from "./runner.js";
 import type { WorktreePlan } from "./worktree.js";
@@ -152,8 +153,8 @@ export function createRunStore(): RunStore {
 export function progressOf(run: RunSnapshot): string {
   if (run.status === "queued") return run.behind ? `behind ${run.behind}` : "";
   return [
-    count(run.turns, "turn"),
-    count(run.toolCalls, "tool"),
+    plural(run.turns, "turn"),
+    plural(run.toolCalls, "tool"),
     run.tool,
     run.worktree && "worktree",
     run.activity === "unknown" && "stalled",
@@ -176,6 +177,3 @@ export function taskOf(run: RunSnapshot): TaskItem {
 /** `scout "Map store"` for an agent's run, `"Map store"` for an ad-hoc one. */
 export const labelOf = (run: { agent?: string; description: string }) =>
   `${run.agent ? `${run.agent} ` : ""}"${clip(run.description)}"`;
-
-export const count = (n: number, noun: string) =>
-  `${n} ${noun}${n === 1 ? "" : "s"}`;

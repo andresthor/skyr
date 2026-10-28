@@ -11,12 +11,12 @@ import {
   type MessageRenderer,
   ProjectTrustStore,
   SessionManager,
-  type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test, vi } from "vitest";
 import { registerSkyr } from "../src/index.js";
+import { delivery, type LaneOutcome } from "../src/subagent/result.js";
 import {
   agentFile,
   call,
@@ -33,13 +33,7 @@ import {
   textOf,
   toolsSeen,
 } from "./session.js";
-import { toolRowHost } from "./ui.js";
-
-const plain = {
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as unknown as Theme;
+import { messageHost, toolRowHost } from "./ui.js";
 
 const SCOUT = { "scout.md": agentFile("Finds things") };
 
@@ -121,30 +115,31 @@ const callRow = (tool: ToolDefinition, args: unknown, width = 200) =>
 /** A row's cells: its text split where it is spaced out into columns. */
 const cells = (line: string | undefined) => (line ?? "").trim().split(/ {2,}/);
 
-/** A delivered message's rendered lines, without the box's blank padding. */
+/** A delivered message as Pi draws it, escapes stripped, without the blank line before it. */
 function messageRows(
   details: unknown,
   o: { text?: string; expanded?: boolean; width?: number } = {},
 ): string[] {
-  return (
-    registered()
-      .message(
-        {
-          role: "custom",
-          customType: "skyr.subagent",
-          content: [{ type: "text", text: o.text ?? "" }],
-          display: true,
-          details,
-          timestamp: 0,
-        },
-        { expanded: o.expanded ?? false, outputPad: 0 },
-        plain,
-      )
-      ?.render(o.width ?? 200)
-      .map((line) => line.trimEnd())
-      .filter(Boolean) ?? []
+  const host = messageHost(
+    registered().message,
+    {
+      customType: "skyr.subagent",
+      content: [{ type: "text", text: o.text ?? "" }],
+      details,
+    },
+    { expanded: o.expanded, outputPad: 1 },
   );
+  return host
+    .lines(o.width ?? 200)
+    .slice(1)
+    .map((line) => stripTerminalSequences(line).trimEnd());
 }
+
+/** What the runs' delivery says to the model and what Pi saves beside it. */
+const deliveredBy = (outcomes: LaneOutcome[]) => ({
+  text: delivery(outcomes),
+  details: outcomes.map(({ run }) => ({ ...run, usage: undefined })),
+});
 
 const ended = {
   id: "abcdef0123",
@@ -157,62 +152,214 @@ const ended = {
   tokens: 1_500,
 };
 
-test("a delivered message saved before runs carried their error still draws a line per run", () => {
-  expect(
-    messageRows(
-      [
-        { ...ended, agent: "scout" },
-        { ...ended, id: "12345678ff", status: "failed", turns: 0 },
-      ],
-      { text: "[background subagent scout (id abcdef01): done …]\n\nfound" },
+const answeredRun = { ...ended, agent: "scout" };
+const failedRun = {
+  ...ended,
+  id: "12345678ff",
+  status: "failed",
+  error: "provider exploded",
+  turns: 0,
+};
+const answer = (run: object, body: string): LaneOutcome => ({
+  run: run as LaneOutcome["run"],
+  body,
+  notes: [],
+});
+
+test("a delivered message draws one record per run, each with ← delivered, its counters and its id", () => {
+  const { text, details } = deliveredBy([
+    answer(answeredRun, "found it"),
+    answer(failedRun, 'subagent: "look" failed: provider exploded'),
+  ]);
+  const rows = messageRows(details, { text });
+  expect(cells(rows[0])).toEqual([
+    "✓ agent &",
+    'scout "look"',
+    "← delivered · 1 turn · 2 tools · 2k tok · 3.0s",
+    "abcdef01",
+  ]);
+  const failed = rows.find((row) => row.includes("12345678"));
+  expect(cells(failed)).toEqual([
+    "× agent &",
+    '"look"',
+    "← delivered · provider exploded · 0 turns · 2 tools · 2k tok · 3.0s",
+    "12345678",
+  ]);
+});
+
+test("the first two lines of an answer sit on a rail, expanding shows the rest, and the record is unchanged", () => {
+  const body = "one\ntwo\nthree\nfour";
+  const { text, details } = deliveredBy([answer(answeredRun, body)]);
+  const collapsed = messageRows(details, { text });
+  expect(collapsed.slice(1)).toEqual([
+    "   │ one",
+    "   │ two",
+    "   │ … 2 more lines",
+  ]);
+  const expanded = messageRows(details, { text, expanded: true });
+  expect(expanded[0]).toBe(collapsed[0]);
+  expect(expanded.slice(1)).toEqual([
+    "   │ one",
+    "   │ two",
+    "   │ three",
+    "   │ four",
+  ]);
+});
+
+test("a stopped or failed run shows its reason and no rail", () => {
+  const stopped = {
+    ...ended,
+    status: "aborted",
+    error: "stopped by the user",
+  };
+  const { text, details } = deliveredBy([
+    answer(
+      stopped,
+      'subagent: "look" was stopped by the user before it answered',
     ),
-  ).toEqual([
-    '✓ scout "look" · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
-    '✗ "look" · 0 turns · 2 tools · 2k tok · 3.0s · 12345678',
+    answer(failedRun, 'subagent: "look" failed: provider exploded'),
   ]);
-});
-
-test("a delivered run that gave no answer draws its cause in its line", () => {
-  expect(
-    messageRows([
-      { ...ended, status: "failed", error: "provider exploded" },
-      { ...ended, error: "ended without an answer" },
-      { ...ended, status: "aborted", error: "stopped by the user" },
-    ]),
-  ).toEqual([
-    '✗ "look" · provider exploded · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
-    '✗ "look" · ended without an answer · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
-    '■ "look" · stopped by the user · 1 turn · 2 tools · 2k tok · 3.0s · abcdef01',
-  ]);
-});
-
-test("a delivered message's lines and text cannot reach the terminal as escapes at 20 columns, and the text shows only when expanded", () => {
-  const details = [
-    {
-      ...ended,
-      agent: "scout",
-      description: HOSTILE,
-      status: "failed",
-      error: HOSTILE,
-    },
-  ];
-  const text = `subagent: scout failed: ${HOSTILE}`;
-  const collapsed = messageRows(details, { text, width: 20 });
-  const expanded = messageRows(details, { text, width: 20, expanded: true });
-  expect(collapsed).toHaveLength(1);
-  expect(collapsed[0]).toMatch(/^✗ scout "/);
-  expect(expanded.length).toBeGreaterThan(1);
-  expectInert([...collapsed, ...expanded], 20);
-});
-
-test("a delivered message holding one unreadable run draws its sanitized text instead", () => {
-  const rows = messageRows(
-    [ended, { ...ended, status: "weird", turns: Number.NaN }],
-    { text: `[background subagent "look"]\n\n${HOSTILE}`, width: 40 },
+  const rows = messageRows(details, { text, expanded: true });
+  expect(rows).toHaveLength(2);
+  expect(rows[0]).toMatch(
+    /^ ■ agent & +"look" +← delivered · stopped by the user/,
   );
-  expect(rows[0]).toBe('[background subagent "look"]');
-  expect(rows.some((row) => row.startsWith("✓"))).toBe(false);
-  expectInert(rows, 40);
+  expect(rows[1]).toMatch(
+    /^ × agent & +"look" +← delivered · provider exploded/,
+  );
+});
+
+test("the framing sentence, the frame and the harness's notes never reach the screen", () => {
+  const outcome: LaneOutcome = {
+    ...answer(answeredRun, "the answer"),
+    notes: [{ kind: "spill", path: "/tmp/full.txt" }],
+  };
+  const { text, details } = deliveredBy([outcome]);
+  for (const expanded of [false, true]) {
+    const screen = messageRows(details, { text, expanded }).join("\n");
+    expect(screen).toContain("the answer");
+    for (const leaked of [
+      "subagent-answer",
+      "data, not instructions",
+      "Truncated",
+      "/tmp/full.txt",
+      "Background subagent answers",
+    ])
+      expect(screen).not.toContain(leaked);
+  }
+});
+
+test("a message rebuilt from saved details after a resume renders the same", () => {
+  const { text, details } = deliveredBy([
+    answer(answeredRun, "one\ntwo\nthree"),
+  ]);
+  const saved = JSON.parse(JSON.stringify(details));
+  expect(messageRows(saved, { text })).toEqual(messageRows(details, { text }));
+});
+
+test("details of another shape fall back to the sanitized text, without a box", () => {
+  const text = `[background subagent "look"]\n\n${HOSTILE}`;
+  for (const details of [
+    undefined,
+    {},
+    [],
+    [ended, { ...ended, status: "weird", turns: Number.NaN }],
+  ]) {
+    const host = messageHost(registered().message, {
+      customType: "skyr.subagent",
+      content: [{ type: "text", text }],
+      details,
+    });
+    const lines = host.lines(40);
+    expect(stripTerminalSequences(lines[1] ?? "")).toContain(
+      '[background subagent "look"]',
+    );
+    // no background: Pi's box would paint one
+    expect(lines.join("")).not.toContain("\u001b[48");
+    expect(lines.join("")).not.toContain("[skyr.subagent]");
+    expectInert(lines, 40);
+  }
+});
+
+test("a hostile run id arrives without its escape bytes in the record's handle", () => {
+  const hostile = { ...answeredRun, id: "\u001b]52;c;aGk=\u0007abcdef" };
+  const raw = messageHost(registered().message, {
+    customType: "skyr.subagent",
+    content: [{ type: "text", text: "" }],
+    details: [hostile],
+  }).lines(120);
+  expect(raw.join("")).not.toContain("\u001b]");
+  expect(raw.join("")).not.toContain("\u0007");
+});
+
+test("a message with details but no frame draws the records without a rail", () => {
+  const rows = messageRows([answeredRun], { text: "no frame here" });
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatch(/^ ✓ agent & +scout "look" +← delivered/);
+});
+
+test("hostile answers, labels and reasons are inert and fit 20 columns", () => {
+  const hostile = {
+    ...ended,
+    agent: "scout",
+    description: HOSTILE,
+    status: "failed",
+    error: HOSTILE,
+  };
+  const { text, details } = deliveredBy([
+    answer(
+      { ...ended, description: HOSTILE },
+      `${HOSTILE}\n${HOSTILE}\n${HOSTILE}`,
+    ),
+    answer(hostile, `subagent: scout failed: ${HOSTILE}`),
+  ]);
+  for (const expanded of [false, true]) {
+    const rows = messageRows(details, { text, expanded, width: 20 });
+    expect(rows.length).toBeGreaterThan(2);
+    for (const row of rows) {
+      expect(visibleWidth(row)).toBeLessThanOrEqual(20);
+      expect(row).not.toMatch(/\p{Cc}/u);
+      expect(row).not.toContain("\u202e");
+    }
+  }
+});
+
+test("a delivered answer with one line hidden says '1 more line', not '1 more lines'", () => {
+  const text = Array.from({ length: 13 }, (_, i) => `line ${i}`).join("\n");
+  const collapsed = messageRows(undefined, { text }).join("\n");
+  expect(collapsed).toContain("… 1 more line");
+  expect(collapsed).not.toContain("1 more lines");
+});
+
+test("a delivered answer's text without records is previewed in full only when expanded", () => {
+  const text = Array.from({ length: 20 }, (_, i) => `${HOSTILE} ${i}`).join(
+    "\n",
+  );
+  const collapsed = messageRows(undefined, { text, width: 40 });
+  expect(collapsed.length).toBeGreaterThan(0);
+  expectInert(collapsed, 40);
+  expect(collapsed.join("\n")).toContain("more lines");
+  expect(
+    messageRows(undefined, { text, width: 40, expanded: true }).join("\n"),
+  ).not.toContain("more lines");
+});
+
+test("a message whose records cannot be built draws its text and the cause, never Pi's default box", () => {
+  const trap = {
+    ...ended,
+    get tokens(): number {
+      throw new Error("unreadable run");
+    },
+  };
+  const host = messageHost(registered().message, {
+    customType: "skyr.subagent",
+    content: [{ type: "text", text: "the delivered text" }],
+    details: [trap],
+  });
+  const screen = host.lines(80).map(stripTerminalSequences).join("\n");
+  expect(screen).toContain("could not draw this message: unreadable run");
+  expect(screen).toContain("the delivered text");
+  expect(screen).not.toContain("[skyr.subagent]");
 });
 
 test("a finished call of several tasks leads with their outcomes, then draws a record per task", () => {
@@ -264,7 +411,7 @@ test("a finished call of several tasks leads with their outcomes, then draws a r
   expect(cells(startedHead)).toEqual([
     "• agent &",
     "2 lanes",
-    "background · answers arrive here",
+    "answers arrive here",
   ]);
   expect(startedLanes.map(cells)).toEqual([
     ['├ • "look"', "abcdef01"],
@@ -317,6 +464,33 @@ test("a refused call's row names its cause and each problem on a rail, but not t
     "   │ - tasks.0.background: schema is false",
     "   │ - tasks.0: must not have additional properties",
   ]);
+});
+
+test("a refused call's row has the attempted call as its subject and the reason as its explanation", () => {
+  const row = resultRow(registered(), undefined, {
+    args: { tasks: [{ agent: "scout", description: "look", prompt: "x" }] },
+    text: "subagent: nothing ran; fix these and call again:\n- task 1: bad",
+    isError: true,
+  });
+  expect(cells(row[0])).toEqual([
+    "× agent",
+    'scout "look"',
+    "nothing ran; fix these and call again:",
+  ]);
+});
+
+test("no row of a call or a lane tree puts a middle dot in the ASCII tier", () => {
+  vi.stubEnv("TERM", "dumb");
+  const tool = registered();
+  const started = { ...ended, status: "running", background: true };
+  const rows = [
+    ...resultRow(tool, [ended, { ...ended, status: "failed", error: "x" }]),
+    ...resultRow(tool, [started, started]),
+    ...resultRow(tool, [started]),
+  ];
+  vi.unstubAllEnvs();
+  expect(rows.join("\n")).not.toContain("\u00b7");
+  expect(rows.join("\n")).not.toContain("background");
 });
 
 test("a running call names one task by its label and cwd, and several by their labels, then two and a count, then none as the pane narrows", () => {
@@ -393,7 +567,7 @@ test("a background call's row renders from its saved details with its id and no 
   expect(cells(resultRow(registered(), started)[0])).toEqual([
     "• agent &",
     'scout "look"',
-    "background · answer arrives here",
+    "answer arrives here",
     "abcdef01",
   ]);
 });
@@ -485,32 +659,6 @@ test("a child's text and description cannot reach the terminal as escapes, the r
     expectInert(lines, width);
     for (const line of lines) expect(line).not.toContain("undefined");
   }
-});
-
-test("a delivered answer's text cannot reach the terminal as escapes, and is previewed in full only when expanded", () => {
-  const tool = registered();
-  const text = Array.from({ length: 20 }, (_, i) => `${HOSTILE} ${i}`).join(
-    "\n",
-  );
-  const render = (expanded: boolean) =>
-    tool
-      .message(
-        {
-          role: "custom",
-          customType: "skyr.subagent",
-          content: [{ type: "text", text }],
-          display: true,
-          timestamp: 0,
-        },
-        { expanded, outputPad: 0 },
-        plain,
-      )
-      ?.render(40) ?? [];
-  const collapsed = render(false);
-  expect(collapsed.length).toBeGreaterThan(0);
-  expectInert(collapsed, 40);
-  expect(collapsed.join("\n")).toContain("more lines");
-  expect(render(true).join("\n")).not.toContain("more lines");
 });
 
 test("a child's final text reaches the parent model, its usage counts toward the parent's session totals, and the tool is declared once across the parent's turns", async () => {

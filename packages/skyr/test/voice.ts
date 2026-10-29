@@ -369,6 +369,7 @@ function fakePi(): { pi: ExtensionAPI; captured: Captured } {
     // registerSkyr also registers the web tools and subagent; these tests read only voice's part
     registerTool: () => {},
     registerMessageRenderer: () => {},
+    registerToolRenderer: () => {},
   };
   return { pi: pi as unknown as ExtensionAPI, captured };
 }

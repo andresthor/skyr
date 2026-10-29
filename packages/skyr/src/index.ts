@@ -11,6 +11,7 @@ import { loadPi } from "./pi.js";
 import { registerShells } from "./shells/index.js";
 import { identify } from "./shells/job.js";
 import { registerSubagent } from "./subagent/index.js";
+import { registerBuiltinRows } from "./tools/builtin-rows.js";
 import { registerWebFetch } from "./tools/web-fetch.js";
 import { registerWebSearch } from "./tools/web-search.js";
 import { registerVoice } from "./voice/index.js";
@@ -30,6 +31,7 @@ export async function registerSkyr(pi: ExtensionAPI): Promise<void> {
   registerAskUser(pi);
   registerAdvisor(pi);
   const piModule = await loadPi();
+  await registerBuiltinRows(pi, piModule);
   // Read in the factory, so the shells' `session_start` registers `bash` before its first await.
   // A ps that does not answer leaves Pi unidentified, so the shells step aside
   const self = (await identify(process.pid).catch(() => undefined))?.token;

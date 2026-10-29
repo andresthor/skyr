@@ -660,6 +660,7 @@ function registered(): Captured {
     registerCommand: () => {},
     registerShortcut: () => {},
     registerMessageRenderer: () => {},
+    registerToolRenderer: () => {},
     on: () => {},
   } as unknown as ExtensionAPI;
   registerSkyr(pi);

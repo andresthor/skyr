@@ -5,7 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { isRecord } from "../tengi.js";
+import { isRecord } from "../guards.js";
 
 type Events = ExtensionAPI["events"];
 

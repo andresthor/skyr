@@ -232,7 +232,7 @@ test("a ui section with a non-boolean footer or an unknown key is reported once 
   expect(notices()).toHaveLength(1);
   expect(notices()[0]?.args).toEqual([
     [
-      'skyr.json: ui."colour" is not a setting; ignored (settings: footer)',
+      'skyr.json: ui."colour" is not a setting; ignored (settings: footer, builtinRows)',
       "skyr.json: ui.footer must be true or false; using true",
     ].join("\n"),
     "warning",

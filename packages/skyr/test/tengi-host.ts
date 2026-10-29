@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { onTestFinished } from "vitest";
-import { isRecord } from "../src/tengi.js";
+import { isRecord } from "../src/guards.js";
 import { type WireRecord, wireProblems } from "./tengi-wire.js";
 
 export const TENGI_DIR = process.env.SKYR_TENGI_DIR;

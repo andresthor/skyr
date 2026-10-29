@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { isRecord } from "../src/tengi.js";
+import { isRecord } from "../src/guards.js";
 
 export interface WireRecord {
   dir: "agent->client" | "client->agent";

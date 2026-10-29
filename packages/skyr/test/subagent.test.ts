@@ -77,6 +77,7 @@ function registered(): ToolDefinition & { message: MessageRenderer } {
     registerShortcut: () => {},
     registerMessageRenderer: (type: string, renderer: MessageRenderer) =>
       renderers.set(type, renderer),
+    registerToolRenderer: () => {},
     on: () => {},
   } as unknown as ExtensionAPI);
   const tool = tools.find((t) => t.name === "subagent");

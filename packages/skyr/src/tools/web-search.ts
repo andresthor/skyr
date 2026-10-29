@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { isRecord } from "../guards.js";
 import { plural } from "../ui/format.js";
 import {
   durationFact,
@@ -512,9 +513,11 @@ const Params = Type.Object({
 function isSearchDetails(
   details: unknown,
 ): details is { provider: string; count: number } {
-  if (typeof details !== "object" || details === null) return false;
-  const d = details as { provider?: unknown; count?: unknown };
-  return typeof d.provider === "string" && typeof d.count === "number";
+  return (
+    isRecord(details) &&
+    typeof details.provider === "string" &&
+    typeof details.count === "number"
+  );
 }
 
 /** The ledger record of a search: the query, then how many results which provider gave. */

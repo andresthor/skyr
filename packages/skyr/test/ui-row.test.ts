@@ -236,6 +236,135 @@ describe("a markdown rail", () => {
   });
 });
 
+describe("toolRenderers over a host", () => {
+  /** A host that, like Pi's, throws when handed a component that is not its own. */
+  function hostRenderers() {
+    const seen: {
+      call: unknown[];
+      result: unknown[];
+      resultPartial: boolean[];
+    } = {
+      call: [],
+      result: [],
+      resultPartial: [],
+    };
+    class HostText {
+      invalidate() {}
+      constructor(public text: string) {}
+      render() {
+        return [this.text];
+      }
+    }
+    const own = (last: unknown): HostText => {
+      if (last !== undefined && !(last instanceof HostText))
+        throw new Error("foreign component");
+      return (last as HostText | undefined) ?? new HostText("");
+    };
+    const host = {
+      renderCall(
+        _args: unknown,
+        _theme: unknown,
+        context: { lastComponent: unknown },
+      ) {
+        seen.call.push(context.lastComponent);
+        const text = own(context.lastComponent);
+        text.text = "HOST CALL";
+        return text;
+      },
+      renderResult(
+        result: { content: { text?: string }[] },
+        options: { isPartial: boolean },
+        _theme: unknown,
+        context: { lastComponent: unknown },
+      ) {
+        seen.result.push(context.lastComponent);
+        seen.resultPartial.push(options.isPartial);
+        const text = own(context.lastComponent);
+        text.text = `HOST RESULT ${result.content[0]?.text}`;
+        return text;
+      },
+    };
+    return { host: host as never, seen };
+  }
+
+  const view = ({
+    args,
+    settled,
+  }: {
+    args: Partial<Args>;
+    settled?: unknown;
+  }): Row | undefined => {
+    if (args.name === "throws") throw new Error("view broke");
+    if (args.name === "unknown" && settled) return undefined;
+    return {
+      head: { ...HEAD, mark: settled ? "done" : "running", facts: [] },
+    };
+  };
+
+  test("a view that returns undefined, or throws, draws the host's call and result as text indented by the pad, without a failure line", () => {
+    for (const name of ["unknown", "throws"]) {
+      const { host } = hostRenderers();
+      const row = toolRowHost(toolRenderers<Args>(view, host), { name });
+      row.update({ content: [{ type: "text", text: "out" }] });
+      expect(row.lines(60)).toEqual(["", " HOST CALL", " HOST RESULT out"]);
+    }
+  });
+
+  test("a row the view knows is the record, and the host's components are never built", () => {
+    const { host, seen } = hostRenderers();
+    const row = toolRowHost(toolRenderers<Args>(view, host), { name: "ok" });
+    row.update({ content: [] });
+    expect(plain(row.lines(60))).toEqual(["", " ✓ probe    hello"]);
+    expect(seen.call).toEqual([]);
+    expect(seen.result).toEqual([]);
+  });
+
+  test("the host is handed the component it returned last, never skyr's, across renders, expands and invalidates", () => {
+    const { host, seen } = hostRenderers();
+    const row = toolRowHost(toolRenderers<Args>(view, host), {
+      name: "unknown",
+    });
+    row.update({ content: [{ type: "text", text: "out" }] });
+    for (let i = 0; i < 3; i++) {
+      row.expand(i % 2 === 0);
+      row.invalidate();
+      expect(() => row.lines(40)).not.toThrow();
+      expect(row.lines(40)).toEqual(["", " HOST CALL", " HOST RESULT out"]);
+    }
+    expect(seen.call[0]).toBeUndefined();
+    expect(seen.call.slice(1).every((last) => last !== undefined)).toBe(true);
+  });
+
+  test("the host's renderResult is called for a final result only", () => {
+    const { host, seen } = hostRenderers();
+    const row = toolRowHost(toolRenderers<Args>(view, host), {
+      name: "unknown",
+    });
+    row.update({ content: [{ type: "text", text: "so far" }] }, true);
+    expect(plain(row.lines(60))).toEqual(["", " • probe    hello"]);
+    expect(seen.resultPartial).toEqual([]);
+    row.update({ content: [{ type: "text", text: "done" }] });
+    row.lines(60);
+    expect(seen.resultPartial).toEqual([false]);
+  });
+
+  test("a host that throws while the row draws leaves the one failure line", () => {
+    const row = toolRowHost(
+      toolRenderers<Args>(view, {
+        renderCall() {
+          throw new Error("host broke");
+        },
+      } as never),
+      { name: "throws" },
+    );
+    row.update({ content: [] });
+    expect(plain(row.lines(60))).toEqual([
+      "",
+      "× row failed to draw: host broke",
+    ]);
+  });
+});
+
 describe("failedRow and plainRow", () => {
   const content = [
     {

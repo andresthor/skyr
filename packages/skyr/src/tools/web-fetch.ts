@@ -12,6 +12,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import TurndownService from "turndown";
 import { type Static, Type } from "typebox";
 import { errnoOf } from "../errno.js";
+import { isRecord } from "../guards.js";
 import { loadPi } from "../pi.js";
 import type { Fact } from "../ui/record.js";
 import {
@@ -355,12 +356,11 @@ const Params = Type.Object({
 });
 
 function isFetchDetails(details: unknown): details is FetchDetails {
-  if (typeof details !== "object" || details === null) return false;
-  const d = details as Partial<FetchDetails>;
   return (
-    typeof d.url === "string" &&
-    typeof d.bytes === "number" &&
-    typeof d.truncated === "boolean"
+    isRecord(details) &&
+    typeof details.url === "string" &&
+    typeof details.bytes === "number" &&
+    typeof details.truncated === "boolean"
   );
 }
 

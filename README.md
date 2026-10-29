@@ -176,7 +176,8 @@ the bar shows, and a stop names what it stopped). A `/reload` stops background
 subagents; the reloaded session receives one message naming each, so the model knows their answers
 will not come. A call's row in the transcript is a record, `✓ agent "label"` with its turns, tokens,
 time and id; several tasks get a header with their shared mark (`!` for a mix) and one record each
-under it. An HTML export draws each finished skyr row with its running head above it, because Pi
+under it. An HTML export draws each finished skyr row (for the built-in tools, `grep` and `find`
+only: Pi's export template draws the others itself) with its running head above it, because Pi
 gives the export's call no sign of being finished. A bar above the editor shows what runs: nothing at rest; while subagents or shells
 run, one line with a mark per run, the latest action and the longest running time; a failed
 background subagent or shell leads it, with its reason, until you open the bar. `alt+a` opens and
@@ -325,6 +326,17 @@ reads only what a file has gained since.
 
 The footer is drawn only in Pi's terminal UI. `{"ui": {"footer": false}}` in `<agentDir>/skyr.json`
 leaves Pi's footer, from the next session.
+
+## Built-in tool rows
+
+`grep`, `find` and `ls` rows in the transcript are records too: `✓ grep "pattern" src` with the
+count of matches and files, or of entries, and the time. A failure shows its reason and up to three
+lines of the tool's message; `ctrl+o` shows the listing, up to 400 lines and a count of the rest. A
+result skyr does not recognise is drawn as Pi's own row for it, with whatever colour Pi gives it; for these tools that is text.
+
+skyr restyles only Pi's own renderers, through Pi's public tool renderer resolver; another
+extension's override of a built-in tool is left as it is. `{"ui": {"builtinRows": false}}` in
+`<agentDir>/skyr.json` gives Pi's rows back, from the next `/reload` or restart.
 
 ## Embedding it
 

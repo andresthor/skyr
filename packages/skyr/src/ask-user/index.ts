@@ -9,6 +9,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { isRecord } from "../guards.js";
 import { hostCapabilities } from "../tengi.js";
 import { glyphsOf, tierOf } from "../ui/caps.js";
 import {
@@ -265,21 +266,17 @@ function askRow({ args, settled }: ToolView<Static<typeof Params>>): Row {
 
 // Persisted details may come from an older build or another extension's tool of this name
 function isAsked(details: unknown): details is AskDetails {
-  if (typeof details !== "object" || details === null) return false;
-  if (!("outcome" in details)) return false;
+  if (!isRecord(details)) return false;
   if (details.outcome === "declined") return true;
-  if (details.outcome !== "answered" || !("answers" in details)) return false;
+  if (details.outcome !== "answered") return false;
   const { answers } = details;
   return (
     Array.isArray(answers) &&
     answers.length > 0 &&
     answers.every(
       (a: unknown) =>
-        typeof a === "object" &&
-        a !== null &&
-        "header" in a &&
+        isRecord(a) &&
         typeof a.header === "string" &&
-        "answer" in a &&
         typeof a.answer === "string",
     )
   );

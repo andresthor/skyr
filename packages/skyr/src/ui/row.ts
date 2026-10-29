@@ -66,11 +66,21 @@ export interface ToolView<Args> {
   readonly expanded: boolean;
 }
 
+/** The host's own components for a row, kept so the host is handed back what it returned last. */
+interface HostScratch {
+  call?: Component;
+  result?: Component;
+}
+
+/** Keyed by a symbol so it cannot meet a key the host's renderers keep in the same object. */
+const HOST: unique symbol = Symbol("skyr.host");
+
 /** What `renderCall` and `renderResult` share through Pi's `context.state`. */
 interface RowState {
   settled?: Settled;
   /** Whether the call component drew the settled record at its last paint. */
   drew?: boolean;
+  [HOST]?: HostScratch;
 }
 
 type Context = Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
@@ -191,27 +201,96 @@ function drawn(render: (width: number) => string[]): Component {
 const argsOf = <Args>(args: unknown): Partial<Args> =>
   typeof args === "object" && args !== null ? args : {};
 
+/** The renderers `toolRenderers` makes: a self-framed ledger row. */
+export interface LedgerRenderers {
+  readonly renderShell: "self";
+  renderCall(args: unknown, theme: Theme, context: Context): Component;
+  renderResult(
+    result: Pick<Settled, "content" | "details">,
+    options: { expanded: boolean; isPartial: boolean },
+    theme: Theme,
+    context: Context,
+  ): Component;
+}
+
+/**
+ * The host's components drawn as text, indented by the pad Pi leaves a self-framed row to apply.
+ * They are the host's own content, so they carry whatever colour the host gave them: Pi's edit
+ * box keeps its background, while its other rows are text.
+ */
+const hostLines = (component: Component, width: number, pad: number) =>
+  component
+    .render(Math.max(0, width - 2 * pad))
+    .map((line) => `${" ".repeat(pad)}${line}`);
+
 /**
  * The `renderCall` and `renderResult` of a ledger row. `view` is pure and total: it is handed
  * partial arguments while they stream, no result while the call runs, and details of any shape
  * a saved session may hold. It runs at paint time, so a throw in it or in drawing becomes one
  * line carrying the cause instead of leaving Pi's renderer.
+ *
+ * With a `host`, which is the renderers Pi would have used, `view` may also return undefined
+ * for a shape it does not know, and a throw in `view` or in drawing is no failure line: the row
+ * draws the host's own components instead, call and result alike, as text without the card.
+ * They are kept in a scratch in `context.state` and handed back as `lastComponent`, never
+ * skyr's own, which the host's renderers would throw on. The host's `renderResult` is called
+ * only for a final result, because a partial one may start timers the host cleans up only when
+ * the result is final.
  */
-export function toolRenderers<Args>(view: (v: ToolView<Args>) => Row) {
+export function toolRenderers<Args>(
+  view: (v: ToolView<Args>) => Row,
+): LedgerRenderers;
+export function toolRenderers<Args>(
+  view: (v: ToolView<Args>) => Row | undefined,
+  host: ToolRenderers,
+): LedgerRenderers;
+export function toolRenderers<Args>(
+  view: (v: ToolView<Args>) => Row | undefined,
+  host?: ToolRenderers,
+): LedgerRenderers {
+  /** The record's lines, or undefined where the host should draw: a shape `view` does not know, or a throw with a host. */
+  const record = (
+    input: ToolView<Args>,
+    theme: Theme,
+    memo: Memo,
+    width: number,
+    pad: number,
+  ): string[] | undefined => {
+    try {
+      const row = view(input);
+      return row && linesOf(theme, memo, row, input.expanded, width, pad);
+    } catch (cause) {
+      if (!host) throw cause;
+      // The host's own row is the answer; the cause has no surface to be shown on
+      return undefined;
+    }
+  };
+  const scratchOf = (state: RowState): HostScratch => (state[HOST] ??= {});
   return {
     renderShell: "self" as const,
     renderCall(args: unknown, theme: Theme, context: Context): Component {
       const state: RowState = context.state;
       const { expanded, outputPad } = context;
       const memo: Memo = {};
+      let hosted: Component | undefined;
       return drawn((width) => {
+        // Without a host a failure line is this component's whole answer, so the result adds none
         state.drew = state.settled !== undefined;
-        const row = view({
-          args: argsOf<Args>(args),
-          settled: state.settled,
-          expanded,
+        const lines = record(
+          { args: argsOf<Args>(args), settled: state.settled, expanded },
+          theme,
+          memo,
+          width,
+          outputPad,
+        );
+        if (lines) return lines;
+        state.drew = false;
+        const scratch = scratchOf(state);
+        hosted ??= scratch.call = host?.renderCall?.(args, theme, {
+          ...context,
+          lastComponent: scratch.call,
         });
-        return linesOf(theme, memo, row, expanded, width, outputPad);
+        return hosted ? hostLines(hosted, width, outputPad) : [];
       });
     },
     renderResult(
@@ -230,14 +309,30 @@ export function toolRenderers<Args>(view: (v: ToolView<Args>) => Row) {
         };
       const { expanded } = options;
       const memo: Memo = {};
+      let hosted: Component | undefined;
       return drawn((width) => {
         if (state.drew || state.settled === undefined) return [];
-        const row = view({
-          args: argsOf<Args>(context.args),
-          settled: state.settled,
-          expanded,
-        });
-        return linesOf(theme, memo, row, expanded, width, context.outputPad);
+        const lines = record(
+          {
+            args: argsOf<Args>(context.args),
+            settled: state.settled,
+            expanded,
+          },
+          theme,
+          memo,
+          width,
+          context.outputPad,
+        );
+        if (lines) return lines;
+        const scratch = scratchOf(state);
+        // Pi's own object, typed by what a ledger row reads of it
+        hosted ??= scratch.result = host?.renderResult?.(
+          result as Parameters<NonNullable<ToolRenderers["renderResult"]>>[0],
+          { expanded, isPartial: false },
+          theme,
+          { ...context, lastComponent: scratch.result },
+        );
+        return hosted ? hostLines(hosted, width, context.outputPad) : [];
       });
     },
   };
@@ -320,7 +415,8 @@ export function messageComponent(
   }
 }
 
-type Head = Omit<RecordSpec, "mark" | "facts">;
+/** A record without its mark and facts, which the row decides once it knows how the call ended. */
+export type Head = Omit<RecordSpec, "mark" | "facts">;
 
 /** A failed call: its reason as the explaining fact, and the rest of its message on a rail. */
 export function failedRow(head: Head, settled: Settled, tool: string): Row {

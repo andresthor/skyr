@@ -396,6 +396,20 @@ export async function piExport(
   return readFileSync(file, "utf8");
 }
 
+/** What an export pre-rendered from the tool renderers, by tool-call id: its call, and its result collapsed and expanded, as HTML. */
+export function exportedRows(html: string): Record<
+  string,
+  {
+    callHtml?: string;
+    resultHtmlCollapsed?: string;
+    resultHtmlExpanded?: string;
+  }
+> {
+  const encoded = html.match(/[A-Za-z0-9+/]{1000,}={0,2}/)?.[0] ?? "";
+  const data = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+  return data.renderedTools ?? {};
+}
+
 /** The colour each thinking level's rule is drawn in by `piTheme`. */
 const THINKING_COLOURS: Readonly<Record<string, string>> & { off: string } = {
   off: "#505050",

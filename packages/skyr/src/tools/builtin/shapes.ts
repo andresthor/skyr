@@ -55,6 +55,9 @@ export const limited = (details: Details): boolean =>
 export const strOf = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
 
+export const numOf = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
 /** The text blocks of a result, joined as Pi's own renderers join them. */
 export const textOf = (content: Settled["content"]): string =>
   content
@@ -84,15 +87,16 @@ export function pathSubject(raw: string | undefined): string {
     : path;
 }
 
-/**
- * Output as rail lines: sanitized, tabs as two spaces, blank lines dropped, and no more than
- * `RAIL_CAP`, with a last line counting the rest.
- */
-export function railOf(text: string): string[] {
-  const lines = sanitizeBlock(text)
+/** Output as lines fit for a rail: sanitized, tabs as two spaces, blank lines dropped. */
+export const outputLines = (text: string): string[] =>
+  sanitizeBlock(text)
     .split("\n")
     .map((line) => line.replaceAll("\t", "  ").trimEnd())
     .filter((line) => line.trim() !== "");
+
+/** `outputLines` of a whole result: no more than `RAIL_CAP`, with a last line counting the rest. */
+export function railOf(text: string): string[] {
+  const lines = outputLines(text);
   if (lines.length <= RAIL_CAP) return lines;
   const { ellipsis } = glyphsOf(tierOf(process.env));
   return [

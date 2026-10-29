@@ -329,10 +329,13 @@ leaves Pi's footer, from the next session.
 
 ## Built-in tool rows
 
-`grep`, `find` and `ls` rows in the transcript are records too: `✓ grep "pattern" src` with the
-count of matches and files, or of entries, and the time. A failure shows its reason and up to three
-lines of the tool's message; `ctrl+o` shows the listing, up to 400 lines and a count of the rest. A
-result skyr does not recognise is drawn as Pi's own row for it, with whatever colour Pi gives it; for these tools that is text.
+`grep`, `find`, `ls` and `bash` rows in the transcript are records too: `✓ grep "pattern" src` with
+the count of matches and files, or of entries, and the time. A failure shows its reason and up to
+three lines of the tool's message (for `bash`, the first three lines of its output and `exit 2`);
+`ctrl+o` shows the listing or the output, up to 400 lines and a count of the rest. A running `bash`
+row shows the last three lines of its output so far and no clock: the working line and the bar
+carry the time. A result skyr does not recognise is drawn as Pi's own row for it, with whatever
+colour Pi gives it; for these tools that is text.
 
 skyr restyles only Pi's own renderers, through Pi's public tool renderer resolver; another
 extension's override of a built-in tool is left as it is. `{"ui": {"builtinRows": false}}` in

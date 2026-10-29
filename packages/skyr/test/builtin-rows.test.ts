@@ -5,7 +5,7 @@ import type {
   ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, test } from "vitest";
+import { describe, expect, onTestFinished, test, vi } from "vitest";
 import { loadPi } from "../src/pi.js";
 import { grepView } from "../src/tools/builtin/search.js";
 import { registerBuiltinRows } from "../src/tools/builtin-rows.js";
@@ -328,5 +328,212 @@ describe("grepView", () => {
 
   test("a match line that merely looks like a notice is not stripped when nothing was cut", () => {
     expect(facts("a.ts:1: x\n\n[b]")).toEqual([]);
+  });
+});
+
+describe("bash rows", () => {
+  const text = (value: string): RowResult["content"] => [
+    { type: "text", text: value },
+  ];
+  const row = async (args: Record<string, unknown>) =>
+    builtinHost("bash", args, await registered());
+
+  test("a running row shows the last three lines of the output so far, and starts no interval, then a final one leaves none", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const host = await row({ command: "make", timeout: 30 });
+    host.start();
+    expect(plain(host.lines(80))[1]).toMatch(/^ • bash {5}make +timeout 30s$/);
+    host.update({ content: text("one\ntwo\n\nthree\nfour\nfive\n") }, true);
+    expect(plain(host.lines(80)).slice(1)).toEqual([
+      expect.stringMatching(/^ • bash {5}make/),
+      "   │ three",
+      "   │ four",
+      "   │ five",
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+    host.update({ content: text("done\n"), durationMs: 1200 });
+    expect(plain(host.lines(80))[1]).toMatch(/^ ✓ bash {5}make +1\.2s$/);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("the tail is sanitized and never wider than the pane", async () => {
+    const host = await row({ command: "make" });
+    host.update(
+      {
+        content: text(
+          `${CORPUS.slice(6, 14).join("\n")}\n${"x".repeat(300)}\n漢字`,
+        ),
+      },
+      true,
+    );
+    for (const width of [20, 40, 86]) {
+      const lines = host.lines(width);
+      expect(lines.length).toBeLessThanOrEqual(5);
+      expect(lines.join("")).not.toContain("\u001b[2J");
+      expect(lines.join("")).not.toContain("\u001b]");
+      for (const line of lines)
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
+
+  test("Pi's partial renderResult never runs, even on the fallback path, so its interval never starts", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const host = await row({ command: "make" });
+    host.start();
+    host.update({ content: text("so far") }, true);
+    host.update({ content: text("so far") }, true);
+    expect(vi.getTimerCount()).toBe(0);
+    // an unknown shape in the final result: Pi's components draw it
+    host.update({
+      content: text("out"),
+      details: { truncation: "no" },
+    });
+    expect(plain(host.lines(80)).join("\n")).toContain("out");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("the exit code comes from Pi's own status line, and an output that contains that sentence mid-text is not misread", async () => {
+    const cwd = tree();
+    const host = await row({ command: "x" });
+    host.update(
+      await realTool(
+        "bash",
+        { command: "echo 'Command exited with code 9'; echo more; exit 2" },
+        cwd,
+      ),
+    );
+    const lines = plain(host.lines(80));
+    expect(lines[1]).toMatch(/^ × bash {5}x +exit 2$/);
+    expect(lines[2]).toBe("   │ Command exited with code 9");
+    const ok = await row({ command: "x" });
+    ok.update(
+      await realTool(
+        "bash",
+        { command: "echo 'Command exited with code 9'" },
+        cwd,
+      ),
+    );
+    expect(plain(ok.lines(80))[1]).toMatch(/^ ✓ bash/);
+  });
+
+  test("a failed row shows the first three output lines and the count of the rest; expanded shows all", async () => {
+    const cwd = tree();
+    const host = await row({ command: "seq" });
+    host.update(await realTool("bash", { command: "seq 1 8; exit 2" }, cwd));
+    expect(plain(host.lines(80)).slice(2)).toEqual([
+      "   │ 1",
+      "   │ 2",
+      "   │ 3",
+      "   │ … 5 more lines",
+    ]);
+    host.expand(true);
+    expect(
+      plain(host.lines(80))
+        .slice(2)
+        .map((l) => l.slice(5)),
+    ).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
+  });
+
+  test("an expanded rail stops at 400 lines and counts the rest", async () => {
+    const cwd = tree();
+    const host = await row({ command: "seq" });
+    host.update(await realTool("bash", { command: "seq 1 900; exit 2" }, cwd));
+    host.expand(true);
+    const lines = plain(host.lines(80));
+    expect(lines).toHaveLength(2 + 400 + 1);
+    expect(lines.at(-1)).toBe("   │ … 500 more lines not shown");
+  });
+
+  test("aborted, timed out and truncated results draw their own explanation", async () => {
+    const cwd = tree();
+    const timed = await row({ command: "sleep 5" });
+    timed.update(
+      await realTool("bash", { command: "sleep 5", timeout: 1 }, cwd),
+    );
+    expect(plain(timed.lines(80))[1]).toMatch(/× bash.*timed out after 1s/);
+    const aborted = await row({ command: "x" });
+    aborted.update({
+      content: text("partial\n\nCommand aborted"),
+      isError: true,
+    });
+    expect(plain(aborted.lines(80))[1]).toMatch(/^ ■ bash {5}x +aborted$/);
+    const big = await row({ command: "seq" });
+    big.update(await realTool("bash", { command: "seq 1 5000" }, cwd));
+    expect(plain(big.lines(100))[1]).toMatch(/✓ bash.*truncated/);
+    big.expand(true);
+    const expanded = plain(big.lines(100));
+    expect(expanded.some((l) => l.includes("   │ log "))).toBe(true);
+    expect(expanded.join("\n")).not.toContain("Showing lines");
+  });
+
+  test("a moved job draws as the shells' running record with its id", async () => {
+    const host = await row({ command: "pnpm dev" });
+    host.update({
+      content: text(
+        "Still running after 10 s; moved to the background as job 707a40cb",
+      ),
+      details: {
+        job: {
+          id: "707a40cb",
+          command: "pnpm dev",
+          cwd: "/x",
+          log: "/x/out.log",
+          startedAt: 1,
+          status: "running",
+        },
+        "tengi:task": { source: "x", id: "707a40cb" },
+      },
+    });
+    expect(plain(host.lines(80))[1]).toMatch(
+      /^ • bash & +pnpm dev +still running +707a40cb$/,
+    );
+  });
+
+  test("an unknown details shape draws Pi's row, and a hostile command and output never crash Pi's renderer at 20, 40 and 86 columns", async () => {
+    const resolvers = await registered();
+    for (const value of CORPUS) {
+      const host = await builtinHost(
+        "bash",
+        { command: value, timeout: 3 },
+        resolvers,
+      );
+      const results: RowResult[] = [
+        { content: text(`${value}\n${value}`) },
+        {
+          content: text(`${value}\n\nCommand exited with code 2`),
+          isError: true,
+        },
+        { content: text(value), details: { truncation: 3 } },
+        {
+          content: text(value),
+          details: { truncation: { truncated: true }, fullOutputPath: value },
+        },
+      ];
+      for (const width of [20, 40, 86]) {
+        const screen = (lines: string[]) =>
+          piScreen({ invalidate() {}, render: () => lines }, width);
+        host.update({ content: text(value) }, true);
+        expect(screen(host.lines(width)).crash).toBeUndefined();
+        for (const result of results) {
+          host.update(result);
+          for (const expand of [false, true, false]) {
+            host.expand(expand);
+            host.invalidate();
+            const lines = host.lines(width);
+            for (const line of lines)
+              expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+            const drawn = screen(lines);
+            expect(drawn.firstFrameCrash).toBeUndefined();
+            expect(drawn.crash).toBeUndefined();
+          }
+        }
+      }
+    }
   });
 });

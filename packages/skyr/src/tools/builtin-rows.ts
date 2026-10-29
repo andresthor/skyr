@@ -9,12 +9,14 @@ import type { PiModule } from "../pi.js";
 import type { Row, ToolView } from "../ui/row.js";
 import { toolRenderers } from "../ui/row.js";
 import { readUiSettings } from "../ui-config.js";
+import { bashView } from "./builtin/bash.js";
 import { findView, grepView, lsView } from "./builtin/search.js";
 
 /** Views take the arguments of their own tool; a resolver only knows the name. */
 type View = (v: ToolView<never>) => Row | undefined;
 
 const VIEWS = new Map<string, View>([
+  ["bash", bashView],
   ["grep", grepView],
   ["find", findView],
   ["ls", lsView],
@@ -26,6 +28,7 @@ const VIEWS = new Map<string, View>([
  */
 function fingerprints(host: PiModule): Map<string, string> {
   const own = {
+    bash: host.createBashToolDefinition,
     grep: host.createGrepToolDefinition,
     find: host.createFindToolDefinition,
     ls: host.createLsToolDefinition,

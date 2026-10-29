@@ -1,11 +1,13 @@
 // skyr's bash runs Pi's own code path. These rows pin that against the pinned Pi, so a Pi bump that
 // changes what a call returns, or what `bash` declares, turns one of them red.
-import { existsSync, mkdirSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
 import { registerSkyr } from "../src/index.js";
+import { loadPi } from "../src/pi.js";
 import { scratchDir, script } from "./session.js";
 import {
   nestTool,
@@ -250,5 +252,40 @@ describe("bash parity with Pi's own", () => {
     });
     expect(got.lines).toEqual(want.lines);
     expect(want.lines.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the resolver and skyr's bash", () => {
+  const resolved = (
+    rt: ShellRuntime,
+    base = rt.session.getToolDefinition("bash"),
+  ) => rt.session.extensionRunner.resolveToolRenderers("bash", () => base);
+
+  test("skyr's bash carries Pi's renderers, so the resolver restyles it in the skyr session", async () => {
+    const rt = await shellRuntime({ extensions: [registerSkyr] });
+    expect(skyrServesBash(rt.session)).toBe(true);
+    expect(resolved(rt)?.renderShell).toBe("self");
+  });
+
+  test("a bash whose renderers are not Pi's is left alone with skyr loaded", async () => {
+    const rt = await shellRuntime({ extensions: [registerSkyr] });
+    const swapped = {
+      ...rt.session.getToolDefinition("bash"),
+      renderCall: () => ({ invalidate() {}, render: () => [] }),
+    };
+    expect(resolved(rt, swapped as never)).toBe(swapped);
+  });
+
+  test("ui.builtinRows false leaves bash's renderers Pi's, by identity, in the skyr session", async () => {
+    const off: ExtensionFactory = async () => {
+      const { getAgentDir } = await loadPi();
+      writeFileSync(
+        join(getAgentDir(), "skyr.json"),
+        JSON.stringify({ ui: { builtinRows: false } }),
+      );
+    };
+    const rt = await shellRuntime({ extensions: [off, registerSkyr] });
+    const base = rt.session.getToolDefinition("bash");
+    expect(resolved(rt, base)).toBe(base);
   });
 });

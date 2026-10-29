@@ -11,7 +11,8 @@
  * that from a live call, so every finished skyr row there has its running head above it.
  *
  * Nothing here ticks. A running row is static, because a line that changes above the viewport
- * makes Pi's regular renderer clear the terminal's scrollback.
+ * makes Pi's regular renderer clear the terminal's scrollback; it changes only when a tool that
+ * streams hands it a partial result, as Pi's own `bash` row does.
  */
 import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import {
@@ -63,6 +64,8 @@ export interface ToolView<Args> {
   /** Streaming arguments are partial: any field can be missing. */
   readonly args: Readonly<Partial<Args>>;
   readonly settled?: Settled;
+  /** The content of the latest partial result of a running call, for a tool that streams. */
+  readonly partial?: Settled["content"];
   readonly expanded: boolean;
 }
 
@@ -73,15 +76,19 @@ interface HostScratch {
 }
 
 /** Keyed by a symbol so it cannot meet a key the host's renderers keep in the same object. */
-const HOST: unique symbol = Symbol("skyr.host");
+const ROW: unique symbol = Symbol("skyr.row");
 
 /** What `renderCall` and `renderResult` share through Pi's `context.state`. */
 interface RowState {
   settled?: Settled;
+  partial?: Settled["content"];
   /** Whether the call component drew the settled record at its last paint. */
   drew?: boolean;
-  [HOST]?: HostScratch;
+  host?: HostScratch;
 }
+
+const rowOf = (state: object): RowState =>
+  ((state as { [ROW]?: RowState })[ROW] ??= {});
 
 type Context = Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
 
@@ -265,11 +272,11 @@ export function toolRenderers<Args>(
       return undefined;
     }
   };
-  const scratchOf = (state: RowState): HostScratch => (state[HOST] ??= {});
+  const scratchOf = (state: RowState): HostScratch => (state.host ??= {});
   return {
     renderShell: "self" as const,
     renderCall(args: unknown, theme: Theme, context: Context): Component {
-      const state: RowState = context.state;
+      const state = rowOf(context.state);
       const { expanded, outputPad } = context;
       const memo: Memo = {};
       let hosted: Component | undefined;
@@ -277,7 +284,12 @@ export function toolRenderers<Args>(
         // Without a host a failure line is this component's whole answer, so the result adds none
         state.drew = state.settled !== undefined;
         const lines = record(
-          { args: argsOf<Args>(args), settled: state.settled, expanded },
+          {
+            args: argsOf<Args>(args),
+            settled: state.settled,
+            partial: state.partial,
+            expanded,
+          },
           theme,
           memo,
           width,
@@ -299,8 +311,9 @@ export function toolRenderers<Args>(
       theme: Theme,
       context: Context,
     ): Component {
-      const state: RowState = context.state;
-      if (!options.isPartial)
+      const state = rowOf(context.state);
+      if (options.isPartial) state.partial = result.content;
+      else
         state.settled = {
           content: result.content,
           details: result.details,

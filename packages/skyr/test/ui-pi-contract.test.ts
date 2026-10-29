@@ -320,6 +320,28 @@ test("a resolver that calls next() twice runs the resolvers after it twice", () 
   expect(base).toHaveBeenCalledTimes(2);
 });
 
+test("Pi's real chain runs the resolvers after a resolver that calls next() twice, once per next()", async () => {
+  const askedOf = async (doubleNext: boolean) => {
+    const asked: string[] = [];
+    await piExport(
+      (pi) => {
+        pi.registerToolRenderer((_name, next) => {
+          if (doubleNext) next();
+          return next();
+        });
+        pi.registerToolRenderer(spyingResolver(asked));
+      },
+      [{ name: "grep", args: { pattern: "x" }, result: { content: [] } }],
+    );
+    return asked;
+  };
+  const once = await askedOf(false);
+  // Without this the doubling below could pass vacuously, the chain asking nobody
+  expect(once.length).toBeGreaterThan(0);
+  const twice = await askedOf(true);
+  expect(twice).toEqual(once.flatMap((name) => [name, name]));
+});
+
 test("the interactive base is Pi's own renderers for a tool with no registered definition, and an export's base is undefined for it", async () => {
   for (const name of BUILTIN_TOOLS) {
     const base = withBuiltInRenderers(name, undefined);
@@ -693,6 +715,9 @@ test('grep match lines are "path:line: text" and with context also "path-line- t
   expect(empty.details).toBeUndefined();
 });
 
+// A compatibility canary on the pinned copy's source: the string pins break on harmless
+// renames by design. A failure here after a Pi upgrade means: re-derive the ordering in the
+// new pinned copy before touching this test.
 test("resumed and reloaded sessions build their rows before session_start", () => {
   const source = readFileSync(
     "node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/interactive-mode.js",
@@ -700,10 +725,11 @@ test("resumed and reloaded sessions build their rows before session_start", () =
   );
   // rebindCurrentSession: renderCurrentSessionState runs before bindCurrentSessionExtensions
   const rebind = source.slice(source.indexOf("async rebindCurrentSession("));
-  expect(rebind.indexOf("this.renderCurrentSessionState()")).toBeGreaterThan(0);
-  expect(rebind.indexOf("this.renderCurrentSessionState()")).toBeLessThan(
-    rebind.indexOf("await this.bindCurrentSessionExtensions()"),
-  );
+  const rendered = rebind.indexOf("this.renderCurrentSessionState()");
+  const bound = rebind.indexOf("await this.bindCurrentSessionExtensions()");
+  expect(rendered).toBeGreaterThanOrEqual(0);
+  expect(bound).toBeGreaterThanOrEqual(0);
+  expect(rendered).toBeLessThan(bound);
   // reload: the chat is rebuilt in beforeSessionStart
   expect(source).toContain(
     "reload({ beforeSessionStart: restoreChatBeforeSessionStart })",

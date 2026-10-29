@@ -270,7 +270,10 @@ export async function piRenderers(
 /**
  * The renderers for a call as Pi resolves them: the extensions' resolvers in load order, each
  * handed a `next` that runs the rest and then `base`, as `ExtensionRunner.resolveToolRenderers`
- * does. Written out here so the chain's rules are Pi's, not skyr's.
+ * does. Written out here so the chain's rules are Pi's, not skyr's. Mirror of
+ * ../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/runner.js:542-546 of the
+ * pinned runtime; "Pi's real chain runs the resolvers after a resolver that calls next()
+ * twice, once per next()" in test/ui-pi-contract.test.ts holds the real chain to it.
  */
 export function resolveChain(
   resolvers: readonly ((

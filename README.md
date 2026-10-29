@@ -183,8 +183,17 @@ background subagent or shell leads it, with its reason, until you open the bar. 
 closes the bar and `alt+s` switches between its AGENTS and SHELLS tabs; `/subagents` and `/shells`
 open the bar on their tab (on macOS `alt` needs Option-as-Meta; the commands always work). An open bar lists
 each run with its slot number, latest action, turns, tools, time and id, dropping columns as the
-pane narrows; under 30 terminal rows or 44 columns it stays a pulse, and `/subagents` and `/shells`
-list in a notice instead. The bar is drawn only in Pi's terminal UI;
+pane narrows. It draws as many rows as the pane has room for and scrolls with ↑↓ (a "+N more"
+line marks the side where rows are hidden); under 12 terminal rows or 44 columns it stays a pulse,
+and `alt+a`, `alt+s`, `/subagents` and `/shells` list in a notice instead. With the bar open and the prompt empty, ↑ and ↓ (Pi's `tui.select.up`
+and `tui.select.down`) move a highlight through the rows, and Esc (`app.interrupt`) closes the bar
+when the agent is idle and still interrupts when something is. Pi's idle check does not see a
+running `!` command, so then Esc closes the bar first and a second Esc stops it; with a `!ls`
+draft in the box and the bar open, the first Esc closes the bar instead of leaving bash mode. A
+rebinding of those ids moves the keys, and a key the editor shares with them is the bar's while it
+lists. ↑↓ stay the editor's when the bar has nothing to move, and under another extension's
+editor (see Editor) the bar has no keys of its own. The bar is drawn only in
+Pi's terminal UI;
 rpc clients and print mode get none, and there `/subagents` and `/shells` list in a notice. A
 delivered message shows one record per subagent, with the first lines of its answer under it, or
 why it gave none; expand it to read the rest. A background subagent's token usage is in the delivered message, not in the

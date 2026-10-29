@@ -172,8 +172,9 @@ test("several questions: Tab and Shift+Tab move through them and Review, Enter a
   expect(d.text(80)[0]).toContain("✓ Scope");
   expect(d.text(80)[0]).toContain("2 of 3");
   d.press(TAB, TAB);
-  expect(screen()).toContain(" Scope    A");
-  expect(screen()).toContain(" Storage  not answered");
+  expect(receipt(d)).toBe(
+    "Scope → A · Storage → not answered · Name → not answered",
+  );
   d.press(BACKTAB, BACKTAB, BACKTAB);
   expect(d.text()).toContain(" › 1  (•) A");
   d.press(TAB, DOWN, ENTER);
@@ -201,7 +202,7 @@ test("Enter never goes back to a question the user tabbed past, and Review sends
   d.press(TAB, ENTER);
   expect(screen()).toContain(naming.question);
   d.press(..."skyr", ENTER);
-  expect(screen()).toContain(" Scope    not answered");
+  expect(receipt(d)).toMatch(/^Scope → not answered · Storage → SQLite/);
   expect(bottom(d)).toContain("enter send anyway · ");
   d.press(ENTER);
   expect(d.done.mock.calls).toEqual([
@@ -247,7 +248,7 @@ test("Space marks a tabbed single choice without moving on, and does nothing on 
 test("between tabs a Space tick is an answer, so Review sends it without Enter", () => {
   const d = dialog([features, storage]);
   d.press(SPACE, TAB, ENTER);
-  expect(d.text().join("\n")).toContain(" Features  Billing");
+  expect(receipt(d)).toBe("Features → Billing · Storage → SQLite");
   d.press(ENTER);
   expect(d.done.mock.calls).toEqual([
     [[{ labels: ["Billing"] }, { labels: ["SQLite"] }]],
@@ -270,8 +271,17 @@ test("across tabs a single choice keeps one answer: the last one taken", () => {
 test("the Review tab marks an answer in the user's own words as the transcript row does", () => {
   const d = dialog([scope, naming]);
   d.press(ENTER, ..."skyr", ENTER);
-  expect(d.text()).toContain(" Name   [own words] skyr");
+  expect(receipt(d)).toBe("Scope → A · Name → [own words] skyr");
 });
+
+/** The review page's body, as the one line of text it reads as at a wide pane. */
+function receipt(d: ReturnType<typeof dialog>, width = 200): string {
+  return d
+    .text(width)
+    .slice(1, -1)
+    .map((l) => l.trim())
+    .join(" ");
+}
 
 /** The bottom rule, as plain text. */
 function bottom(d: ReturnType<typeof dialog>, width = 100): string {
@@ -615,4 +625,30 @@ test("the numbers and the 1-N hint match the rows", () => {
   const review = dialog([scope, storage]);
   review.press(BACKTAB);
   expect(bottom(review)).not.toMatch(/1-\d/);
+});
+
+test("the review page is the receipt: one clause per question, unanswered ones say so", () => {
+  const d = dialog([scope, storage, naming]);
+  d.press(ENTER, TAB, ..."skyr", ENTER);
+  expect(d.text()[0]).toContain("ask_user");
+  expect(receipt(d)).toBe(
+    "Scope → A · Storage → not answered · Name → [own words] skyr",
+  );
+  const ascii = dialog([scope, storage], { mode: "ascii" });
+  ascii.press(ENTER, TAB);
+  expect(receipt(ascii)).toBe("Scope -> A - Storage -> not answered");
+});
+
+test("a receipt wider than the pane wraps and every line fits 1-80", () => {
+  const long: AskQuestion = {
+    ...storage,
+    header: "Infrastructure choice",
+    options: [{ label: "漢字🙂".repeat(30) }, { label: "y" }],
+  };
+  const d = dialog([long, naming]);
+  d.press(ENTER, ..."a long answer ".repeat(10), ENTER);
+  for (let width = 1; width <= 80; width++)
+    for (const line of d.component.render(width))
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+  expect(d.text(30).length).toBeGreaterThan(4);
 });

@@ -23,7 +23,8 @@ import { sanitize } from "../ui/text.js";
 import {
   type Answer,
   type Answers,
-  answerLine,
+  answerEntries,
+  receiptOf,
   shortHeader,
 } from "./answers.js";
 import type { AskQuestion } from "./index.js";
@@ -52,12 +53,6 @@ const DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
 
 const asError = (cause: unknown) =>
   cause instanceof Error ? cause : new Error(String(cause));
-
-/** Each header padded so the text after it starts at one column, two past the widest. */
-function alignHeaders(headers: readonly string[]): string[] {
-  const widest = Math.max(...headers.map((h) => visibleWidth(h)));
-  return headers.map((h) => h + " ".repeat(widest - visibleWidth(h) + 2));
-}
 
 /** The question dialog. Sanitizes every model string itself, and calls `done` at most once. */
 export function createAskDialog(
@@ -175,7 +170,7 @@ class AskDialog implements Component, Focusable {
   readonly render: (width: number) => string[];
 
   constructor(
-    questions: readonly AskQuestion[],
+    private readonly questions: readonly AskQuestion[],
     private readonly deps: Deps,
   ) {
     this.glyphs = glyphsOf(deps.paint.mode);
@@ -287,7 +282,7 @@ class AskDialog implements Component, Focusable {
     const page = this.page;
     return [
       this.topRule(width),
-      ...(page ? this.question(page, width) : this.review()),
+      ...(page ? this.question(page, width) : this.review(width)),
       this.bottomRule(width),
     ];
   }
@@ -446,16 +441,14 @@ class AskDialog implements Component, Focusable {
     return lines;
   }
 
-  private review(): string[] {
-    const headers = alignHeaders(this.pages.map((p) => p.header));
-    return this.pages.map((p, i) => {
-      const answer = p.answer();
-      return ` ${this.ink(headers[i] ?? "", "muted")}${
-        answer
-          ? this.ink(sanitize(answerLine(answer)), "text")
-          : this.ink("not answered", "warning")
-      }`;
-    });
+  private review(width: number): string[] {
+    const receipt = receiptOf(
+      answerEntries(this.questions, this.answers()),
+      this.glyphs,
+    );
+    return wrapTextWithAnsi(receipt, Math.max(1, width - 1)).map(
+      (line) => ` ${this.ink(line, "text")}`,
+    );
   }
 
   /** The keys that work now, in display order. */

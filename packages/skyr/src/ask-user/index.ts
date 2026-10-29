@@ -19,11 +19,15 @@ import {
   type ToolView,
   toolRenderers,
 } from "../ui/row.js";
-import { clip, oneLine, quoted, sanitize } from "../ui/text.js";
+import { oneLine, quoted, sanitize } from "../ui/text.js";
 import {
+  ANSWER_CHARS,
+  type AnswerEntry,
   type Answers,
+  answerEntries,
   answerLine,
   HEADER_WIDTH,
+  receiptOf,
   shortHeader,
 } from "./answers.js";
 import { createAskDialog } from "./dialog.js";
@@ -81,8 +85,6 @@ const UNANSWERED =
 const CLOSED =
   "ask_user: the client closed the dialog without an answer. Do not guess the answer; end your turn and wait for the user's next message.";
 const ERROR_CHARS = 200;
-/** How much of each answer a result keeps for its transcript row. */
-const ANSWER_CHARS = 200;
 
 const asked = (question: string) => sanitize(question).trim().toLowerCase();
 
@@ -198,25 +200,10 @@ function answerText(
   return ["The user answered.", ...lines].join("\n");
 }
 
-/**
- * What a result keeps for its transcript row, which Pi redraws from it on a resume. An empty
- * `answer` is a question left unanswered: a given answer is never empty.
- */
+/** What a result keeps for its transcript row, which Pi redraws from it on a resume. */
 type AskDetails =
-  | { outcome: "answered"; answers: { header: string; answer: string }[] }
+  | { outcome: "answered"; answers: AnswerEntry[] }
   | { outcome: "declined" };
-
-/** What the user told the model, one `header → answer` per question, as a transcript row's subject. */
-function subjectOf(details: AskDetails): string {
-  if (details.outcome === "declined") return "";
-  const { ellipsis, sep, to } = glyphsOf(tierOf(process.env));
-  return details.answers
-    .map(
-      (a) =>
-        `${shortHeader(a.header, ellipsis)} ${to} ${sanitize(a.answer) || "not answered"}`,
-    )
-    .join(sep);
-}
 
 /** The headers of the questions being asked, from arguments that may still be streaming. */
 function headersOf(args: Partial<Static<typeof Params>>): string {
@@ -261,7 +248,7 @@ function askRow({ args, settled }: ToolView<Static<typeof Params>>): Row {
     head: {
       ...head,
       mark: answered === total ? "done" : "mixed",
-      subject: [subjectOf(details)],
+      subject: [receiptOf(details.answers, glyphsOf(tierOf(process.env)))],
       facts: [
         {
           text:
@@ -419,10 +406,7 @@ export function registerAskUser(pi: ExtensionAPI): void {
           ],
           details: {
             outcome: "answered",
-            answers: answers.map((a, i) => ({
-              header: params.questions[i]?.header ?? "",
-              answer: a ? clip(answerLine(a), ANSWER_CHARS) : "",
-            })),
+            answers: answerEntries(params.questions, answers, ANSWER_CHARS),
           },
         };
       } finally {

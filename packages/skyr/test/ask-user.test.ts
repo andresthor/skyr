@@ -575,7 +575,7 @@ test("escape sequences, bidi overrides and wide text from the model or the user 
   expect([callRow.length, resultRow.length]).toEqual([1, 1]);
   expectInert([...callRow, ...resultRow], 20);
 
-  // what the user pastes into Other is drawn again on the Submit tab
+  // what the user pastes into Other is drawn again on the Review tab
   const two = execute(tool, fake.ui, TWO);
   const review = await fake.nextOpen();
   press(
@@ -1195,4 +1195,71 @@ test("a thinking level that cannot be read fails the call with the dialog's fail
   await expect(execute(tool, dialogs().ui)).rejects.toThrow(
     new Error(failedWith("not initialized")),
   );
+});
+
+/** The subject of a one-line ask row: what sits between the verb and the count. */
+function subjectOfRow(row: string): string {
+  const match = row.match(/^ . ask +(.*?) {2,}(?:\d+ (?:of \d+ )?answered)/);
+  return match?.[1] ?? "";
+}
+
+test("the receipt text equals the transcript row's subject, and reads the same rebuilt from saved details", async () => {
+  const fake = dialogs();
+  const tool = registered();
+  const call = execute(tool, fake.ui, TWO);
+  const opened = await fake.nextOpen();
+  press(opened.component, ENTER, "skyr", ENTER);
+  const review = opened.component
+    .render(200)
+    .slice(1, -1)
+    .map((line) => stripTerminalSequences(line).trim())
+    .join(" ");
+  press(opened.component, ENTER);
+  const result = await call;
+
+  const row = resultRows(tool, result, { width: 200 })[0] ?? "";
+  expect(review).toBe("Storage → SQLite · Name → [own words] skyr");
+  expect(subjectOfRow(row)).toBe(review);
+  // a resume redraws the row from the saved details alone
+  const saved = JSON.parse(JSON.stringify(result.details));
+  expect(
+    subjectOfRow(
+      resultRows(tool, { content: [], details: saved }, { width: 200 })[0] ??
+        "",
+    ),
+  ).toBe(review);
+});
+
+test("an unanswered question reads 'not answered' in the receipt and in the row", async () => {
+  const fake = dialogs();
+  const tool = registered();
+  const call = execute(tool, fake.ui, TWO);
+  const opened = await fake.nextOpen();
+  press(opened.component, "\t", "skyr", ENTER);
+  const review = opened.component
+    .render(200)
+    .slice(1, -1)
+    .map((line) => stripTerminalSequences(line).trim())
+    .join(" ");
+  press(opened.component, ENTER);
+  const row = resultRows(tool, await call, { width: 200 })[0] ?? "";
+  expect(review).toBe("Storage → not answered · Name → [own words] skyr");
+  expect(subjectOfRow(row)).toBe(review);
+});
+
+test("the review page shows an answer in full while the saved details clip it", async () => {
+  const fake = dialogs();
+  const long = "z".repeat(300);
+  const call = execute(registered(), fake.ui, TWO);
+  const opened = await fake.nextOpen();
+  press(opened.component, ENTER, ...long, ENTER);
+  const review = opened.component
+    .render(400)
+    .map((line) => stripTerminalSequences(line))
+    .join("");
+  expect(review).toContain(`[own words] ${long}`);
+  press(opened.component, ENTER);
+  const result = await call;
+  expect(said(result)).toContain(long);
+  expect(JSON.stringify(result.details)).not.toContain(long);
 });

@@ -128,16 +128,27 @@ test("setWorkingIndicator is called once per tui session start, after a reload a
   }
 });
 
-test("each run in tui sets the working indicator again, so a theme switch reaches Pi's loader", async () => {
-  const { ui, calls } = recordingUi();
-  const parent = await parentSession({
-    respond: () => fauxAssistantMessage("ok"),
-    mode: "tui",
-    ui,
-  });
-  const count = () =>
-    calls.filter(({ method }) => method === "setWorkingIndicator").length;
-  expect(count()).toBe(1);
-  await parent.session.prompt("go");
-  expect(count()).toBe(2);
+test("setEditorComponent is called once per tui session start and never outside tui", async () => {
+  const setups = async (mode: "tui" | "rpc" | "print") => {
+    const { ui, calls } = recordingUi();
+    const parent = await parentSession({
+      respond: () => fauxAssistantMessage("ok"),
+      mode,
+      ui,
+    });
+    const count = () =>
+      calls.filter(({ method }) => method === "setEditorComponent").length;
+    return { parent, count };
+  };
+
+  const tui = await setups("tui");
+  expect(tui.count()).toBe(1);
+  await tui.parent.session.reload();
+  expect(tui.count()).toBe(2);
+
+  for (const mode of ["rpc", "print"] as const) {
+    const other = await setups(mode);
+    await other.parent.session.prompt("go");
+    expect(other.count()).toBe(0);
+  }
 });

@@ -196,3 +196,27 @@ test("an old entry with null content does not throw", async () => {
     await historyAfter("reload", [said("user", "kept"), said("user", null)]),
   ).toEqual(["kept"]);
 });
+
+test("without an extension the host still installs an editor, and it draws the working line above a plain rule", async () => {
+  const host = newHost();
+  const ctx = voiceCtx();
+  await mount(host, ctx);
+  expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(1);
+  const ed = mountedEditor(ctx.ui);
+  ed.setWorkingStatusIndicator(workingIndicator());
+  const rows = ed.render(60).map(stripTerminalSequences);
+  expect(rows[0]).toMatch(/^[·✧✦] Working/);
+  expect(rows[1]).toBe("─".repeat(60));
+});
+
+test("after another extension installs its editor, a session start that Pi has reset installs skyr's again", async () => {
+  const host = newHost();
+  const ctx = voiceCtx({ installed: () => ({}) });
+  await mount(host, ctx);
+  expect(ctx.ui.setEditorComponent).not.toHaveBeenCalled();
+  // Pi resets the slot to its default editor at every session end
+  ctx.ui.getEditorComponent.mockReturnValue(undefined);
+  await mount(host, ctx);
+  expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(1);
+  expect(host.owns(ctx.ui)).toBe(false);
+});

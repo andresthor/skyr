@@ -11,6 +11,7 @@ import { describe, expect, onTestFinished, test, vi } from "vitest";
 import type { SessionOptions } from "../src/voice/client.js";
 import { VoiceError } from "../src/voice/errors.js";
 import { parentSession } from "./session.js";
+import { recordingUi } from "./ui.js";
 import {
   agentDirWith,
   CREDS,
@@ -600,6 +601,23 @@ describe("registerSkyr", () => {
       ...BAR_SHORTCUTS,
       VOICE_SHORTCUT,
     ]);
+  });
+
+  test("without Corti credentials a tui session still gets skyr's editor, and /voice still only says what is missing", async () => {
+    const { ui, calls } = recordingUi();
+    await parentSession({
+      respond: () => fauxAssistantMessage("ok"),
+      mode: "tui",
+      ui,
+    });
+    expect(
+      calls.filter(({ method }) => method === "setEditorComponent"),
+    ).toHaveLength(1);
+
+    const ctx = voiceCtx();
+    await registeredSkyr().commands.get("voice")?.handler("", ctx);
+    expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
+    expect(ctx.ui.notify.mock.calls[0]?.[0]).toContain("CORTI_");
   });
 });
 

@@ -68,7 +68,6 @@ export function createEditorHost(deps: {
       extension = next;
     },
     async mount(ctx, reason) {
-      if (!extension) return;
       const mine = ++generation;
       const installed = ctx.ui.getEditorComponent();
       // A foreign editor wins; Pi's own loader then shows
@@ -79,11 +78,14 @@ export function createEditorHost(deps: {
       if (mine !== generation) return;
       // Pi's theme handle is one live proxy, so /theme reaches the editor
       const paint: Paint = { theme: ctx.ui.theme, mode };
-      const Editor = withWorkingLine(extension(CustomEditor, paint), {
-        paint,
-        working: deps.working,
-        notify: (message, type) => ctx.ui.notify(message, type),
-      });
+      const Editor = withWorkingLine(
+        extension ? extension(CustomEditor, paint) : CustomEditor,
+        {
+          paint,
+          working: deps.working,
+          notify: (message, type) => ctx.ui.notify(message, type),
+        },
+      );
       factory = (tui, theme, keys) => {
         // Pi does not copy this constructor-only flag; without it Pi draws its loader in a row of its own
         const editor = new Editor(tui, theme, keys, {

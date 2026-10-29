@@ -78,6 +78,28 @@ test("a throwing subscriber is dropped, its cause reported once, and the others 
   expect(reported).toHaveBeenCalledWith(cause);
 });
 
+test("a throwing onThrow keeps the interval and the other subscribers alive", () => {
+  const cause = new Error("stale");
+  let reported: unknown;
+  stops.push(
+    everySecond(
+      () => {
+        throw cause;
+      },
+      (thrown) => {
+        reported = thrown;
+        throw new Error("the latch itself failed");
+      },
+    ),
+  );
+  const good = vi.fn();
+  sub(good);
+
+  vi.advanceTimersByTime(2_000);
+  expect(reported).toBe(cause);
+  expect(good).toHaveBeenCalledTimes(2);
+});
+
 test("the interval does not keep the process alive", () => {
   const started = vi.spyOn(globalThis, "setInterval");
   sub(() => {});

@@ -24,7 +24,11 @@ function run(): void {
       entry.tick();
     } catch (cause) {
       entries.delete(entry);
-      entry.onThrow?.(cause);
+      try {
+        entry.onThrow?.(cause);
+      } catch {
+        // Outside any handler a rethrow would exit Pi, and the failed subscriber is gone
+      }
     }
   }
   idle();
@@ -33,7 +37,8 @@ function run(): void {
 /**
  * Calls `tick` once a second until the returned stop, which is idempotent. All callers share one
  * interval that runs only while one is subscribed. A throwing tick is dropped, and its cause goes
- * to `onThrow` once; without one the cause is dropped with it.
+ * to `onThrow` once; without one the cause is dropped with it, and a throwing `onThrow` cannot
+ * take the process down — the interval runs outside any handler.
  */
 export function everySecond(
   tick: () => void,

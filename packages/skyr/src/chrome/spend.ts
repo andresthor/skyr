@@ -147,7 +147,8 @@ function totalOf(files: Iterable<Counted>): ByProvider {
  * `root` is `<agentDir>/sessions`. `onChange` follows every publish; `onProblem` gets the first
  * file a scan could not read other than for its absence, with the cause; a file that fails keeps
  * the charges it last gave until it reads again or goes, and so do the files under a directory
- * that cannot be listed. `clock` (ms) and `yieldNow` are the scan's seams for time.
+ * that cannot be listed. `clock` (ms) and `yieldNow` pace the scan; the stale window reads the
+ * wall clock, as it must compare with the files' real mtimes.
  */
 export function createSpend(
   root: string,

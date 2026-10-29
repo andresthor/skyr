@@ -40,6 +40,8 @@ const RESTYLES = new Map<string, Restyle>([
 /**
  * What Pi's renderers for each restyled tool are, as source text: the renderers of `bash` are
  * made fresh on each call, so identity cannot tell Pi's from another extension's, and source can.
+ * The text compared is the copy of the runtime skyr itself resolves; another physical copy of
+ * the same version still matches, one whose text differs does not, and its rows stay Pi's own.
  */
 function fingerprints(host: PiModule): Map<string, string> {
   const own: Record<string, (cwd: string) => Renderers> = {

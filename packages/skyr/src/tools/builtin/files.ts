@@ -156,7 +156,11 @@ interface EditArgs {
   file_path: string;
 }
 
-/** The diff Pi computed for a call that has not finished, kept on the box of its own call renderer. */
+/**
+ * The diff Pi computed for a call that has not finished. `preview` is the edit renderer's
+ * private state — no public type declares it — so a Pi upgrade that moves it leaves this
+ * undefined and the running row falls back to its head; the live-preview test fails first.
+ */
 function previewOf(state: object): string | undefined {
   const box: unknown = (state as { callComponent?: unknown }).callComponent;
   if (typeof box !== "object" || box === null) return undefined;

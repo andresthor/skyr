@@ -1,4 +1,8 @@
-/** The `ui` section of `skyr.json`: what skyr draws in Pi's terminal UI. */
+/**
+ * The `ui` section of `skyr.json`: what skyr draws in Pi's terminal UI. At the root, not under
+ * `ui/`, because it reads `config.ts`'s settings machinery — its consumers are chrome and the
+ * builtin rows.
+ */
 import { readSkyrSection } from "./config.js";
 import { isRecord } from "./guards.js";
 import { quoted } from "./ui/text.js";

@@ -436,7 +436,8 @@ export function createFooter(): Footer {
     refreshSoon(ctx) {
       if (!mounted) return;
       const generation = current;
-      // Pi saves the message right after the handlers return, so the next macrotask sees it
+      // Pi saves the message right after the handlers return — assumed from the pinned runtime,
+      // promised by no contract — so the next macrotask sees it
       setImmediate(() => {
         if (generation === current) refresh(ctx);
       });

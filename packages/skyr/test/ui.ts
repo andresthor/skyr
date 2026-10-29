@@ -2,8 +2,10 @@
  * Fixtures shared by the ui tests: Pi's real screen renderer over a silent terminal, to learn
  * what Pi does with a component's lines.
  */
+import { readFileSync } from "node:fs";
 import {
   CustomMessageComponent,
+  type ExtensionFactory,
   type ExtensionUIContext,
   initTheme,
   type MessageRenderer,
@@ -24,7 +26,9 @@ import { onTestFinished } from "vitest";
 import { createToolHtmlRenderer } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/export-html/tool-renderer.js";
 // biome-ignore lint/style/noRestrictedImports: Pi builds its status indicators with these classes but does not export them from its root
 import * as indicators from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/status-indicator.js";
+import { loadPi, type PiModule } from "../src/pi.js";
 import { plainTheme, scratchDir, widgetHost } from "./session.js";
+import { shellRuntime } from "./shells-runtime.js";
 import { testTheme } from "./voice.js";
 
 function silentTerminal(
@@ -224,6 +228,172 @@ export function htmlRender(
       result.isError ?? false,
     ),
   };
+}
+
+/** Pi's seven built-in tools. */
+export const BUILTIN_TOOLS = [
+  "read",
+  "bash",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls",
+] as const;
+export type BuiltinTool = (typeof BUILTIN_TOOLS)[number];
+
+const definitionOf = (pi: PiModule, name: BuiltinTool, cwd: string) =>
+  ({
+    read: pi.createReadToolDefinition,
+    bash: pi.createBashToolDefinition,
+    edit: pi.createEditToolDefinition,
+    write: pi.createWriteToolDefinition,
+    grep: pi.createGrepToolDefinition,
+    find: pi.createFindToolDefinition,
+    ls: pi.createLsToolDefinition,
+  })[name](cwd);
+
+/** Pi's own renderers for a built-in tool: what Pi draws when no extension restyles it. */
+export async function piRenderers(
+  name: BuiltinTool,
+  cwd = process.cwd(),
+): Promise<ToolRenderers> {
+  // The seven definitions differ in argument type, which a renderer is only ever handed as unknown
+  const { renderShell, renderCall, renderResult } = definitionOf(
+    await loadPi(),
+    name,
+    cwd,
+  ) as unknown as ToolRenderers;
+  return { renderShell, renderCall, renderResult };
+}
+
+/**
+ * The renderers for a call as Pi resolves them: the extensions' resolvers in load order, each
+ * handed a `next` that runs the rest and then `base`, as `ExtensionRunner.resolveToolRenderers`
+ * does. Written out here so the chain's rules are Pi's, not skyr's.
+ */
+export function resolveChain(
+  resolvers: readonly ((
+    name: string,
+    next: () => ToolRenderers | undefined,
+  ) => ToolRenderers | undefined)[],
+  name: string,
+  base: () => ToolRenderers | undefined,
+): ToolRenderers | undefined {
+  const resolve = (index: number): ToolRenderers | undefined => {
+    const resolver = resolvers[index];
+    return resolver ? resolver(name, () => resolve(index + 1)) : base();
+  };
+  return resolve(0);
+}
+
+/** A built-in tool's row as Pi's interactive mode draws it, with `resolvers` in the chain over Pi's own renderers. */
+export async function builtinHost(
+  name: BuiltinTool,
+  args: unknown,
+  resolvers: Parameters<typeof resolveChain>[0] = [],
+  options: { outputPad?: number } = {},
+) {
+  const base = await piRenderers(name);
+  const renderers = resolveChain(resolvers, name, () => base);
+  if (!renderers) throw new Error(`no renderers resolved for ${name}`);
+  return toolRowHost(renderers, args, options);
+}
+
+/**
+ * What Pi's tool puts in the result of a call, run for real over `cwd`: the thrown message of a
+ * failing call becomes an error result, as Pi's agent loop makes it.
+ */
+export async function realTool(
+  name: BuiltinTool,
+  args: Record<string, unknown>,
+  cwd: string,
+): Promise<RowResult & { structuredContent?: unknown }> {
+  const definition = definitionOf(await loadPi(), name, cwd);
+  const context = {
+    cwd,
+    sessionManager: {
+      getSessionId: () => "probe",
+      getSessionFile: () => undefined,
+    },
+  };
+  try {
+    return await (
+      definition.execute as (...a: unknown[]) => Promise<RowResult>
+    )("call-1", args, undefined, undefined, context);
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: error instanceof Error ? error.message : String(error),
+        },
+      ],
+      isError: true,
+    };
+  }
+}
+
+/** One tool call and its saved result, to be put in a session before it is exported. */
+export interface SavedCall {
+  name: string;
+  args: Record<string, unknown>;
+  result: RowResult;
+}
+
+/**
+ * Pi's HTML export of a session holding `calls`, with `extension` loaded: the real
+ * `AgentSession.exportToHtml`, so the export template's own skip list decides which tools reach
+ * the extension's resolver. Returns the HTML.
+ */
+export async function piExport(
+  extension: ExtensionFactory,
+  calls: readonly SavedCall[],
+): Promise<string> {
+  const runtime = await shellRuntime({ extensions: [extension] });
+  const { session } = runtime;
+  const usage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  session.sessionManager.appendMessage({
+    role: "user",
+    content: "go",
+    timestamp: 1,
+  });
+  session.sessionManager.appendMessage({
+    role: "assistant",
+    content: calls.map((c, i) => ({
+      type: "toolCall",
+      id: `call-${i}`,
+      name: c.name,
+      arguments: c.args,
+    })),
+    api: "faux",
+    provider: "faux",
+    model: "faux-1",
+    usage,
+    stopReason: "toolUse",
+    timestamp: 2,
+  } as never);
+  calls.forEach((c, i) => {
+    session.sessionManager.appendMessage({
+      role: "toolResult",
+      toolCallId: `call-${i}`,
+      toolName: c.name,
+      content: c.result.content,
+      details: c.result.details,
+      isError: c.result.isError ?? false,
+      timestamp: 3 + i,
+    } as never);
+  });
+  const file = `${scratchDir("export")}/export.html`;
+  await session.exportToHtml(file);
+  return readFileSync(file, "utf8");
 }
 
 /** The colour each thinking level's rule is drawn in by `piTheme`. */

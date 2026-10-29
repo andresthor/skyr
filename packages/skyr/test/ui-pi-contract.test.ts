@@ -1,6 +1,8 @@
 // Pi behaviour the ui layout rests on. A failure here after a Pi upgrade means the design
 // changes, not the test.
-import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { initTheme, type ToolRenderers } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   rgbColor,
@@ -10,11 +12,22 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { expect, onTestFinished, test, vi } from "vitest";
+// biome-ignore lint/style/noRestrictedImports: the interactive mode resolves a row's renderers through this but Pi does not export it from its root
+import { withBuiltInRenderers } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/renderers/index.js";
+import { scratchDir } from "./session.js";
 import {
+  BUILTIN_TOOLS,
+  type BuiltinTool,
+  builtinHost,
   htmlRender,
   messageHost,
+  piExport,
+  piRenderers,
   piScreen,
+  piTheme,
   realIndicator,
+  realTool,
+  resolveChain,
   scrollScreen,
   toolRowHost,
 } from "./ui.js";
@@ -280,4 +293,419 @@ test("a message component is rebuilt on expand and on invalidate", () => {
 test("a Spacer(1) precedes the renderer's component", () => {
   const host = messageHost(() => lineOf(() => "RECORD"), MESSAGE);
   expect(host.lines(40)).toEqual(["", "RECORD"]);
+});
+
+const spyingResolver =
+  (asked: string[]) =>
+  (name: string, next: () => ToolRenderers | undefined) => {
+    asked.push(name);
+    return next();
+  };
+
+test("a resolver that calls next() twice runs the resolvers after it twice", () => {
+  const asked: string[] = [];
+  const base = vi.fn(() => undefined);
+  resolveChain(
+    [
+      (_name, next) => {
+        next();
+        return next();
+      },
+      spyingResolver(asked),
+    ],
+    "grep",
+    base,
+  );
+  expect(asked).toEqual(["grep", "grep"]);
+  expect(base).toHaveBeenCalledTimes(2);
+});
+
+test("the interactive base is Pi's own renderers for a tool with no registered definition, and an export's base is undefined for it", async () => {
+  for (const name of BUILTIN_TOOLS) {
+    const base = withBuiltInRenderers(name, undefined);
+    expect(typeof base?.renderCall).toBe("function");
+    expect(typeof base?.renderResult).toBe("function");
+  }
+  expect(withBuiltInRenderers("not-a-tool", undefined)).toBeUndefined();
+  const asked: string[] = [];
+  const html = await piExport(
+    (pi) => pi.registerToolRenderer(spyingResolver(asked)),
+    [{ name: "grep", args: { pattern: "x" }, result: { content: [] } }],
+  );
+  expect(html.length).toBeGreaterThan(0);
+  // The session has grep registered; an unregistered name has nothing to resolve to
+  const unknown: string[] = [];
+  const bases: unknown[] = [];
+  await piExport(
+    (pi) =>
+      pi.registerToolRenderer((name, next) => {
+        unknown.push(name);
+        bases.push(next());
+        return undefined;
+      }),
+    [{ name: "ghost_tool", args: {}, result: { content: [] } }],
+  );
+  expect(unknown).toContain("ghost_tool");
+  expect(bases).toEqual(expect.arrayContaining([undefined]));
+});
+
+test("Pi hands a renderer the component it returned last, and hands undefined after a throw", () => {
+  let calls = 0;
+  const { definition, seen } = probeDefinition(
+    () => {
+      calls++;
+      if (calls === 4) throw new Error("once");
+      return lineOf(() => "CALL");
+    },
+    () => lineOf(() => "RESULT"),
+  );
+  const host = toolRowHost(definition, {});
+  host.update({ content: [] });
+  const first = seen.call.at(-1)?.lastComponent;
+  expect(first).toBeDefined();
+  host.invalidate();
+  const second = seen.call.at(-1);
+  expect(second?.lastComponent).toBeDefined();
+  // The fourth call throws; the one after it starts from nothing
+  host.invalidate();
+  host.invalidate();
+  expect(seen.call.at(-1)?.lastComponent).toBeUndefined();
+  const results = seen.result as { context: { lastComponent: unknown } }[];
+  expect(results.at(0)?.context.lastComponent).toBeUndefined();
+  expect(results.at(-1)?.context.lastComponent).toBeDefined();
+});
+
+const STUB_ARGS: Record<BuiltinTool, unknown> = {
+  read: { path: "a.ts" },
+  write: { path: "a.ts", content: "x" },
+  bash: { command: "true" },
+  grep: { pattern: "x" },
+  find: { pattern: "*" },
+  ls: {},
+  edit: { path: "a.ts", edits: [] },
+};
+
+test("every built-in renderer other than edit's throws when handed a component that is not its own", async () => {
+  const foreign = lineOf(() => "skyr");
+  const context = (extra: object) => ({
+    args: {},
+    toolCallId: "c",
+    invalidate() {},
+    lastComponent: foreign,
+    state: {},
+    cwd: process.cwd(),
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: false,
+    expanded: false,
+    showImages: false,
+    isError: false,
+    durationMs: undefined,
+    outputPad: 1,
+    ...extra,
+  });
+  initTheme("dark");
+  const theme = piTheme();
+  for (const name of BUILTIN_TOOLS) {
+    if (name === "edit") continue;
+    const renderers = await piRenderers(name);
+    const args = STUB_ARGS[name];
+    expect(() =>
+      renderers.renderCall?.(args as never, theme, context({ args }) as never),
+    ).toThrow();
+    expect(() =>
+      renderers.renderResult?.(
+        { content: [{ type: "text", text: "x" }], details: undefined },
+        { expanded: false, isPartial: false },
+        theme,
+        context({ args }) as never,
+      ),
+    ).toThrow();
+  }
+});
+
+test("bash's renderResult starts an interval while partial and not when final", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const host = await builtinHost("bash", { command: "sleep 9" });
+  host.start();
+  host.update({ content: [{ type: "text", text: "a" }] }, true);
+  expect(vi.getTimerCount()).toBe(1);
+  host.update({ content: [{ type: "text", text: "a" }] });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("Pi's renderers keep startedAt, endedAt, interval and callComponent in context.state and read nothing else from it", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const keys = new Set<string>();
+  const read = new Set<string>();
+  const state = new Proxy(
+    {},
+    {
+      get(target, key) {
+        read.add(String(key));
+        return Reflect.get(target, key);
+      },
+      set(target, key, value) {
+        keys.add(String(key));
+        return Reflect.set(target, key, value);
+      },
+    },
+  );
+  initTheme("dark");
+  const theme = piTheme();
+  for (const name of BUILTIN_TOOLS) {
+    const renderers = await piRenderers(name);
+    const args = STUB_ARGS[name];
+    const context = (isPartial: boolean) =>
+      ({
+        args,
+        toolCallId: "c",
+        invalidate() {},
+        lastComponent: undefined,
+        state,
+        cwd: process.cwd(),
+        executionStarted: true,
+        argsComplete: false,
+        isPartial,
+        expanded: false,
+        showImages: false,
+        isError: false,
+        durationMs: undefined,
+        outputPad: 1,
+      }) as never;
+    renderers.renderCall?.(args as never, theme, context(true));
+    renderers.renderResult?.(
+      { content: [{ type: "text", text: "x" }], details: undefined },
+      { expanded: false, isPartial: true },
+      theme,
+      context(true),
+    );
+    renderers.renderResult?.(
+      { content: [{ type: "text", text: "x" }], details: undefined },
+      { expanded: false, isPartial: false },
+      theme,
+      context(false),
+    );
+  }
+  const allowed = new Set([
+    "startedAt",
+    "endedAt",
+    "interval",
+    "callComponent",
+  ]);
+  expect([...keys].filter((k) => !allowed.has(k))).toEqual([]);
+  expect([...read].filter((k) => !allowed.has(k))).toEqual([]);
+});
+
+test("Pi's edit renderer fills state.callComponent.preview.diff after argsComplete, then calls invalidate", async () => {
+  const cwd = scratchDir("edit-preview");
+  writeFileSync(join(cwd, "a.ts"), "one\ntwo\nthree\n");
+  initTheme("dark");
+  const theme = piTheme();
+  const renderers = await piRenderers("edit", cwd);
+  const state: { callComponent?: { preview?: { diff?: string } } } = {};
+  const invalidate = vi.fn();
+  const args = {
+    path: "a.ts",
+    edits: [{ oldText: "two", newText: "2" }],
+  };
+  const context = (argsComplete: boolean) =>
+    ({
+      args,
+      toolCallId: "c",
+      invalidate,
+      lastComponent: undefined,
+      state,
+      cwd,
+      executionStarted: false,
+      argsComplete,
+      isPartial: true,
+      expanded: false,
+      showImages: false,
+      isError: false,
+      durationMs: undefined,
+      outputPad: 1,
+    }) as never;
+  renderers.renderCall?.(args as never, theme, context(false));
+  expect(state.callComponent?.preview).toBeUndefined();
+  renderers.renderCall?.(args as never, theme, context(true));
+  await vi.waitFor(() => expect(invalidate).toHaveBeenCalled());
+  expect(state.callComponent?.preview?.diff).toMatch(/-2 two/);
+});
+
+const SAVED = {
+  read: { name: "read", args: { path: "a.ts" } },
+  bash: { name: "bash", args: { command: "true" } },
+  edit: { name: "edit", args: { path: "a.ts", edits: [] } },
+  write: { name: "write", args: { path: "a.ts", content: "x" } },
+  grep: { name: "grep", args: { pattern: "x" } },
+  find: { name: "find", args: { pattern: "*" } },
+  ls: { name: "ls", args: {} },
+} as const;
+
+const savedAll = (text = "x") =>
+  BUILTIN_TOOLS.map((tool) => ({
+    ...SAVED[tool],
+    result: { content: [{ type: "text", text }] },
+  }));
+
+test("an export asks the resolver for grep and find only: bash, read, write, edit and ls never reach it", async () => {
+  const asked: string[] = [];
+  await piExport(
+    (pi) => pi.registerToolRenderer(spyingResolver(asked)),
+    savedAll(),
+  );
+  expect([...new Set(asked)].sort()).toEqual(["find", "grep"]);
+});
+
+test("an export draws grep's call with isPartial true before any result exists", async () => {
+  const seen: { isPartial: boolean; sawResult: boolean }[] = [];
+  let resultSeen = false;
+  await piExport(
+    (pi) =>
+      pi.registerToolRenderer((name, next) => {
+        const base = next();
+        if (name !== "grep" || !base) return base;
+        return {
+          ...base,
+          renderCall: (args, theme, context) => {
+            seen.push({ isPartial: context.isPartial, sawResult: resultSeen });
+            return base.renderCall?.(args, theme, context) as Component;
+          },
+          renderResult: (...a) => {
+            resultSeen = true;
+            return base.renderResult?.(...a) as Component;
+          },
+        };
+      }),
+    savedAll(),
+  );
+  expect(seen).toEqual([{ isPartial: true, sawResult: false }]);
+});
+
+const text = (result: { content: { text?: string }[] }) =>
+  result.content.map((c) => c.text ?? "").join("\n");
+
+function tree(name: string) {
+  const cwd = scratchDir(name);
+  mkdirSync(join(cwd, "src"));
+  writeFileSync(
+    join(cwd, "src/a.ts"),
+    "const a = 1;\nconst needle = 2;\nconst b = 3;\n",
+  );
+  writeFileSync(join(cwd, "src/b.ts"), "needle here\n");
+  return cwd;
+}
+
+test('a failing bash ends in "Command exited with code N" after a blank line; an aborted and a timed-out one end in their own sentences', async () => {
+  const cwd = tree("bash-status");
+  const failed = await realTool("bash", { command: "echo out; exit 2" }, cwd);
+  expect(failed.isError).toBe(true);
+  expect(text(failed)).toBe("out\n\n\nCommand exited with code 2");
+  const silent = await realTool("bash", { command: "exit 3" }, cwd);
+  expect(text(silent)).toBe("(no output)\n\nCommand exited with code 3");
+  const timed = await realTool("bash", { command: "sleep 5", timeout: 1 }, cwd);
+  expect(text(timed)).toBe("Command timed out after 1 seconds");
+  const ok = await realTool("bash", { command: "echo hi" }, cwd);
+  expect(ok.isError).toBeUndefined();
+  expect(text(ok)).toBe("hi\n");
+});
+
+test('a successful write says "Successfully wrote to <path>", and an edit\'s details.diff lines start with +, - or a space then the line number', async () => {
+  const cwd = tree("write-edit");
+  expect(
+    text(await realTool("write", { path: "src/w.ts", content: "a\nb\n" }, cwd)),
+  ).toBe("Successfully wrote to src/w.ts");
+  const edited = await realTool(
+    "edit",
+    {
+      path: "src/a.ts",
+      edits: [{ oldText: "const b = 3;", newText: "const b = 4;" }],
+    },
+    cwd,
+  );
+  const diff = (edited.details as { diff: string }).diff;
+  for (const line of diff.split("\n")) expect(line).toMatch(/^[-+ ] ?\d+ /);
+  expect(diff).toContain("-3 const b = 3;");
+  expect(diff).toContain("+3 const b = 4;");
+});
+
+test("read, grep, find and ls notices are one trailing bracketed paragraph and nothing else in the text is", async () => {
+  const cwd = tree("notices");
+  const read = await realTool(
+    "read",
+    { path: "src/a.ts", offset: 2, limit: 1 },
+    cwd,
+  );
+  expect(text(read)).toBe(
+    "const needle = 2;\n\n[2 more lines in file. Use offset=3 to continue.]",
+  );
+  const grep = await realTool("grep", { pattern: "e", limit: 1 }, cwd);
+  expect(text(grep)).toMatch(
+    /^src\/\w\.ts:\d+: .*\n\n\[1 matches limit reached\. Use limit=2 for more, or refine pattern\]$/,
+  );
+  expect(
+    (grep.details as { matchLimitReached: number }).matchLimitReached,
+  ).toBe(1);
+  const find = await realTool("find", { pattern: "*.ts", limit: 1 }, cwd);
+  expect(text(find)).toMatch(
+    /\n\n\[1 results limit reached\. Use limit=2 for more, or refine pattern\]$/,
+  );
+  const ls = await realTool("ls", { path: "src", limit: 1 }, cwd);
+  expect(text(ls)).toMatch(
+    /\n\n\[1 entries limit reached\. Use limit=2 for more\]$/,
+  );
+});
+
+test('grep match lines are "path:line: text" and with context also "path-line- text"; find and ls print one entry per line and say so when nothing is found, with details undefined', async () => {
+  const cwd = tree("shapes");
+  const grep = await realTool("grep", { pattern: "needle" }, cwd);
+  // ripgrep searches files in parallel, so the order of files is not fixed
+  expect(text(grep).split("\n").sort()).toEqual([
+    "src/a.ts:2: const needle = 2;",
+    "src/b.ts:1: needle here",
+  ]);
+  const context = await realTool(
+    "grep",
+    { pattern: "needle", context: 1 },
+    cwd,
+  );
+  expect(text(context)).toContain("src/a.ts-1- const a = 1;");
+  expect(text(context)).toContain("src/a.ts:2: const needle = 2;");
+  const none = await realTool("grep", { pattern: "zzz" }, cwd);
+  expect(text(none)).toBe("No matches found");
+  expect(none.details).toBeUndefined();
+  const find = await realTool("find", { pattern: "*.ts" }, cwd);
+  expect(text(find)).toBe("src/a.ts\nsrc/b.ts");
+  const nothing = await realTool("find", { pattern: "*.zz" }, cwd);
+  expect(text(nothing)).toBe("No files found matching pattern");
+  expect(nothing.details).toBeUndefined();
+  expect(text(await realTool("ls", { path: "src" }, cwd))).toBe("a.ts\nb.ts");
+  mkdirSync(join(cwd, "empty"));
+  const empty = await realTool("ls", { path: "empty" }, cwd);
+  expect(text(empty)).toBe("(empty directory)");
+  expect(empty.details).toBeUndefined();
+});
+
+test("resumed and reloaded sessions build their rows before session_start", () => {
+  const source = readFileSync(
+    "node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/interactive-mode.js",
+    "utf8",
+  );
+  // rebindCurrentSession: renderCurrentSessionState runs before bindCurrentSessionExtensions
+  const rebind = source.slice(source.indexOf("async rebindCurrentSession("));
+  expect(rebind.indexOf("this.renderCurrentSessionState()")).toBeGreaterThan(0);
+  expect(rebind.indexOf("this.renderCurrentSessionState()")).toBeLessThan(
+    rebind.indexOf("await this.bindCurrentSessionExtensions()"),
+  );
+  // reload: the chat is rebuilt in beforeSessionStart
+  expect(source).toContain(
+    "reload({ beforeSessionStart: restoreChatBeforeSessionStart })",
+  );
 });

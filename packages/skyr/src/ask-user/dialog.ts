@@ -30,6 +30,8 @@ import type { AskQuestion } from "./index.js";
 
 interface Deps {
   paint: Paint;
+  /** Colours the rule rows with the thinking level's colour, which the colour tier alone uses. */
+  rule: (text: string) => string;
   keys: Pick<KeybindingsManager, "matches" | "getKeys">;
   /**
    * `undefined` = declined with Esc or submitted with nothing answered; an `undefined` entry = a
@@ -262,7 +264,9 @@ class AskDialog implements Component, Focusable {
   }
 
   private draw(width: number): string[] {
-    const rule = this.ink(this.glyphs.rule.repeat(width), "accent");
+    const { paint, rule: colour } = this.deps;
+    const glyphs = this.glyphs.rule.repeat(width);
+    const rule = paint.mode === "color" ? colour(glyphs) : glyphs;
     const lines = [rule];
     if (this.tabbed) lines.push(this.chips(width), "");
     const page = this.page;

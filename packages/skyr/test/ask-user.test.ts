@@ -27,7 +27,7 @@ import {
   stripTerminalSequences,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { registerAskUser } from "../src/ask-user/index.js";
 import {
   agentFile,
@@ -42,7 +42,7 @@ import {
   toolsSeen,
 } from "./session.js";
 import { piTheme, toolRowHost } from "./ui.js";
-import { keybindings } from "./voice.js";
+import { keybindings, styledRuns } from "./voice.js";
 
 const DOWN = "\x1b[B";
 const ENTER = "\r";
@@ -1126,4 +1126,73 @@ test("in rpc, the model's ask_user call reaches the host as one form, and the an
   expect(toolsSeen(requests.at(-1)!)).toContain("ask_user");
   expect(forms).toHaveLength(2);
   expect(textOf(results(session).get("b")!)).toContain("-> Postgres");
+});
+
+/** The terminal tier the next dialog opens in; the stubs are undone when the test ends. */
+function inTier(tier: "color" | "mono" | "ascii") {
+  vi.stubEnv("TERM", tier === "ascii" ? "dumb" : "xterm-256color");
+  vi.stubEnv("NO_COLOR", tier === "mono" ? "1" : "");
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+}
+
+/** The first row of the dialog `tool` opens at `width`: its top rule. */
+async function topRule(
+  tool: AskTool,
+  fake: ReturnType<typeof dialogs>,
+  width = 40,
+) {
+  const call = execute(tool, fake.ui);
+  const opened = await fake.nextOpen();
+  const rule = opened.component.render(width)[0] ?? "";
+  opened.done(undefined);
+  await call;
+  return rule;
+}
+
+test("the rules are drawn in the thinking colour of the session's level when the dialog opens", async () => {
+  inTier("color");
+  let level: ReturnType<ExtensionAPI["getThinkingLevel"]> = "high";
+  const tool = registered("tui", createEventBus(), () => level);
+  const fake = dialogs();
+  const colourOf = async () => styledRuns(await topRule(tool, fake))[0]?.fg;
+  const expected = (name: string) =>
+    styledRuns(piTheme().getThinkingBorderColor(name as never)("-"))[0]?.fg;
+
+  expect(await colourOf()).toEqual(expected("high"));
+  level = "low";
+  expect(await colourOf()).toEqual(expected("low"));
+  expect(expected("low")).not.toEqual(expected("high"));
+});
+
+test("a mono or ascii terminal gets plain rules", async () => {
+  const tool = registered();
+  const fake = dialogs();
+  inTier("mono");
+  const mono = await topRule(tool, fake);
+  expect(stripTerminalSequences(mono)).toBe("─".repeat(40));
+  expect(styledRuns(mono)[0]?.fg).toBeUndefined();
+  inTier("ascii");
+  expect(await topRule(tool, fake)).toBe("-".repeat(40));
+});
+
+test("the form path never reads the thinking level or the theme", async () => {
+  const bus = createEventBus();
+  formHost(bus, () => accept({ question_0: "1" }));
+  const tool = registered("rpc", bus, () => {
+    throw new Error("the form path asked for the thinking level");
+  });
+  const fake = dialogs();
+  expect(said(await execute(tool, fake.ui))).toContain("-> Postgres");
+  expect(fake.custom).not.toHaveBeenCalled();
+});
+
+test("a thinking level that cannot be read fails the call with the dialog's failure text", async () => {
+  const tool = registered("tui", createEventBus(), () => {
+    throw new Error("not initialized");
+  });
+  await expect(execute(tool, dialogs().ui)).rejects.toThrow(
+    new Error(failedWith("not initialized")),
+  );
 });

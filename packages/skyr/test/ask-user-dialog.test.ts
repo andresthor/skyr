@@ -35,6 +35,7 @@ function dialog(
   const done = vi.fn();
   const component = createAskDialog(questions, {
     paint: testPaint(o.mode, o.theme),
+    rule: (text) => text,
     keys: o.keys ?? keybindings(),
     done,
   });
@@ -438,4 +439,16 @@ test("a cut label ends in the tier's ellipsis", () => {
 test("the recommended mark is a word, not colour alone", () => {
   const rec = dialog([features], { mode: "mono" });
   expect(rec.text()).toContain(" > [ ] Billing recommended");
+});
+
+test("rule rows are made of the rule glyph at widths 1-80 and never overflow", () => {
+  for (const mode of ["color", "ascii"] as const) {
+    const glyph = mode === "ascii" ? "-" : "─";
+    const d = dialog([scope, storage], { mode });
+    for (let width = 1; width <= 80; width++) {
+      const lines = d.text(width);
+      expect(lines[0]).toBe(glyph.repeat(width));
+      expect(lines.at(-1)).toBe(glyph.repeat(width));
+    }
+  }
 });

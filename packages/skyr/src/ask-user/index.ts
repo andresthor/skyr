@@ -339,6 +339,7 @@ async function inDialog(
   ui: ExtensionContext["ui"],
   questions: readonly AskQuestion[],
   signal: AbortSignal | undefined,
+  pi: Pick<ExtensionAPI, "getThinkingLevel">,
 ): Promise<Answers | undefined> {
   // Pi restores the editor with setText(getText()), which drops the paste store a [paste #…]
   // marker points into; written out in full first, the draft survives that restore
@@ -354,6 +355,8 @@ async function inDialog(
         tui.terminal.write("\x07");
         return createAskDialog(questions, {
           paint: { theme, mode: tierOf(process.env) },
+          // Read at mount, where a throw fails the call; the dialog draws it in the colour tier only
+          rule: theme.getThinkingBorderColor(pi.getThinkingLevel()),
           keys,
           done,
         });
@@ -403,7 +406,7 @@ export function registerAskUser(pi: ExtensionAPI): void {
         if (signal?.aborted) throw new Error(ABORTED);
         const answers =
           how === "dialog"
-            ? await inDialog(ctx.ui, params.questions, signal)
+            ? await inDialog(ctx.ui, params.questions, signal, pi)
             : await viaHost(pi.events, toolCallId, params.questions, signal);
         if (answers === undefined)
           return {

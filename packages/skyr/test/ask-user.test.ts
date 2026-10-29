@@ -1171,10 +1171,10 @@ test("a mono or ascii terminal gets plain rules", async () => {
   const fake = dialogs();
   inTier("mono");
   const mono = await topRule(tool, fake);
-  expect(stripTerminalSequences(mono)).toBe("─".repeat(40));
-  expect(styledRuns(mono)[0]?.fg).toBeUndefined();
+  expect(stripTerminalSequences(mono)).toMatch(/^── \? ask_user ─+$/);
+  expect(styledRuns(mono).every((run) => run.fg === undefined)).toBe(true);
   inTier("ascii");
-  expect(await topRule(tool, fake)).toBe("-".repeat(40));
+  expect(await topRule(tool, fake)).toMatch(/^-- \? ask_user -+$/);
 });
 
 test("the form path never reads the thinking level or the theme", async () => {

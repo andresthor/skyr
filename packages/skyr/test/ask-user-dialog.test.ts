@@ -162,13 +162,15 @@ const naming: AskQuestion = {
   header: "Name",
 };
 
-test("several questions: Tab and Shift+Tab move through them and Submit, Enter advances to the next unanswered one, and answers survive a round trip", () => {
+test("several questions: Tab and Shift+Tab move through them and Review, Enter advances to the next unanswered one, and answers survive a round trip", () => {
   const d = dialog([scope, storage, naming]);
   const screen = () => d.text().join("\n");
-  expect(d.text()[1]).toBe("  Scope   Storage   Name   Submit ");
+  expect(d.text(80)[0]).toMatch(/Scope\s+·\s+Storage\s+·\s+Name\s+·\s+Review/);
+  expect(d.text(80)[0]).toContain("1 of 3");
   d.press(ENTER);
   expect(screen()).toContain(storage.question);
-  expect(d.text()[1]).toContain("✓ Scope");
+  expect(d.text(80)[0]).toContain("✓ Scope");
+  expect(d.text(80)[0]).toContain("2 of 3");
   d.press(TAB, TAB);
   expect(screen()).toContain(" Scope    A");
   expect(screen()).toContain(" Storage  not answered");
@@ -177,8 +179,8 @@ test("several questions: Tab and Shift+Tab move through them and Submit, Enter a
   d.press(TAB, DOWN, ENTER);
   expect(screen()).toContain(naming.question);
   d.press(..."skyr", ENTER);
-  expect(screen()).toContain(
-    "enter submit · tab/shift+tab switch · escape cancel",
+  expect(bottom(d)).toContain(
+    "enter send · tab/shift+tab switch · escape decline",
   );
   expect(d.done).not.toHaveBeenCalled();
   d.press(ENTER);
@@ -193,58 +195,47 @@ test("several questions: Tab and Shift+Tab move through them and Submit, Enter a
   ]);
 });
 
-test("Enter never goes back to a question the user tabbed past, and Submit sends it as unanswered", () => {
+test("Enter never goes back to a question the user tabbed past, and Review sends it as unanswered", () => {
   const d = dialog([scope, storage, naming]);
   const screen = () => d.text().join("\n");
   d.press(TAB, ENTER);
   expect(screen()).toContain(naming.question);
   d.press(..."skyr", ENTER);
   expect(screen()).toContain(" Scope    not answered");
-  expect(screen()).toContain("enter submit anyway · ");
+  expect(bottom(d)).toContain("enter send anyway · ");
   d.press(ENTER);
   expect(d.done.mock.calls).toEqual([
     [[undefined, { labels: ["SQLite"] }, { labels: [], other: "skyr" }]],
   ]);
 });
 
-test("unticking every box leaves a question unanswered, so Submit declines", () => {
+test("unticking every box leaves a question unanswered, so Review declines", () => {
   const d = dialog([features, storage]);
   d.press(SPACE, SPACE, BACKTAB);
-  expect(d.text()[1]).not.toContain("✓");
-  expect(hintAt(d, 80)).toContain("enter decline · ");
+  expect(d.text(80)[0]).not.toContain("✓");
+  expect(bottom(d)).not.toContain("enter decline");
+  expect(bottom(d)).toContain("escape decline");
   d.press(ENTER);
   expect(d.done.mock.calls).toEqual([[undefined]]);
 });
 
-test("the Submit tab's hint wraps whole too, partly answered or not at all", () => {
-  const none = dialog([scope, storage]);
-  none.press(BACKTAB);
-  const partly = dialog([scope, storage]);
-  partly.press(ENTER, TAB);
-  for (const d of [none, partly]) {
-    const whole = hintAt(d, 200);
-    expect(whole).toMatch(/enter (decline|submit anyway) · /);
-    for (let width = 14; width <= 90; width++)
-      expect(hintAt(d, width)).toBe(whole);
-  }
-});
-
-test("Submit with nothing answered declines, and its hint says so", () => {
+test("Review with nothing answered declines, and its hint says so", () => {
   const d = dialog([scope, storage]);
   d.press(BACKTAB);
-  expect(d.text().join("\n")).toContain("enter decline · ");
+  expect(bottom(d)).not.toContain("enter decline");
+  expect(bottom(d)).toContain("escape decline");
   d.press(ENTER);
   expect(d.done.mock.calls).toEqual([[undefined]]);
 });
 
 test("Space marks a tabbed single choice without moving on, and does nothing on a lone question", () => {
   const tabbed = dialog([scope, storage]);
-  expect(tabbed.text(80).join("\n")).toContain("space pick · ");
+  expect(bottom(tabbed)).toContain("space pick · ");
   tabbed.press(DOWN, SPACE);
   expect(tabbed.text()).toContain(" > (•) B");
   expect(tabbed.text().join("\n")).toContain(scope.question);
   tabbed.press(TAB);
-  expect(tabbed.text()[1]).toContain("✓ Scope");
+  expect(tabbed.text(80)[0]).toContain("✓ Scope");
 
   // a lone question draws no radio mark, so Space accepts nothing and the Other draft stays
   const lone = dialog([storage]);
@@ -253,7 +244,7 @@ test("Space marks a tabbed single choice without moving on, and does nothing on 
   expect(lone.text().join("\n")).toContain("Other  draft");
 });
 
-test("between tabs a Space tick is an answer, so Submit sends it without Enter", () => {
+test("between tabs a Space tick is an answer, so Review sends it without Enter", () => {
   const d = dialog([features, storage]);
   d.press(SPACE, TAB, ENTER);
   expect(d.text().join("\n")).toContain(" Features  Billing");
@@ -276,46 +267,98 @@ test("across tabs a single choice keeps one answer: the last one taken", () => {
   expect(optionLast.done.mock.calls[0]?.[0]?.[0]).toEqual({ labels: ["A"] });
 });
 
-test("the Submit tab marks an answer in the user's own words as the transcript row does", () => {
+test("the Review tab marks an answer in the user's own words as the transcript row does", () => {
   const d = dialog([scope, naming]);
   d.press(ENTER, ..."skyr", ENTER);
   expect(d.text()).toContain(" Name   [own words] skyr");
 });
 
-/** The hint as one string, its wrapped lines rejoined. */
-function hintAt(d: ReturnType<typeof dialog>, width: number): string {
-  const lines = d.text(width);
-  return lines
-    .slice(lines.lastIndexOf("") + 1, -1)
-    .map((l) => l.trim())
-    .join(" ");
+/** The bottom rule, as plain text. */
+function bottom(d: ReturnType<typeof dialog>, width = 100): string {
+  return d.text(width).at(-1) ?? "";
 }
 
-test("on a narrow pane the hint wraps instead of losing its end: every word stays on screen, down to 14 columns", () => {
-  for (const questions of [
-    [features, storage],
-    [storage, features],
-  ]) {
+test("hints drop in order, and the decline key is the last to go", () => {
+  const d = dialog([features, storage]);
+  const all = bottom(d, 200);
+  for (const hint of [
+    "up/down move",
+    "space tick",
+    "enter answer",
+    "tab/shift+tab switch",
+    "escape decline",
+  ])
+    expect(all).toContain(hint);
+  const kept = (width: number) =>
+    [
+      "tab/shift+tab switch",
+      "up/down move",
+      "space tick",
+      "enter answer",
+      "escape decline",
+    ].filter((h) => bottom(d, width).includes(h));
+  // the lowest rank goes first: switch, then move, then tick, then answer
+  expect(kept(200)).toHaveLength(5);
+  let previous = 5;
+  for (let width = 200; width >= 14; width--) {
+    const left = kept(width);
+    expect(left.length).toBeLessThanOrEqual(previous);
+    previous = left.length;
+    if (left.length > 0) expect(left).toContain("escape decline");
+    if (width >= 22) expect(left).toContain("escape decline");
+  }
+  expect(bottom(d, 14)).toBe("─".repeat(14));
+});
+
+test("the bottom rule is one row at every width", () => {
+  for (const questions of [[storage], [features, storage]]) {
     const d = dialog(questions);
-    const whole = hintAt(d, 200);
-    expect(whole).toContain("tab/shift+tab switch");
-    expect(whole).toContain("escape cancel");
-    for (let width = 14; width <= 90; width++)
-      expect(hintAt(d, width)).toBe(whole);
+    for (let width = 1; width <= 120; width++) {
+      const rows = d.text(width);
+      expect(rows.at(-1)).toMatch(/^[─ a-z/+1-9·]*$/);
+      expect(visibleWidth(rows.at(-1) ?? "")).toBeLessThanOrEqual(width);
+      expect(rows.at(-2)).not.toMatch(/^─+$/);
+    }
   }
 });
 
-test("a cut header keeps the style it is drawn in: no reset inside a chip or the Submit tab's header column", () => {
+const four = [scope, storage, naming, { ...naming, header: "Owner" }];
+
+test("the top rule ladder: all tabs, active tab with count, count, bare rule", () => {
+  const d = dialog(four);
+  const top = (width: number) => d.text(width)[0] ?? "";
+  expect(top(120)).toMatch(
+    /Scope\s+·\s+Storage\s+·\s+Name\s+·\s+Owner\s+·\s+Review\s+1 of 4 ──$/,
+  );
+  expect(top(40)).toMatch(/^── \? ask_user ─+\s+Scope\s+1 of 4 ──$/);
+  expect(top(26)).toMatch(/^── \? ask_user ─+ 1 of 4 ──$/);
+  expect(top(18)).toBe("── ? ask_user ────");
+  expect(top(10)).toBe("─".repeat(10));
+  d.press(TAB, TAB);
+  expect(top(40)).toMatch(/Name\s+3 of 4/);
+});
+
+test("the top rule shows 'k of N answered' on the last tab", () => {
+  const d = dialog([scope, storage]);
+  d.press(ENTER, TAB);
+  expect(d.text(80)[0]).toContain("1 of 2 answered");
+  d.press(BACKTAB, ENTER);
+  expect(d.text(80)[0]).toContain("2 of 2 answered");
+});
+
+test("a single question has no tabs and no count", () => {
+  const top = dialog([storage]).text(80)[0] ?? "";
+  expect(top).toMatch(/^── \? ask_user ─+$/);
+  expect(top).not.toContain(" of ");
+});
+
+test("a cut header keeps the style it is drawn in: no reset inside the tab strip", () => {
   // Real SGR, so a reset that ends a background or colour early shows in the line
   const long = { ...scope, header: "Infrastructure choice" };
   const d = dialog([long, storage]);
-  const chips = d.component.render(80)[1] ?? "";
-  expect(stripTerminalSequences(chips)).toContain(" Infrastruct… ");
-  expect(chips).not.toContain("\x1b[0m");
-  d.press(ENTER, ENTER);
-  const review = d.component.render(80).join("\n");
-  expect(stripTerminalSequences(review)).toContain(" Infrastruct…  ");
-  expect(review).not.toContain("\x1b[0m");
+  const strip = d.component.render(80)[0] ?? "";
+  expect(stripTerminalSequences(strip)).toContain(" Infrastruct… ");
+  expect(strip).not.toContain("\x1b[0m");
 });
 
 test("a throw while drawing or handling a key closes the dialog with that error instead of reaching the TUI's stack", async () => {
@@ -381,17 +424,6 @@ test("every line fits the width, from 1 to 80 columns, with wide characters, emo
         expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
   }
-
-  // too narrow for every chip: only the active one, with where it stands
-  const narrow = dialog([
-    scope,
-    storage,
-    naming,
-    { ...naming, header: "Owner" },
-  ]);
-  expect(narrow.text(24)[1]).toBe("  Scope  (1/4)");
-  narrow.press(BACKTAB);
-  expect(narrow.text(24)[1]).toBe("  Submit ");
 });
 
 const ESC_CODE = "\x1b";
@@ -410,7 +442,8 @@ test("under TERM=dumb the dialog draws no escape and only ASCII", () => {
     expect(raw).not.toContain(ESC_CODE);
     expect(raw).toMatch(/^[\x20-\x7e\n]*$/);
   }
-  expect(d.component.render(60)[0]).toBe("-".repeat(60));
+  expect(d.component.render(60)[0]).toMatch(/^-- \? ask_user -+ /);
+  expect(d.component.render(60).at(-1)).toMatch(/^-- -+ .* --$/);
 });
 
 test("under NO_COLOR the dialog keeps bold and draws no colour or background", () => {
@@ -447,8 +480,11 @@ test("rule rows are made of the rule glyph at widths 1-80 and never overflow", (
     const d = dialog([scope, storage], { mode });
     for (let width = 1; width <= 80; width++) {
       const lines = d.text(width);
-      expect(lines[0]).toBe(glyph.repeat(width));
-      expect(lines.at(-1)).toBe(glyph.repeat(width));
+      for (const rule of [lines[0], lines.at(-1)]) {
+        expect(visibleWidth(rule ?? "")).toBeLessThanOrEqual(width);
+        expect(rule?.replace(/[^─-]/g, "").length).toBeGreaterThan(0);
+        expect(rule?.startsWith(glyph)).toBe(true);
+      }
     }
   }
 });

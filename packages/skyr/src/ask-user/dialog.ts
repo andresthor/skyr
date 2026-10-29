@@ -1,8 +1,8 @@
 /**
  * The ask_user dialog, drawn in place of the input editor. It owns the keyboard until the user
  * answers or declines, and knows nothing of Pi's runtime: questions in, answers out through `done`.
- * One question finishes on Enter; two to four get a tab each and a Submit tab to review them,
- * which submits whatever is answered, or declines when nothing is.
+ * One question finishes on Enter; two to four get a tab each and a Review tab that sends
+ * whatever is answered, or declines when nothing is.
  */
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import {
@@ -18,7 +18,7 @@ import { type Glyphs, glyphsOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
 import { guard } from "../ui/guard.js";
 import { keyName } from "../ui/hint.js";
-import { type Paint, styled, type Token } from "../ui/palette.js";
+import { type Paint, selected, styled, type Token } from "../ui/palette.js";
 import { sanitize } from "../ui/text.js";
 import {
   type Answer,
@@ -41,6 +41,12 @@ interface Deps {
 }
 
 const PLACEHOLDER = "type an answer";
+
+/** One key hint; `rank` is how long it survives a narrow pane, the highest last. */
+interface Hint {
+  text: string;
+  rank: number;
+}
 
 const asError = (cause: unknown) =>
   cause instanceof Error ? cause : new Error(String(cause));
@@ -160,7 +166,7 @@ class Page {
 class AskDialog implements Component, Focusable {
   focused = false;
   private readonly pages: Page[];
-  /** The page shown; `pages.length` is the Submit tab, which exists only with several pages. */
+  /** The page shown; `pages.length` is the Review tab, which exists only with several pages. */
   private tab = 0;
   private finished = false;
   private readonly glyphs: Glyphs;
@@ -264,50 +270,92 @@ class AskDialog implements Component, Focusable {
   }
 
   private draw(width: number): string[] {
-    const { paint, rule: colour } = this.deps;
-    const glyphs = this.glyphs.rule.repeat(width);
-    const rule = paint.mode === "color" ? colour(glyphs) : glyphs;
-    const lines = [rule];
-    if (this.tabbed) lines.push(this.chips(width), "");
     const page = this.page;
-    lines.push(...(page ? this.question(page, width) : this.review()));
-    lines.push("");
-    // Wrapped, not cut: a cut drops the end of the hint, where cancel is
-    for (const line of wrapTextWithAnsi(this.hint(), Math.max(1, width - 1)))
-      lines.push(` ${this.ink(line, "muted")}`);
-    lines.push(rule);
-    return lines;
+    return [
+      this.topRule(width),
+      ...(page ? this.question(page, width) : this.review()),
+      this.bottomRule(width),
+    ];
   }
 
-  private chips(width: number): string {
+  private bareRule(cols: number): string {
+    const { paint, rule } = this.deps;
+    const glyphs = this.glyphs.rule.repeat(Math.max(0, cols));
+    return paint.mode === "color" ? rule(glyphs) : glyphs;
+  }
+
+  /**
+   * A rule row with `left` after its lead and `right` before its tail, rule between; undefined
+   * when they leave no column of rule. Without `right`, `left` is followed by rule to the edge.
+   */
+  private framed(
+    width: number,
+    left: string,
+    right: string,
+  ): string | undefined {
+    const lead = left === "" ? " " : ` ${left} `;
+    const used = 2 + visibleWidth(lead);
+    const start = this.bareRule(2) + lead;
+    if (right === "")
+      return used <= width ? start + this.bareRule(width - used) : undefined;
+    const fill = width - used - visibleWidth(right) - 4;
+    return fill >= 1
+      ? `${start}${this.bareRule(fill)} ${right} ${this.bareRule(2)}`
+      : undefined;
+  }
+
+  private topRule(width: number): string {
+    const left = `${this.ink("?", "warning")} ${this.ink("ask_user", "text", true)}`;
+    for (const right of [...this.tabsAndCount(), ""]) {
+      const row = this.framed(width, left, right);
+      if (row !== undefined) return row;
+    }
+    return this.bareRule(width);
+  }
+
+  /** What the top rule can say of where the user is, from the most to the least. */
+  private tabsAndCount(): string[] {
+    if (!this.tabbed) return [];
     const { paint } = this.deps;
-    const { colors } = paint.theme;
-    const { mark } = this.glyphs;
-    const active = (label: string) => {
-      if (paint.mode === "ascii") return `[${label}]`;
-      return styled(paint, ` ${label} `, {
-        bold: true,
-        ...(paint.mode === "color"
-          ? { fg: colors.text, bg: colors.selectedBg }
-          : { inverse: true }),
-      });
-    };
-    const chips = this.pages.map((p, i) => {
-      if (i === this.tab) return active(p.header);
-      return p.answer()
-        ? ` ${this.ink(`${mark.done} `, "success")}${this.ink(p.header, "text")} `
-        : ` ${this.ink(p.header, "dim")} `;
-    });
-    const submit =
-      this.tab === this.pages.length
-        ? active("Submit")
-        : ` ${this.ink("Submit", "text")} `;
-    const row = ` ${[...chips, submit].join(" ")}`;
-    if (visibleWidth(row) <= width) return row;
-    const page = this.page;
-    return page
-      ? ` ${active(page.header)} ${this.ink(`(${this.tab + 1}/${this.pages.length})`, "muted")}`
-      : ` ${active("Submit")}`;
+    const { mark, sep } = this.glyphs;
+    const onReview = this.tab === this.pages.length;
+    const active = (label: string) =>
+      selected(paint, ` ${label} `, `[${label}]`);
+    const tabs = [...this.pages.map((p) => p.header), "Review"].map(
+      (label, i) => {
+        if (i === this.tab) return active(label);
+        const page = this.pages[i];
+        if (!page) return this.ink(label, "text");
+        return page.answer()
+          ? `${this.ink(`${mark.done} `, "success")}${this.ink(label, "text")}`
+          : this.ink(label, "muted");
+      },
+    );
+    const count = this.ink(
+      onReview
+        ? `${this.pages.filter((p) => p.answer()).length} of ${this.pages.length} answered`
+        : `${this.tab + 1} of ${this.pages.length}`,
+      "muted",
+    );
+    const dim = this.ink(sep, "dim");
+    return [
+      `${tabs.join(dim)}  ${count}`,
+      `${tabs[this.tab]}  ${count}`,
+      count,
+    ];
+  }
+
+  private bottomRule(width: number): string {
+    const hints = this.hints();
+    // The lowest rank goes first, the rightmost of equals; the cancel key is the last to go
+    for (;;) {
+      const text = hints.map((h) => h.text).join(this.glyphs.sep);
+      const row = this.framed(width, "", this.ink(text, "muted"));
+      if (row !== undefined || hints.length <= 1)
+        return row ?? this.bareRule(width);
+      const ranks = hints.map((h) => h.rank);
+      hints.splice(ranks.lastIndexOf(Math.min(...ranks)), 1);
+    }
   }
 
   private question(page: Page, width: number): string[] {
@@ -369,30 +417,38 @@ class AskDialog implements Component, Focusable {
     });
   }
 
-  private hint(): string {
+  /** The keys that work now, in display order. */
+  private hints(): Hint[] {
     const { keys } = this.deps;
-    const { sep } = this.glyphs;
     const key = (id: Parameters<typeof keyName>[1]) => keyName(keys, id);
-    const cancel = `${key("tui.select.cancel")} cancel`;
-    // Shift+Tab has no action id of its own, so the hint names it literally
-    const tab = this.tabbed
-      ? `${key("tui.input.tab")}/shift+tab switch${sep}`
-      : "";
+    const hints: Hint[] = [];
     const page = this.page;
     if (page) {
-      const space = page.multi
-        ? `space tick${sep}`
-        : this.tabbed && page.options.length
-          ? `space pick${sep}`
-          : "";
-      return `${key("tui.select.up")}/${key("tui.select.down")} move${sep}${space}${key("tui.select.confirm")} answer${sep}${tab}${cancel}`;
+      if (page.options.length)
+        hints.push({
+          text: `${key("tui.select.up")}/${key("tui.select.down")} move`,
+          rank: 2,
+        });
+      if (page.multi) hints.push({ text: "space tick", rank: 3 });
+      else if (this.tabbed && page.options.length)
+        hints.push({ text: "space pick", rank: 3 });
+      hints.push({ text: `${key("tui.select.confirm")} answer`, rank: 5 });
+    } else {
+      const answers = this.answers();
+      // With nothing answered Enter declines like the cancel key, which says so below
+      if (answers.some((a) => a))
+        hints.push({
+          text: `${key("tui.select.confirm")} ${answers.every((a) => a) ? "send" : "send anyway"}`,
+          rank: 5,
+        });
     }
-    const answers = this.answers();
-    const submit = answers.every((a) => a)
-      ? "submit"
-      : answers.some((a) => a)
-        ? "submit anyway"
-        : "decline";
-    return `${key("tui.select.confirm")} ${submit}${sep}${tab}${cancel}`;
+    // Shift+Tab has no action id of its own, so the hint names it literally
+    if (this.tabbed)
+      hints.push({
+        text: `${key("tui.input.tab")}/shift+tab switch`,
+        rank: 1,
+      });
+    hints.push({ text: `${key("tui.select.cancel")} decline`, rank: 6 });
+    return hints;
   }
 }

@@ -1,7 +1,7 @@
 /**
- * The surfaces skyr draws outside the transcript, wired once: the one `session_start` and
- * `session_shutdown` pair they share, so a feature module hands them rows and never mounts
- * anything itself.
+ * The surfaces skyr draws outside the transcript, wired once: the session start and end they
+ * share, so a feature module hands them rows (or, for voice, a class for the editor) and never
+ * mounts anything itself.
  */
 import type {
   ExtensionAPI,
@@ -11,12 +11,13 @@ import { canDraw, tierOf } from "../ui/caps.js";
 import { stopClock } from "../ui/clock.js";
 import { loaderIndicator } from "../ui/spinner.js";
 import { type BarHandle, createBar } from "./bar.js";
+import { createEditorHost, type EditorHost } from "./editor-host.js";
 import { createFooter } from "./footer.js";
-import { trackWorking, type Working } from "./working.js";
+import { trackWorking } from "./working.js";
 
 export interface Chrome {
   readonly bar: BarHandle;
-  readonly working: Working;
+  readonly editor: EditorHost;
 }
 
 const ABOUT_TOGGLE = "Open or close skyr's bar of subagents and shells";
@@ -26,6 +27,7 @@ const ABOUT_SWITCH = "Switch skyr's bar between its AGENTS and SHELLS tabs";
 export function registerChrome(pi: ExtensionAPI): Chrome {
   const bar = createBar();
   const working = trackWorking(pi);
+  const editor = createEditorHost({ working });
   // Pi resets the indicator at every session start; each run sets it again so a /theme switch reaches it
   const setIndicator = (ctx: ExtensionContext) =>
     ctx.ui.setWorkingIndicator(
@@ -47,6 +49,10 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
       }
     }
   });
+  // Its own handler: a throw in one mount cannot cost the other their start
+  pi.on("session_start", async (_event, ctx) => {
+    if (canDraw(ctx)) await editor.mount(ctx);
+  });
   // `message_end` fires before its message is saved, so it asks for a refresh a moment later
   pi.on("message_end", (_event, ctx) => footer.refreshSoon(ctx));
   // The rest fire after the entries they change are appended
@@ -59,6 +65,7 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
   pi.on("model_select", (_event, ctx) => footer.refresh(ctx));
   pi.on("thinking_level_select", (_event, ctx) => footer.refresh(ctx));
   pi.on("session_shutdown", () => {
+    editor.stop();
     bar.stop();
     footer.stop();
     // The bar's own tick outlives its session otherwise
@@ -80,5 +87,5 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
       if (canDraw(ctx)) bar.nextTab();
     },
   });
-  return { bar, working };
+  return { bar, editor };
 }

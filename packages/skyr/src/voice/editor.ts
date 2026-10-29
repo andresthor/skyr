@@ -1,8 +1,8 @@
 /**
  * Live dictation text in Pi's input editor.
  *
- * Mechanism: a `CustomEditor` subclass installed once per session with
- * `ctx.ui.setEditorComponent`. The interim segment is never written into the
+ * Mechanism: a `CustomEditor` subclass that extends the class the editor host hands it; the host
+ * installs the result once per session with `ctx.ui.setEditorComponent`. The interim segment is never written into the
  * editor's buffer; `render()` draws it after the cursor as dim italic ghost text
  * (`spliceGhost`). Each final is committed with `insertTextAtCursor`, which puts it
  * at the cursor, keeps whatever the user typed around it, and is one undo step. So

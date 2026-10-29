@@ -5,23 +5,20 @@
  * `ctrl+space` or `/voice` toggles listening, Esc cancels and restores the editor,
  * Enter stops-without-sending. Quiet never ends a dictation. Text is never auto-sent.
  *
- * The editor owns its decoration (ghost, drying spans, the bottom rule); `display.ts` keeps
- * voice on screen and routes what the editor cannot carry — a hidden editor, a foreign editor,
- * a failed rule — to the footer. The core modules render nothing.
+ * Voice installs no editor of its own: it extends the class the editor host builds. That editor
+ * owns the decoration (ghost, drying spans, the bottom rule); `display.ts` keeps voice on screen
+ * and routes what the editor cannot carry — a hidden editor, a foreign editor, a failed rule —
+ * to the footer. The core modules render nothing.
  */
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
-  ExtensionUIContext,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { withWorkingLine } from "../chrome/editor.js";
-import type { Working } from "../chrome/working.js";
+import type { EditorHost } from "../chrome/editor-host.js";
 import { readSkyrSection } from "../config.js";
-import { loadPi } from "../pi.js";
 import { type Tier, tierOf } from "../ui/caps.js";
-import type { Paint } from "../ui/palette.js";
 import { quoted } from "../ui/text.js";
 import { prewarmToken } from "./client.js";
 import { parseVoiceSection } from "./config.js";
@@ -64,15 +61,13 @@ function startRefusal(
   return `voice: a card or selector has the keyboard; close it, then press ${VOICE_SHORTCUT} again`;
 }
 
-type EditorFactory = Parameters<ExtensionUIContext["setEditorComponent"]>[0];
-
 /**
  * Reads the STT credentials once, here: without them only `/voice` exists, to say so; with them
  * `/voice`, ctrl+space and the session_start, session_shutdown and ui_prompt_start handlers.
  * Registering starts nothing: the display starts with a TUI session, the mic with a dictation.
  */
-export function registerVoice(pi: ExtensionAPI, working: Working): void {
-  wireVoice(pi, working);
+export function registerVoice(pi: ExtensionAPI, host: EditorHost): void {
+  wireVoice(pi, host);
 }
 
 /**
@@ -81,7 +76,7 @@ export function registerVoice(pi: ExtensionAPI, working: Working): void {
  */
 export function wireVoice(
   pi: ExtensionAPI,
-  working: Working,
+  host: EditorHost,
   deps: VoiceDeps = {},
 ): void {
   const mode = deps.mode ?? tierOf(process.env);
@@ -101,25 +96,21 @@ export function wireVoice(
   }
   const creds = resolved.creds;
 
-  // The live TUI instance, handed over at mount so a repaint can be asked for; gone when the
-  // session is, so a stale session never paints.
+  // The live TUI instance, handed over when Pi builds the editor so a repaint can be asked for;
+  // gone when the session is, so a stale session never paints.
   let tui: Tui | undefined;
-  // The mounted voice editor, set once Pi calls the factory; read it through ours().
+  // The voice editor, set once Pi calls the host's factory; read it through ours().
   let editor: VoiceEditorLike | undefined;
-  // Kept by reference, so a later mount and ours() can recognise it.
-  let editorFactory: EditorFactory | undefined;
-  // The session context of the last mount or toggle, for reading the buffer outside a callback;
+  // The session context of the last session start or toggle, for reading the buffer outside a callback;
   // no dictation starts without one (toggle sets it), so reads never race a session.
   let ctxRef: ExtensionContext | undefined;
   // What the next dictation configures Corti with: skyr.json as the last session_start read it.
   let config = parseVoiceSection(undefined).config;
 
   const repaint = () => tui?.requestRender();
-  // Ours only while Pi still has our factory installed: an extension may replace it at any time.
+  // Ours only while Pi still has the host's factory installed: an extension may replace it at any time.
   const ours = () =>
-    editorFactory && ctxRef?.ui.getEditorComponent() === editorFactory
-      ? editor
-      : undefined;
+    editor && ctxRef && host.owns(ctxRef.ui) ? editor : undefined;
   const sink = editorSink(
     ours,
     {
@@ -187,35 +178,17 @@ export function wireVoice(
     controller.toggle();
   };
 
-  const mount = async (ctx: ExtensionContext) => {
-    ctxRef = ctx;
-    const installed = ctx.ui.getEditorComponent();
-    // a foreign editor wins, existing fallback via setEditorText unchanged; ours or none gets (re)installed
-    if (installed && installed !== editorFactory) return;
-    const { CustomEditor } = await loadPi();
-    // Pi's theme handle is its global theme proxy, never replaced, so /theme reaches the editor
-    const paint: Paint = { theme: ctx.ui.theme, mode };
-    // one class per session mount, not per editor: the hook and paint live for the session's life
-    const VoiceEditor = withWorkingLine(
-      createVoiceEditorClass(CustomEditor, { keyHook, paint }),
-      {
-        paint,
-        working,
-        notify: (message, type) => ctx.ui.notify(message, type),
-      },
-    );
-    editorFactory = (t, theme, keybindings) => {
-      // Pi copies padding and autocomplete into a custom editor, but not this constructor-only flag;
-      // without it Pi draws its loader in a row of its own instead of handing it to the editor
-      const ed = new VoiceEditor(t, theme, keybindings, {
-        embedWorkingStatus: true,
-      });
-      editor = ed;
-      tui = t;
-      return ed;
+  // The host builds one class per mount; voice's part is this extension and the handles it keeps
+  host.extend((Base, paint) => {
+    const Voice = createVoiceEditorClass(Base, { keyHook, paint });
+    return class extends Voice {
+      constructor(...args: ConstructorParameters<typeof Voice>) {
+        super(...args);
+        editor = this;
+        tui = args[0];
+      }
     };
-    ctx.ui.setEditorComponent(editorFactory);
-  };
+  });
 
   pi.registerCommand("voice", {
     description: `Dictate with Corti speech-to-text (${VOICE_SHORTCUT}) · /voice off cancels`,
@@ -243,17 +216,13 @@ export function wireVoice(
     controller.dispose();
     // a no-op after the session_shutdown Pi sends first; it matters only if one never came
     display.stop();
-    // the last session's handles go
-    editor = undefined;
-    ctxRef = undefined;
-    tui = undefined;
     const read = parseVoiceSection(await readSkyrSection("voice"));
     config = read.config;
     // once per session; a malformed section degrades to defaults, never breaks the start
     if (read.problems.length)
       ctx.ui.notify(read.problems.join("\n"), "warning");
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
-    await mount(ctx);
+    ctxRef = ctx;
     display.start(ctx.ui);
     // a cached token makes ctrl+space feel instant
     prewarmToken(creds, { fetch: deps.fetch });
@@ -262,6 +231,10 @@ export function wireVoice(
   pi.on("session_shutdown", () => {
     controller.dispose();
     display.stop();
+    // The host's mount runs before this file's session_start, so the handles are cleared here
+    editor = undefined;
+    ctxRef = undefined;
+    tui = undefined;
   });
 
   // A dialog hides the editor; a running dictation would keep listening and land its words in the

@@ -24,6 +24,7 @@ import {
 import { type Mock, onTestFinished, vi } from "vitest";
 // biome-ignore lint/style/noRestrictedImports: Pi builds its app bindings with this class but does not export it from its root
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
+import { createEditorHost } from "../src/chrome/editor-host.js";
 import { createWorking } from "../src/chrome/working.js";
 import { registerSkyr } from "../src/index.js";
 import type { Tier } from "../src/ui/caps.js";
@@ -384,7 +385,14 @@ export function registeredVoice(
     signIns.push(url);
     return new Response("unavailable", { status: 503 });
   }) as unknown as typeof fetch;
-  wireVoice(pi, createWorking(), { fetch: signIn, ...o });
+  const host = createEditorHost({ working: createWorking(), mode: o.mode });
+  wireVoice(pi, host, { fetch: signIn, ...o });
+  // Pi runs the chrome's mount and then voice's handler, each awaited; one fake handler composes them
+  const voiceStart = captured.handlers.get("session_start");
+  captured.handlers.set("session_start", async (e, ctx) => {
+    if (ctx.mode === "tui" && ctx.hasUI) await host.mount(ctx as never);
+    await voiceStart?.(e, ctx);
+  });
   return { ...captured, signIns };
 }
 

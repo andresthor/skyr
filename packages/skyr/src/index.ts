@@ -25,7 +25,7 @@ export async function registerSkyr(pi: ExtensionAPI): Promise<void> {
   const chrome = registerChrome(pi);
   registerWebFetch(pi);
   registerWebSearch(pi);
-  registerVoice(pi, chrome.working);
+  registerVoice(pi, chrome.editor);
   registerSubagent(pi, chrome.bar);
   registerAskUser(pi);
   registerAdvisor(pi);

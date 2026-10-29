@@ -6,7 +6,7 @@
  * effects.
  */
 import { sanitize } from "../ui/text.js";
-import { type Answers, shortHeader } from "./dialog.js";
+import { type Answers, shortHeader } from "./answers.js";
 import type { FormRequest } from "./host.js";
 import type { AskQuestion } from "./index.js";
 

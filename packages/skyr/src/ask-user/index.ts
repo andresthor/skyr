@@ -23,10 +23,10 @@ import { clip, oneLine, quoted, sanitize } from "../ui/text.js";
 import {
   type Answers,
   answerLine,
-  createAskDialog,
   HEADER_WIDTH,
   shortHeader,
-} from "./dialog.js";
+} from "./answers.js";
+import { createAskDialog } from "./dialog.js";
 import { buildForm, parseForm } from "./form.js";
 import { askHost } from "./host.js";
 

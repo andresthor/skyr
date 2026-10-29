@@ -402,10 +402,10 @@ function tabLines(
     cols: visibleWidth(text),
   });
 
-  const row = (r: BarRow, slotOf: string, focused: boolean): string => {
-    const label = columns.label + 2;
-    const put: typeof ink = focused ? (text) => bare(text) : ink;
-    const left = join([
+  const label = columns.label + 2;
+  /** A row opens with the pip, its mark, the slot and the label; a lead starts where they end. */
+  const rowLeft = (put: typeof ink, r: BarRow, slotOf: string): Piece =>
+    join([
       gap(1),
       put(glyphs.mark[r.mark], markToken[r.mark]),
       gap(1),
@@ -414,6 +414,10 @@ function tabLines(
       put(cell(r.label + (r.background ? " &" : ""), label), "text"),
       gap(2),
     ]);
+
+  const row = (r: BarRow, slotOf: string, focused: boolean): string => {
+    const put: typeof ink = focused ? (text) => bare(text) : ink;
+    const left = rowLeft(put, r, slotOf);
     const time =
       r.endedAt === undefined
         ? formatElapsed(now - r.startedAt)
@@ -485,24 +489,22 @@ function tabLines(
     entries.length,
   );
   const shown = entries.slice(start, start + size);
-  const nowColumn = 1 + 1 + 1 + 2 + 1 + columns.label + 2 + 2;
+  const slotOf = (r: BarRow) =>
+    `${view.tab === "shells" ? "$" : ""}${view.slots[view.tab].get(r.id) ?? ""}`;
   const hidden = entries.length - shown.length;
+  const [first] = shown;
+  // The "+N more" line starts where a row's lead does: the first shown row gives the column
   const more =
-    hidden > 0
-      ? " ".repeat(nowColumn) + ink(`+${hidden} more`, "dim").out
+    hidden > 0 && first !== undefined
+      ? " ".repeat(rowLeft(ink, first, slotOf(first)).cols) +
+        ink(`+${hidden} more`, "dim").out
       : undefined;
   // The count sits on the side where rows are hidden; below wins when both sides hide some
   const hiddenBelow = start + size < entries.length;
   return [
     header(),
     ...(more && !hiddenBelow ? [more] : []),
-    ...shown.map((r) =>
-      row(
-        r,
-        `${view.tab === "shells" ? "$" : ""}${view.slots[view.tab].get(r.id) ?? ""}`,
-        r.id === view.focused,
-      ),
-    ),
+    ...shown.map((r) => row(r, slotOf(r), r.id === view.focused)),
     ...(more && hiddenBelow ? [more] : []),
     ...(entries.length === 0 ? [` ${ink("nothing running", "dim").out}`] : []),
   ];

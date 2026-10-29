@@ -14,11 +14,7 @@ import type {
   ExtensionUIContext,
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import {
-  stripTerminalSequences,
-  type TuiMouseEvent,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { glyphsOf } from "../ui/caps.js";
 import { fitToWidth } from "../ui/fit.js";
 import { formatElapsed } from "../ui/format.js";
@@ -30,8 +26,8 @@ import { sanitize } from "../ui/text.js";
 import type { Working } from "./working.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: TypeScript accepts a class mixin only over an any[] constructor (TS2545)
-type MixinArgs = any[];
-type EditorClass = new (...args: MixinArgs) => CustomEditor;
+export type MixinArgs = any[];
+export type EditorClass = new (...args: MixinArgs) => CustomEditor;
 type Indicator = NonNullable<
   Parameters<CustomEditor["setWorkingStatusIndicator"]>[0]
 >;
@@ -44,6 +40,8 @@ export interface InterruptClaim {
 export interface WorkingLineDeps {
   readonly paint: Paint;
   readonly working: Working;
+  /** The exact frames the chrome last gave Pi's loader; any other working indicator is not skyr's. */
+  readonly ownFrames: () => readonly string[];
   /** Tells the user once that the line stopped drawing. */
   readonly notify: ExtensionUIContext["notify"];
 }
@@ -67,7 +65,7 @@ const PROBE_WIDTH = 500;
  */
 export function withWorkingLine<B extends EditorClass>(
   Base: B,
-  { paint, working, notify }: WorkingLineDeps,
+  { paint, working, ownFrames, notify }: WorkingLineDeps,
 ): B {
   const glyphs = glyphsOf(paint.mode);
 
@@ -158,14 +156,8 @@ export function withWorkingLine<B extends EditorClass>(
       // Anything but a spinner and its message is a shape this line does not know how to draw
       if (!spinner || !border.startsWith(spinner) || !/^( |$)/.test(rest))
         return undefined;
-      // The working indicator is skyr's frames unless another extension set its own; theirs, or a
-      // single frame that starts no interval, is left to Pi. Stripped, since the colour goes stale.
-      if (
-        held.kind === "working" &&
-        !variantFor("thinking", paint.mode).frames.includes(
-          stripTerminalSequences(spinner),
-        )
-      )
+      // Another extension's frames, or a single frame that starts no interval, are left to Pi
+      if (held.kind === "working" && !ownFrames().includes(spinner))
         return undefined;
 
       const now = Date.now();

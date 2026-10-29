@@ -54,6 +54,7 @@ interface LineOptions {
   working?: Working;
   notify?: ExtensionUIContext["notify"];
   paint?: Paint;
+  ownFrames?: readonly string[];
   rows?: number;
   paddingX?: number;
 }
@@ -65,11 +66,17 @@ function lineEditor<E extends CustomEditor>(
     working = fakeWorking(),
     notify = vi.fn(),
     paint = testPaint(),
+    ownFrames = loaderIndicator(paint).frames ?? [],
     rows = 40,
     paddingX = 0,
   }: LineOptions = {},
 ) {
-  const Editor = withWorkingLine(Base, { paint, working, notify });
+  const Editor = withWorkingLine(Base, {
+    paint,
+    working,
+    ownFrames: () => ownFrames,
+    notify,
+  });
   const ed = new Editor(
     { terminal: { rows }, requestRender: () => {} } as never,
     { borderColor: (s: string) => s, selectList: {} } as never,
@@ -290,6 +297,31 @@ test("an indicator another extension set, or one with a single frame, is left to
     expect(rows).toHaveLength(3);
     expect(rows[0]).toContain("Working");
   }
+});
+
+test("Pi's own pulse indicator never claims the line, so the editor's height never changes as it ticks", () => {
+  const pulse = { frames: ["·", "•", "●", "•"], intervalMs: 120 };
+  const ed = lineEditor(CustomEditor);
+  ed.setWorkingStatusIndicator(
+    realIndicator("working", "Working", { indicator: pulse }),
+  );
+  const heights = new Set<number>();
+  for (let tick = 0; tick < pulse.frames.length * 2; tick++) {
+    heights.add(ed.render(60).length);
+    vi.advanceTimersByTime(120);
+  }
+  expect([...heights]).toEqual([3]);
+});
+
+test("skyr's own frames draw the line on every tick, so the height holds", () => {
+  const ed = lineEditor(CustomEditor);
+  ed.setWorkingStatusIndicator(skyrIndicator());
+  const heights = new Set<number>();
+  for (let tick = 0; tick < 12; tick++) {
+    heights.add(ed.render(60).length);
+    vi.advanceTimersByTime(80);
+  }
+  expect([...heights]).toEqual([4]);
 });
 
 test("the line follows a theme switch", () => {

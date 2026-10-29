@@ -1,6 +1,7 @@
 /**
  * One interval for everything that redraws on the second, so a hundred running rows cost one
- * timer.
+ * timer. Its subscribers are the bar and the footer, which each release their own tick when they
+ * stop.
  */
 
 /** One entry per subscription, so the same function twice is two subscriptions. */
@@ -49,10 +50,4 @@ export function everySecond(
     entries.delete(entry);
     idle();
   };
-}
-
-/** Ends every subscription and the interval, as a session's end does; a later subscription starts it again. */
-export function stopClock(): void {
-  entries.clear();
-  idle();
 }

@@ -11,7 +11,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { createFooter } from "../src/chrome/footer.js";
-import { stopClock } from "../src/ui/clock.js";
 import {
   expectInert,
   HOSTILE,
@@ -518,8 +517,6 @@ test("CH is the latest assistant's cache read over its prompt tokens and absent 
 
 /** Fakes the clock the footer reads and ticks on; no session may be running that waits on a timer. */
 function fakeClock(at: Date): void {
-  // An earlier test's session may still hold the shared interval, which would then be a real one
-  stopClock();
   vi.useFakeTimers({
     toFake: [
       "setInterval",
@@ -531,7 +528,6 @@ function fakeClock(at: Date): void {
   });
   vi.setSystemTime(at);
   onTestFinished(() => {
-    stopClock();
     vi.useRealTimers();
   });
 }

@@ -38,6 +38,8 @@ const view = (rows: Partial<BarView>): BarView => ({
   shells: [],
   failed: [],
   slots: { agents: new Map(), shells: new Map() },
+  focused: undefined,
+  top: 0,
   ...rows,
 });
 
@@ -483,15 +485,101 @@ test("the header's keys drop first when the pane is narrow", () => {
   expect(header).toMatch(/^ {2}AGENTS 3 {4}SHELLS 1 $/);
 });
 
-test("under 30 terminal rows an open bar draws the pulse", () => {
-  const short = textOf(draw(OPEN, plain(), 120, 64_000, 29));
+test("under 12 terminal rows an open bar draws the pulse", () => {
+  const short = textOf(draw(OPEN, plain(), 120, 64_000, 11));
   expect(short).toHaveLength(2);
   expect(short[0]).toMatch(/^ 3 agents .*1 shell /);
-  expect(draw(OPEN, plain(), 120, 64_000, 30)[0]).toContain("AGENTS");
+  expect(draw(OPEN, plain(), 120, 64_000, 12)[0]).toContain("AGENTS");
+});
+
+const TEN = Array.from({ length: 10 }, (_, i) =>
+  row({ id: `id${i}`, label: `row${i}`, now: "x" }),
+);
+const MORE = /^ +\+\d+ more$/;
+
+test("a 24-row pane lists seven of ten rows and counts the rest below", () => {
+  const lines = textOf(
+    draw(view({ open: true, agents: TEN }), plain(), 120, 0, 24),
+  );
+  expect(lines).toHaveLength(1 + 7 + 1 + 1);
+  expect(lines.at(-2)).toMatch(/\+3 more$/);
+});
+
+test("a 12-row pane lists two of ten rows, the least that is worth the tab, and fits its rows", () => {
+  const lines = textOf(
+    draw(view({ open: true, agents: TEN }), plain(), 120, 0, 12),
+  );
+  expect(lines).toHaveLength(1 + 2 + 1 + 1);
+  expect(lines[1]).toContain("row0");
+  expect(lines[3]).toMatch(/\+8 more$/);
+  const all = textOf(
+    draw(view({ open: true, agents: TEN.slice(0, 3) }), plain(), 120, 0, 12),
+  );
+  expect(all.filter((l) => /row\d/.test(l))).toHaveLength(3);
+  expect(all.some((l) => MORE.test(l))).toBe(false);
+});
+
+test("an 8-row pane draws the pulse, not the tab", () => {
+  const lines = textOf(
+    draw(view({ open: true, agents: TEN }), plain(), 120, 0, 8),
+  );
+  expect(lines).toHaveLength(2);
+  expect(lines.join("\n")).not.toContain("AGENTS");
+});
+
+test("the window keeps its start while the highlight stays inside it, and the count sits where rows are hidden", () => {
+  const at = (top: number, focused: string) =>
+    textOf(
+      draw(
+        view({ open: true, agents: TEN, top, focused }),
+        plain(),
+        120,
+        0,
+        24,
+      ),
+    );
+  const firstRow = (lines: string[]) =>
+    lines.find((l) => /row\d/.test(l))?.match(/row\d/)?.[0];
+
+  const inside = at(2, "id5");
+  expect(firstRow(inside)).toBe("row2");
+  expect(inside.at(-2)).toMatch(/\+3 more$/);
+
+  const end = at(3, "id9");
+  expect(firstRow(end)).toBe("row3");
+  expect(end[1]).toMatch(MORE);
+  expect(end.at(-2)).toContain("row9");
+
+  expect(firstRow(at(3, "id1"))).toBe("row1");
+});
+
+test("a cut failure reason keeps its row's style only on the reason", () => {
+  const failed = row({
+    id: "dead0001",
+    mark: "failed",
+    why: "provider exploded while streaming a very long answer",
+    startedAt: 0,
+    endedAt: 41_000,
+  });
+  const lines = draw(
+    view({
+      open: true,
+      failed: [{ row: failed, tab: "agents", seen: true }],
+      slots: { agents: new Map([["dead0001", 1]]), shells: new Map() },
+    }),
+    testPaint(),
+    80,
+    0,
+  );
+  const runs = styledRuns(lines[1] ?? "");
+  const cut = runs.find((r) => r.text.includes("provider"));
+  expect(cut?.bold).toBe(true);
+  expect(cut?.text.trimEnd().endsWith("…")).toBe(true);
+  expect(runs.filter((r) => r.bold).map((r) => r.text)).toEqual([cut?.text]);
 });
 
 test("open and idle, the pulse reads nothing running with the key", () => {
-  const [pulse = ""] = textOf(draw(view({ open: true }), plain(), 100, 0, 20));
+  const [pulse = ""] = textOf(draw(view({ open: true }), plain(), 100, 0, 11));
   expect(pulse).toMatch(new RegExp(`^ nothing running +${HINT} $`));
 });
 
@@ -556,4 +644,134 @@ test("the colour tier marks the active tab with the selected background, mono wi
   expect(colour).toContain("48;2;");
   expect(mono).not.toContain("48;");
   expect(mono).toContain("\x1b[7");
+});
+
+/** `OPEN` with the second row highlighted. */
+const FOCUSED = { ...OPEN, focused: AGENT_ROWS[1]?.id };
+
+test("the focused row is drawn apart from the rest in every tier: selectedBg in color, inverse in mono, a '>' in the pad column in ascii", () => {
+  const colour = draw(FOCUSED, testPaint("color"), 120, 0);
+  expect(colour[2]).toContain("48;2;42;45;58");
+  expect(colour[1]).not.toContain("48;2;");
+  expect(colour[3]).not.toContain("48;2;");
+
+  const mono = draw(FOCUSED, testPaint("mono"), 120, 0);
+  expect(mono[2]).toContain("\x1b[7");
+  expect(mono[2]).not.toContain("48;2;");
+  expect(mono[1]).not.toContain("\x1b[7");
+
+  // The second row's label is CJK on purpose, so the plain-ASCII check looks at the first
+  const ascii = draw(
+    { ...OPEN, focused: AGENT_ROWS[0]?.id },
+    testPaint("ascii"),
+    120,
+    0,
+  );
+  expect(ascii.map((l) => l.charAt(0))).toEqual([" ", ">", " ", " ", ""]);
+  expect(ascii[1]).toMatch(/^[\x20-\x7e]*$/);
+});
+
+test("the highlight is one unbroken style to the edge in color", () => {
+  const line = draw(FOCUSED, testPaint("color"), 120, 0)[2] ?? "";
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the background reset is what this counts
+  expect(line.match(/\x1b\[49m/g)).toHaveLength(1);
+  expect(visibleWidth(line)).toBe(120);
+});
+
+test("focus moves no column: the focused row keeps every column of its neighbours", () => {
+  for (const mode of TIERS) {
+    const rows = (shown: BarView) =>
+      GRID_ROWS(textOf(draw(shown, testPaint(mode), 150, 64_000)));
+    const before = rows(OPEN);
+    const after = rows(FOCUSED);
+    // Only the ascii marker changes the text, and only in the pad column
+    expect(
+      after.map((l, i) => (i === 1 && mode === "ascii" ? l.slice(1) : l)),
+    ).toEqual(
+      before.map((l, i) => (i === 1 && mode === "ascii" ? l.slice(1) : l)),
+    );
+    expect(after.map(visibleWidth)).toEqual(before.map(visibleWidth));
+  }
+});
+
+test("with nothing focused the open bar draws exactly as before", () => {
+  for (const mode of TIERS) {
+    const none = draw(OPEN, testPaint(mode), 120, 0);
+    const missing = draw(
+      { ...OPEN, focused: "an id no row has" },
+      testPaint(mode),
+      120,
+      0,
+    );
+    expect(missing).toEqual(none);
+  }
+});
+
+test("the window scrolls to keep the focused row in view past eight rows and still counts the rest", () => {
+  const many = Array.from({ length: 10 }, (_, i) =>
+    row({ id: `id${i}`, label: `row${i}`, now: "x" }),
+  );
+  const shown = (focused: string | undefined) =>
+    textOf(
+      draw(
+        view({ open: true, agents: many, focused }),
+        testPaint("ascii"),
+        120,
+        0,
+      ),
+    );
+  const labels = (lines: string[]) =>
+    lines.filter((l) => /row\d/.test(l)).map((l) => /row\d/.exec(l)?.[0]);
+
+  expect(labels(shown(undefined))).toEqual([
+    "row0",
+    "row1",
+    "row2",
+    "row3",
+    "row4",
+    "row5",
+    "row6",
+  ]);
+  expect(labels(shown("id6"))).toEqual([
+    "row0",
+    "row1",
+    "row2",
+    "row3",
+    "row4",
+    "row5",
+    "row6",
+  ]);
+  const end = shown("id9");
+  expect(labels(end)).toEqual([
+    "row3",
+    "row4",
+    "row5",
+    "row6",
+    "row7",
+    "row8",
+    "row9",
+  ]);
+  expect(end.find((l) => l.startsWith(">"))).toContain("row9");
+  expect(end[1]).toMatch(/\+3 more$/);
+});
+
+test("every line fits 0-200 columns in every tier with a hostile label focused", () => {
+  for (const mode of TIERS)
+    for (const text of HOSTILE_NOWS) {
+      const hostile = row({
+        label: text,
+        now: text,
+        turns: 1000,
+        tools: 99999,
+      });
+      const shown = view({
+        open: true,
+        agents: [hostile],
+        slots: { agents: new Map([[hostile.id, 12345]]), shells: new Map() },
+        focused: hostile.id,
+      });
+      for (const width of WIDTHS_SWEEP)
+        for (const line of draw(shown, testPaint(mode), width, 3_700_000))
+          expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
 });

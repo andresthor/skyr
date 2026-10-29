@@ -1,6 +1,7 @@
 // The editor skyr installs: one factory per terminal session, built from Pi's own editor class.
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { createBar } from "../src/chrome/bar.js";
 import { createEditorHost } from "../src/chrome/editor-host.js";
 import { createWorking } from "../src/chrome/working.js";
 import { loaderIndicator } from "../src/ui/spinner.js";
@@ -17,8 +18,15 @@ afterEach(() => {
 
 type Ctx = ReturnType<typeof voiceCtx>;
 
+const ownFrames = loaderIndicator(testPaint()).frames ?? [];
+
 const newHost = () =>
-  createEditorHost({ working: createWorking(), mode: "color" });
+  createEditorHost({
+    working: createWorking(),
+    bar: createBar(),
+    mode: "color",
+    ownFrames: () => ownFrames,
+  });
 type Entry = { type: string; message?: { role: string; content?: unknown } };
 
 /** A message entry as a session file holds it. */
@@ -219,4 +227,36 @@ test("after another extension installs its editor, a session start that Pi has r
   await mount(host, ctx);
   expect(ctx.ui.setEditorComponent).toHaveBeenCalledTimes(1);
   expect(host.owns(ctx.ui)).toBe(false);
+});
+
+test("the bar's keys sit under the extension: the extension's key hook sees every key before the bar does", async () => {
+  const bar = {
+    listing: vi.fn(() => true),
+    move: vi.fn(() => true),
+    close: vi.fn(),
+  };
+  const host = createEditorHost({
+    working: createWorking(),
+    bar,
+    mode: "color",
+    ownFrames: () => ownFrames,
+  });
+  const seen: string[] = [];
+  host.extend(
+    (Base) =>
+      class extends Base {
+        override handleInput(data: string) {
+          seen.push(data);
+          // The extension swallows ↑ and lets the rest through
+          if (data !== "\x1b[A") super.handleInput(data);
+        }
+      },
+  );
+  const ctx = voiceCtx();
+  await mount(host, ctx);
+  const ed = mountedEditor(ctx.ui);
+  ed.handleInput("\x1b[A");
+  ed.handleInput("\x1b[B");
+  expect(seen).toEqual(["\x1b[A", "\x1b[B"]);
+  expect(bar.move.mock.calls).toEqual([[1]]);
 });

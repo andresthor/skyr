@@ -1,8 +1,8 @@
 /**
  * Installs skyr's input editor once per terminal session and answers whether Pi still has it.
- * The class is built per mount, innermost first: Pi's `CustomEditor`, a feature's extension, the
- * working line; a feature never installs an editor of its own, so Pi swaps editors (and discards
- * what a swap discards) once.
+ * The class is built per mount, innermost first: Pi's `CustomEditor`, the bar's keys, a feature's
+ * extension, the working line; a feature never installs an editor of its own, so Pi swaps editors
+ * (and discards what a swap discards) once.
  */
 import type {
   CustomEditor,
@@ -13,14 +13,16 @@ import type {
 import { loadPi } from "../pi.js";
 import { type Tier, tierOf } from "../ui/caps.js";
 import type { Paint } from "../ui/palette.js";
+import type { BarKeys } from "./bar.js";
+import { withBarKeys } from "./bar-keys.js";
 import { withWorkingLine } from "./editor.js";
 import type { Working } from "./working.js";
 
-type EditorClass = typeof CustomEditor;
+type PiEditorClass = typeof CustomEditor;
 
 export interface EditorHost {
-  /** Registers how a feature extends the editor class; called once at registration. The class it returns sits under the working line. */
-  extend(extension: (Base: EditorClass, paint: Paint) => EditorClass): void;
+  /** Registers how a feature extends the editor class; called once at registration. The class it returns sits over the bar's keys and under the working line. */
+  extend(extension: (Base: PiEditorClass, paint: Paint) => PiEditorClass): void;
   /** Installs the editor for a terminal session, once; leaves the slot alone when another extension holds it. */
   mount(
     ctx: Pick<ExtensionContext, "ui" | "sessionManager">,
@@ -55,6 +57,9 @@ function promptsOf(
 
 export function createEditorHost(deps: {
   working: Working;
+  bar: BarKeys;
+  /** The exact frames the chrome last gave Pi's loader, which is how the working line knows its indicator. */
+  ownFrames: () => readonly string[];
   /** Test seam; the terminal's own tier when not given. */
   mode?: Tier;
 }): EditorHost {
@@ -78,12 +83,17 @@ export function createEditorHost(deps: {
       if (mine !== generation) return;
       // Pi's theme handle is one live proxy, so /theme reaches the editor
       const paint: Paint = { theme: ctx.ui.theme, mode };
+      const notify: ExtensionUIContext["notify"] = (message, type) =>
+        ctx.ui.notify(message, type);
+      // Under the extension, so a feature's key hook sees every key before the bar does
+      const Base = withBarKeys(CustomEditor, { bar: deps.bar, notify });
       const Editor = withWorkingLine(
-        extension ? extension(CustomEditor, paint) : CustomEditor,
+        extension ? extension(Base, paint) : Base,
         {
           paint,
           working: deps.working,
-          notify: (message, type) => ctx.ui.notify(message, type),
+          ownFrames: deps.ownFrames,
+          notify,
         },
       );
       factory = (tui, theme, keys) => {

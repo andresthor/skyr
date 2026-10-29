@@ -180,7 +180,11 @@ export function wireVoice(
 
   // The host builds one class per mount; voice's part is this extension and the handles it keeps
   host.extend((Base, paint) => {
-    const Voice = createVoiceEditorClass(Base, { keyHook, paint });
+    const Voice = createVoiceEditorClass(Base, {
+      keyHook,
+      paint,
+      dictating: () => controller.active,
+    });
     return class extends Voice {
       constructor(...args: ConstructorParameters<typeof Voice>) {
         super(...args);

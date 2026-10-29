@@ -3,14 +3,11 @@
  * share, so a feature module hands them rows (or, for voice, a class for the editor) and never
  * mounts anything itself.
  */
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { canDraw, tierOf } from "../ui/caps.js";
-import { stopClock } from "../ui/clock.js";
 import { loaderIndicator } from "../ui/spinner.js";
 import { type BarHandle, createBar } from "./bar.js";
+import { BAR_KEYS } from "./bar-view.js";
 import { createEditorHost, type EditorHost } from "./editor-host.js";
 import { createFooter } from "./footer.js";
 import { trackWorking } from "./working.js";
@@ -27,12 +24,9 @@ const ABOUT_SWITCH = "Switch skyr's bar between its AGENTS and SHELLS tabs";
 export function registerChrome(pi: ExtensionAPI): Chrome {
   const bar = createBar();
   const working = trackWorking(pi);
-  const editor = createEditorHost({ working });
-  // Pi resets the indicator at every session start; each run sets it again so a /theme switch reaches it
-  const setIndicator = (ctx: ExtensionContext) =>
-    ctx.ui.setWorkingIndicator(
-      loaderIndicator({ theme: ctx.ui.theme, mode: tierOf(process.env) }),
-    );
+  // The frames Pi's loader holds now; the working line draws only for an indicator it recognises as these
+  let ownFrames: readonly string[] = [];
+  const editor = createEditorHost({ working, bar, ownFrames: () => ownFrames });
   const footer = createFooter();
   pi.on("session_start", async (_event, ctx) => {
     bar.stop();
@@ -43,7 +37,13 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
       bar.start(ctx.ui);
     } finally {
       try {
-        setIndicator(ctx);
+        // Pi resets the indicator at every session start; set once, so an extension's or the user's own choice stands
+        const indicator = loaderIndicator({
+          theme: ctx.ui.theme,
+          mode: tierOf(process.env),
+        });
+        ownFrames = indicator.frames ?? [];
+        ctx.ui.setWorkingIndicator(indicator);
       } finally {
         await footer.start(ctx);
       }
@@ -67,23 +67,22 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
     editor.stop();
     bar.stop();
     footer.stop();
-    // The bar's own tick outlives its session otherwise
-    stopClock();
-  });
-  pi.on("agent_start", (_event, ctx) => {
-    if (canDraw(ctx)) setIndicator(ctx);
   });
   // Neither key is bound in Pi or pi-tui by default.
-  pi.registerShortcut("alt+a", {
+  pi.registerShortcut(BAR_KEYS.toggle, {
     description: ABOUT_TOGGLE,
     handler: async (ctx) => {
-      if (canDraw(ctx)) bar.toggle();
+      if (!canDraw(ctx)) return;
+      const notice = bar.toggle();
+      if (notice !== undefined) ctx.ui.notify(notice, "info");
     },
   });
-  pi.registerShortcut("alt+s", {
+  pi.registerShortcut(BAR_KEYS.switchTab, {
     description: ABOUT_SWITCH,
     handler: async (ctx) => {
-      if (canDraw(ctx)) bar.nextTab();
+      if (!canDraw(ctx)) return;
+      const notice = bar.nextTab();
+      if (notice !== undefined) ctx.ui.notify(notice, "info");
     },
   });
   return { bar, editor };

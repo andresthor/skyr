@@ -6,9 +6,16 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { type Mark, tierOf } from "../ui/caps.js";
 import { everySecond } from "../ui/clock.js";
-import { guard } from "../ui/guard.js";
-import { describeCause, oneLine } from "../ui/text.js";
-import { barLines, type FailedRow, tabFits } from "./bar-view.js";
+import { failureLatch, guard } from "../ui/guard.js";
+import {
+  barLines,
+  type FailedRow,
+  noticeLines,
+  tabBody,
+  tabRows,
+  windowSize,
+  windowStart,
+} from "./bar-view.js";
 
 const WIDGET_KEY = "skyr.bar";
 
@@ -65,24 +72,49 @@ export interface BarHandle {
   slotTarget(tab: BarTab, text: string): SlotTarget | undefined;
 }
 
-export interface Bar extends BarHandle {
+/** What an editor's keys do to the bar. */
+export interface BarKeys {
+  /** The bar is open on a tab it has room to list: the only time ↑↓ and Esc are the bar's. */
+  listing(): boolean;
+  /**
+   * Moves the focused row of the open tab by one, clamped at both ends. From no focus, ↓ focuses
+   * the first row and ↑ the last. Returns whether the focus changed; when it did not, the key
+   * was not the bar's to take.
+   */
+  move(by: 1 | -1): boolean;
+  /** Closes the bar and forgets every focus and the failures seen. */
+  close(): void;
+}
+
+export interface Bar extends BarHandle, BarKeys {
   /** Mounts the bar once under "skyr.bar"; `notify` reports a render failure once. */
   start(ui: Pick<ExtensionUIContext, "setWidget" | "notify">): void;
   /** Stops repainting and forgets what the user saw and chose; never calls Pi's UI, and is idempotent. */
   stop(): void;
-  /** Opens the bar on the tab it was last on, or closes it. Synchronous, so two quick presses end closed. */
-  toggle(): void;
-  /** Opens the bar on the tab it is not on. */
-  nextTab(): void;
+  /**
+   * Opens the bar on the tab it was last on, or closes it. Synchronous, so two quick presses end
+   * closed. Where the terminal has no room to list the tab, returns its rows as notice text for
+   * the caller to show (the tab's unseen failures are forgotten, as in `open`).
+   */
+  toggle(): string | undefined;
+  /** Opens the bar on the tab it is not on; returns notice text as `toggle` does. */
+  nextTab(): string | undefined;
 }
 
 export function createBar(): Bar {
   const sources = new Set<BarSource>();
   let ui: Pick<ExtensionUIContext, "setWidget" | "notify"> | undefined;
-  let reported = false;
+  const latch = failureLatch();
   let failed: FailedRow[] = [];
   let isOpen = false;
   let tab: BarTab = "agents";
+  // Per tab, the highlighted row; the index is where it last was, for when its row leaves
+  const focus: Record<BarTab, { id: string; index: number } | undefined> = {
+    agents: undefined,
+    shells: undefined,
+  };
+  // Per tab, where the window of rows starts; the highlight moves it only when it leaves the window
+  const top: Record<BarTab, number> = { agents: 0, shells: 0 };
   // Per tab, the smallest free number from 1: stable while a row is listed, freed when it leaves.
   const slots: Record<BarTab, Map<string, number>> = {
     agents: new Map(),
@@ -94,10 +126,13 @@ export function createBar(): Bar {
           requestRender(): void;
           terminal: { rows: number; columns: number };
         };
+        /** The width the bar last drew at: the one the drawing decided on. */
+        width?: number;
         offClock?: () => void;
       }
     | undefined;
-  // Set by the first error in drawing or repainting; the bar draws nothing until a new session.
+  // Set by the first error in drawing or repainting; the bar draws nothing until a new session,
+  // but slots and focus keep their books so a stop by slot still finds its row.
   let broken = false;
 
   const rowsOf = (tab: BarTab) =>
@@ -108,26 +143,40 @@ export function createBar(): Bar {
     broken = true;
     mounted?.offClock?.();
     if (mounted) mounted.offClock = undefined;
-    if (reported) return;
-    reported = true;
-    const message = describeCause(cause);
-    queueMicrotask(() => {
-      try {
-        ui?.notify(
-          `skyr: the bar stopped drawing after an error (${oneLine(message, 120)}); /reload brings it back`,
-          "warning",
-        );
-      } catch {
-        // The session that would show it may be gone
-      }
-    });
+    latch.trip(cause, (reason) =>
+      ui?.notify(
+        `skyr: the bar stopped drawing after an error (${reason}); /reload brings it back`,
+        "warning",
+      ),
+    );
   };
 
-  const listed = (of: BarTab) => failed.filter((f) => f.tab === of);
+  const failedOn = (of: BarTab) => failed.filter((f) => f.tab === of);
+
+  const rowsListed = (of: BarTab) =>
+    tabRows({ agents: rowsOf("agents"), shells: rowsOf("shells"), failed }, of);
+
+  /** The focus follows its row; a row that left hands it to whatever now sits at its place. */
+  const reconcileFocus = () => {
+    for (const of of ["agents", "shells"] as const) {
+      const held = focus[of];
+      const rows = rowsListed(of);
+      if (held) {
+        const index = rows.findIndex((row) => row.id === held.id);
+        if (index >= 0) focus[of] = { id: held.id, index };
+        else {
+          const at = Math.min(held.index, rows.length - 1);
+          const next = rows[at];
+          focus[of] = next && { id: next.id, index: at };
+        }
+      }
+      scrollTo(of, focus[of]?.index ?? -1, rows.length);
+    }
+  };
 
   const assignSlots = () => {
     for (const of of ["agents", "shells"] as const) {
-      const ids = [...rowsOf(of), ...listed(of).map((f) => f.row)].map(
+      const ids = [...rowsOf(of), ...failedOn(of).map((f) => f.row)].map(
         (row) => row.id,
       );
       const taken = slots[of];
@@ -158,9 +207,10 @@ export function createBar(): Bar {
 
   // A source calls this from its store, where a throw would reach the code that changed the store.
   const changed = () => {
-    if (broken) return;
     try {
       assignSlots();
+      reconcileFocus();
+      if (broken) return;
       syncClock();
       mounted?.tui.requestRender();
     } catch (cause) {
@@ -168,14 +218,35 @@ export function createBar(): Bar {
     }
   };
 
-  /** Whether the tab is listed at the terminal's size now. */
-  const fits = () => {
+  /** The lines an open tab may draw below its header at the terminal's size now; undefined when it has no room. */
+  const bodyNow = () => {
     const terminal = mounted?.tui.terminal;
-    return (
-      !broken &&
-      terminal !== undefined &&
-      tabFits(terminal.rows, terminal.columns)
+    return broken || !terminal
+      ? undefined
+      : tabBody(terminal.rows, mounted?.width ?? terminal.columns);
+  };
+  const fits = () => bodyNow() !== undefined;
+
+  /** Brings the window of `of` to show its highlight; the bar's own answer to where rows start. */
+  const scrollTo = (of: BarTab, index: number, count: number) => {
+    const body = bodyNow();
+    if (body === undefined) return;
+    top[of] = windowStart(top[of], index, windowSize(count, body), count);
+  };
+
+  /** Rows of `on` for a notice, forgetting its unseen failures, which the notice has now told. */
+  const noticeFor = (on: BarTab): string | undefined => {
+    if (broken || !mounted) return undefined;
+    const unseen = failedOn(on).filter((f) => !f.seen);
+    failed = failed.filter((f) => !unseen.includes(f));
+    const rows = tabRows(
+      { agents: rowsOf("agents"), shells: rowsOf("shells"), failed: unseen },
+      on,
     );
+    return [
+      ...noticeLines(rows, on, slots[on]),
+      ...(rows.length === 0 ? [`${on}: none running`] : []),
+    ].join("\n");
   };
 
   /** Opens on `on` if the terminal has room to list it; nothing changes otherwise. */
@@ -188,7 +259,37 @@ export function createBar(): Bar {
     return true;
   };
 
+  const close = () => {
+    isOpen = false;
+    focus.agents = undefined;
+    focus.shells = undefined;
+    top.agents = 0;
+    top.shells = 0;
+    failed = failed.filter((f) => !f.seen);
+    changed();
+  };
+
   return {
+    listing: () => isOpen && fits(),
+    move(by) {
+      if (!isOpen || !fits()) return false;
+      const rows = rowsListed(tab);
+      const held = focus[tab];
+      const at = held ? rows.findIndex((row) => row.id === held.id) : -1;
+      const index =
+        at < 0
+          ? by === 1
+            ? 0
+            : rows.length - 1
+          : Math.min(Math.max(at + by, 0), rows.length - 1);
+      const row = rows[index];
+      if (!row || row.id === held?.id) return false;
+      focus[tab] = { id: row.id, index };
+      scrollTo(tab, index, rows.length);
+      changed();
+      return true;
+    },
+    close,
     attach(source) {
       sources.add(source);
       const off = source.subscribe(changed, (row) => {
@@ -221,7 +322,9 @@ export function createBar(): Bar {
       const numbered = (row: BarRow) => slots[of].get(row.id);
       const hit = live.find((row) => numbered(row) === Number(slot[1]));
       if (hit) return { id: hit.id };
-      const ended = listed(of).some((f) => numbered(f.row) === Number(slot[1]));
+      const ended = failedOn(of).some(
+        (f) => numbered(f.row) === Number(slot[1]),
+      );
       const prefix = of === "shells" ? "$" : "";
       return {
         reason: ended
@@ -233,20 +336,19 @@ export function createBar(): Bar {
       };
     },
     toggle() {
-      if (!isOpen) {
-        show(tab);
-        return;
+      if (isOpen) {
+        close();
+        return undefined;
       }
-      isOpen = false;
-      failed = failed.filter((f) => !f.seen);
-      changed();
+      return show(tab) ? undefined : noticeFor(tab);
     },
     nextTab() {
-      show(tab === "agents" ? "shells" : "agents");
+      const next = tab === "agents" ? "shells" : "agents";
+      return show(next) ? undefined : noticeFor(next);
     },
     start(target) {
       ui = target;
-      reported = false;
+      latch.reset();
       broken = false;
       target.setWidget(WIDGET_KEY, (tui, theme) => {
         // A throw is reported once, and an empty component keeps Pi's widget row valid
@@ -255,26 +357,27 @@ export function createBar(): Bar {
           mounted = here;
           syncClock();
           return {
-            render: guard(
-              (width) =>
-                broken
-                  ? []
-                  : barLines(
-                      {
-                        open: isOpen,
-                        tab,
-                        agents: rowsOf("agents"),
-                        shells: rowsOf("shells"),
-                        failed,
-                        slots,
-                      },
-                      { theme, mode: tierOf(process.env) },
-                      width,
-                      tui.terminal.rows,
-                      Date.now(),
-                    ),
-              trip,
-            ),
+            render: guard((width) => {
+              here.width = width;
+              return broken
+                ? []
+                : barLines(
+                    {
+                      open: isOpen,
+                      tab,
+                      agents: rowsOf("agents"),
+                      shells: rowsOf("shells"),
+                      failed,
+                      slots,
+                      focused: focus[tab]?.id,
+                      top: top[tab],
+                    },
+                    { theme, mode: tierOf(process.env) },
+                    width,
+                    tui.terminal.rows,
+                    Date.now(),
+                  );
+            }, trip),
             invalidate() {},
             dispose() {
               here.offClock?.();
@@ -293,6 +396,10 @@ export function createBar(): Bar {
       failed = [];
       isOpen = false;
       tab = "agents";
+      focus.agents = undefined;
+      focus.shells = undefined;
+      top.agents = 0;
+      top.shells = 0;
       slots.agents.clear();
       slots.shells.clear();
     },

@@ -3,7 +3,7 @@
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { everySecond } from "../src/ui/clock.js";
+import { type BarRow, createBar } from "../src/chrome/bar.js";
 import {
   call,
   expectInert,
@@ -16,6 +16,7 @@ import {
   router,
   scriptTurns,
   taskOf,
+  widgetHost,
 } from "./session.js";
 import { piScreen } from "./ui.js";
 import { keybindings } from "./voice.js";
@@ -205,25 +206,6 @@ test("a reload with a child running leaves one bar, set once by the new session,
   expect(parent.widgetSets).toEqual([BAR, BAR]);
   expect(parent.mounted(BAR)).toBeDefined();
   expect(parent.widgets.at(-1)).toEqual([]);
-  await vi.waitFor(() => expect(vi.getTimerCount()).toBe(intervals));
-});
-
-test("no interval is left after a session ends with a running row and a running child", async () => {
-  fakeTicks();
-  const held = hold();
-  const parent = await parentSession({
-    mode: "tui",
-    respond: router([call({ prompt: "s", background: true })], held.step),
-  });
-  const intervals = vi.getTimerCount();
-
-  await parent.session.prompt("go");
-  await held.entered;
-  // A subscriber of the shared clock, still ticking when the session ends
-  everySecond(() => {});
-  expect(vi.getTimerCount()).toBe(intervals + 1);
-
-  await parent.session.reload();
   await vi.waitFor(() => expect(vi.getTimerCount()).toBe(intervals));
 });
 
@@ -571,7 +553,7 @@ test("/shells stop takes the $slot number the bar shows", async () => {
 
 test("on a pane too small to list the tab, /subagents lists the children with their ids", async () => {
   const host = await brokenHost(
-    { requestRender() {}, terminal: { rows: 20, columns: 100 } },
+    { requestRender() {}, terminal: { rows: 11, columns: 100 } },
     plainTheme,
   );
 
@@ -681,6 +663,42 @@ test("after the bar stopped drawing, /subagents still lists", async () => {
   await host.finish();
 });
 
+test("after the bar stopped drawing, a slot still names its row, including rows that arrive later", () => {
+  const bar = createBar();
+  let live: BarRow[] = [];
+  let changed = () => {};
+  bar.attach({
+    tab: "agents",
+    rows: () => live,
+    subscribe(onChange) {
+      changed = onChange;
+      return () => {};
+    },
+  });
+  bar.start({
+    notify: () => {},
+    setWidget: ((_key: string, factory: (...args: object[]) => never) => {
+      factory(
+        {
+          requestRender() {
+            throw new Error("tui gone");
+          },
+          terminal: { rows: 40, columns: 100 },
+        },
+        plainTheme,
+      );
+    }) as never,
+  });
+
+  live = [rowOf("a1")];
+  changed();
+  live = [rowOf("a1"), rowOf("a2")];
+  changed();
+
+  expect(bar.slotTarget("agents", "1")).toEqual({ id: "a1" });
+  expect(bar.slotTarget("agents", "2")).toEqual({ id: "a2" });
+});
+
 /** A parent whose bar is mounted on a terminal of `rows` rows, with a child that fails in the background. */
 async function failingOn(
   rows: number,
@@ -715,11 +733,9 @@ async function failingOn(
   return { parent, bar: () => bar?.render(100) ?? [] };
 }
 
-test("on a pane too small for the tab, the keys do nothing and /subagents lists the failure instead of losing it", async () => {
-  const { parent, bar } = await failingOn(20);
+test("on a pane too small for the tab, /subagents lists the failure instead of losing it", async () => {
+  const { parent, bar } = await failingOn(11);
 
-  press(parent, "alt+a");
-  press(parent, "alt+s");
   expect(bar()[0]).toMatch(/unseen/);
   expect(bar()[0]).not.toContain("nothing running");
 
@@ -731,8 +747,22 @@ test("on a pane too small for the tab, the keys do nothing and /subagents lists 
   expect(bar()).toEqual([]);
 });
 
+test("on a pane too small for the tab, alt+a and alt+s list the tab in a notice instead of doing nothing", async () => {
+  const { parent, bar } = await failingOn(11);
+
+  press(parent, "alt+a");
+  expect(parent.notices.at(-1)).toMatch(
+    /× "run boom" & · .*provider exploded.* · [0-9a-f]{8}$/,
+  );
+  // Listed once, so no tab opened and nothing leads
+  expect(bar()).toEqual([]);
+
+  press(parent, "alt+s");
+  expect(parent.notices.at(-1)).toMatch(/^shells: none running$/);
+});
+
 test("on a pane too small for the tab, /shells lists the jobs", async () => {
-  const { parent, bar } = await failingOn(20, [
+  const { parent, bar } = await failingOn(11, [
     fauxToolCall(
       "bash",
       { command: "sleep 60", background: true },
@@ -744,4 +774,213 @@ test("on a pane too small for the tab, /shells lists the jobs", async () => {
   expect(parent.notices.at(-1)).toMatch(/"sleep 60" · running for/);
   expect(bar()[0]).not.toMatch(/AGENTS|SHELLS/);
   await parent.session.prompt("/shells stop all");
+});
+
+test("the window start is remembered: moving inside the window does not scroll it, and moving past an edge scrolls just enough", () => {
+  const { bar, set, host } = standalone(24);
+  set(
+    "agents",
+    Array.from({ length: 10 }, (_, i) => rowOf(`a${i}`)),
+  );
+  bar.nextTab();
+  bar.nextTab();
+  const labels = () =>
+    (host.mounted(BAR)?.render(100) ?? [])
+      .map((l) => /a\d/.exec(l)?.[0])
+      .filter(Boolean);
+
+  for (let i = 0; i < 7; i++) bar.move(1);
+  expect(labels()[0]).toBe("a0");
+  bar.move(1);
+  expect(labels()[0]).toBe("a1");
+  bar.move(-1);
+  bar.move(-1);
+  expect(labels()[0]).toBe("a1");
+  for (let i = 0; i < 5; i++) bar.move(-1);
+  expect(labels()[0]).toBe("a0");
+});
+
+/** A bar driven without Pi: sources the test edits, mounted on a fake terminal, drawn in ascii so a highlight reads as `>`. */
+function standalone(terminalRows = 40) {
+  vi.stubEnv("TERM", "dumb");
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  const bar = createBar();
+  const host = widgetHost();
+  const sources = {
+    agents: {
+      rows: [] as BarRow[],
+      changed: () => {},
+      failed: (_: BarRow) => {},
+    },
+    shells: {
+      rows: [] as BarRow[],
+      changed: () => {},
+      failed: (_: BarRow) => {},
+    },
+  };
+  for (const tab of ["agents", "shells"] as const) {
+    const state = sources[tab];
+    bar.attach({
+      tab,
+      rows: () => state.rows,
+      subscribe(changed, failed) {
+        state.changed = changed;
+        state.failed = failed;
+        return () => {};
+      },
+    });
+  }
+  const start = () =>
+    bar.start({
+      notify: () => {},
+      setWidget: (key, content) =>
+        host.setWidget(
+          key,
+          typeof content === "function"
+            ? (_tui, theme) =>
+                content(
+                  {
+                    requestRender: () => {},
+                    terminal: { rows: terminalRows, columns: 100 },
+                  } as never,
+                  theme as never,
+                )
+            : content,
+        ),
+    });
+  start();
+  const set = (tab: "agents" | "shells", rows: BarRow[]) => {
+    sources[tab].rows = rows;
+    sources[tab].changed();
+  };
+  /** The labels of the highlighted rows, as the mounted bar draws them. */
+  const highlighted = () =>
+    (host.mounted(BAR)?.render(100) ?? [])
+      .filter((line) => line.startsWith(">"))
+      .map((line) => /"?([a-z]\d)"?/.exec(line)?.[1]);
+  return { bar, set, sources, highlighted, start, host };
+}
+
+const rowOf = (id: string, extra: Partial<BarRow> = {}): BarRow => ({
+  id,
+  mark: "running",
+  label: id,
+  background: false,
+  startedAt: 0,
+  ...extra,
+});
+
+test("↓ from no focus focuses the first row and ↑ the last, and both clamp at the ends", () => {
+  const { bar, set, highlighted } = standalone();
+  set("agents", [rowOf("a1"), rowOf("a2"), rowOf("a3")]);
+  bar.nextTab();
+  bar.nextTab();
+  expect(highlighted()).toEqual([]);
+  bar.move(1);
+  expect(highlighted()).toEqual(["a1"]);
+  bar.move(-1);
+  expect(highlighted()).toEqual(["a1"]);
+  bar.move(1);
+  bar.move(1);
+  bar.move(1);
+  expect(highlighted()).toEqual(["a3"]);
+  bar.close();
+  bar.nextTab();
+  bar.nextTab();
+  bar.move(-1);
+  expect(highlighted()).toEqual(["a3"]);
+});
+
+test("failed rows come first and can be focused", () => {
+  const { bar, set, sources, highlighted } = standalone();
+  set("agents", [rowOf("a1")]);
+  sources.agents.failed(rowOf("f1", { mark: "failed", why: "exit 1" }));
+  bar.nextTab();
+  bar.nextTab();
+  bar.move(1);
+  expect(highlighted()).toEqual(["f1"]);
+  bar.move(1);
+  expect(highlighted()).toEqual(["a1"]);
+});
+
+test("the focus follows its row when an earlier row ends, and falls to the row now in its place when its own row ends", () => {
+  const { bar, set, highlighted } = standalone();
+  set("agents", [rowOf("a1"), rowOf("a2"), rowOf("a3")]);
+  bar.nextTab();
+  bar.nextTab();
+  bar.move(1);
+  bar.move(1);
+  expect(highlighted()).toEqual(["a2"]);
+  set("agents", [rowOf("a2"), rowOf("a3")]);
+  expect(highlighted()).toEqual(["a2"]);
+  set("agents", [rowOf("a3")]);
+  expect(highlighted()).toEqual(["a3"]);
+  // the last row ending hands the focus to the one before it
+  set("agents", [rowOf("a3"), rowOf("a4"), rowOf("a5")]);
+  bar.move(1);
+  bar.move(1);
+  expect(highlighted()).toEqual(["a5"]);
+  set("agents", [rowOf("a3"), rowOf("a4")]);
+  expect(highlighted()).toEqual(["a4"]);
+  set("agents", []);
+  expect(highlighted()).toEqual([]);
+});
+
+test("each tab keeps its own focus, and closing or a new session forgets both", () => {
+  const { bar, set, highlighted, start } = standalone();
+  set("agents", [rowOf("a1"), rowOf("a2")]);
+  set("shells", [rowOf("s1"), rowOf("s2")]);
+  bar.nextTab();
+  bar.nextTab();
+  bar.move(1);
+  bar.move(1);
+  bar.nextTab();
+  bar.move(-1);
+  expect(highlighted()).toEqual(["s2"]);
+  bar.nextTab();
+  expect(highlighted()).toEqual(["a2"]);
+
+  bar.close();
+  bar.nextTab();
+  expect(highlighted()).toEqual([]);
+  bar.nextTab();
+  expect(highlighted()).toEqual([]);
+
+  bar.move(1);
+  bar.stop();
+  start();
+  bar.nextTab();
+  expect(highlighted()).toEqual([]);
+});
+
+test("move does nothing while the bar is closed or the terminal is too small to list the tab", () => {
+  const closed = standalone();
+  closed.set("agents", [rowOf("a1")]);
+  expect(closed.bar.listing()).toBe(false);
+  closed.bar.move(1);
+  closed.bar.nextTab();
+  closed.bar.nextTab();
+  expect(closed.bar.listing()).toBe(true);
+  expect(closed.highlighted()).toEqual([]);
+
+  const small = standalone(11);
+  small.set("agents", [rowOf("a1")]);
+  small.bar.nextTab();
+  small.bar.nextTab();
+  expect(small.bar.listing()).toBe(false);
+  small.bar.move(1);
+  expect(small.highlighted()).toEqual([]);
+});
+
+test("move reports no change on an empty tab and on the only row once it is focused, so the key stays the editor's", () => {
+  const { bar, set } = standalone();
+  bar.nextTab();
+  bar.nextTab();
+  expect(bar.move(1)).toBe(false);
+  set("agents", [rowOf("a1")]);
+  expect(bar.move(1)).toBe(true);
+  expect(bar.move(1)).toBe(false);
+  expect(bar.move(-1)).toBe(false);
 });

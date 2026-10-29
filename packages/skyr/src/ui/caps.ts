@@ -44,6 +44,8 @@ export interface Glyphs {
   readonly branch: { readonly mid: string; readonly last: string };
   /** Between the facts of a line, spaces included. */
   readonly sep: string;
+  /** A horizontal rule. */
+  readonly rule: string;
 }
 
 const UNICODE: Glyphs = {
@@ -62,6 +64,7 @@ const UNICODE: Glyphs = {
   rail: "│",
   branch: { mid: "├", last: "└" },
   sep: " · ",
+  rule: "─",
 };
 
 const ASCII: Glyphs = {
@@ -80,6 +83,7 @@ const ASCII: Glyphs = {
   rail: "|",
   branch: { mid: "|", last: "`" },
   sep: " - ",
+  rule: "-",
 };
 
 export const glyphsOf = (tier: Tier): Glyphs =>

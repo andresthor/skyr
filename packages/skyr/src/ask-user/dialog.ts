@@ -4,21 +4,21 @@
  * One question finishes on Enter; two to four get a tab each and a Submit tab to review them,
  * which submits whatever is answered, or declines when nothing is.
  */
-import type {
-  KeybindingsManager,
-  Theme,
-} from "@earendil-works/pi-coding-agent";
+import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   type Focusable,
   Input,
   Key,
   matchesKey,
-  truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { type Glyphs, glyphsOf } from "../ui/caps.js";
+import { fitToWidth } from "../ui/fit.js";
+import { guard } from "../ui/guard.js";
 import { keyName } from "../ui/hint.js";
+import { type Paint, styled, type Token } from "../ui/palette.js";
 import { sanitize } from "../ui/text.js";
 import {
   type Answer,
@@ -29,7 +29,7 @@ import {
 import type { AskQuestion } from "./index.js";
 
 interface Deps {
-  theme: Pick<Theme, "fg" | "bg" | "bold">;
+  paint: Paint;
   keys: Pick<KeybindingsManager, "matches" | "getKeys">;
   /**
    * `undefined` = declined with Esc or submitted with nothing answered; an `undefined` entry = a
@@ -39,6 +39,9 @@ interface Deps {
 }
 
 const PLACEHOLDER = "type an answer";
+
+const asError = (cause: unknown) =>
+  cause instanceof Error ? cause : new Error(String(cause));
 
 /** Each header padded so the text after it starts at one column, two past the widest. */
 function alignHeaders(headers: readonly string[]): string[] {
@@ -76,9 +79,9 @@ class Page {
   /** An answer has been accepted here at least once. */
   confirmed = false;
 
-  constructor(question: AskQuestion, theme: Deps["theme"]) {
+  constructor(question: AskQuestion, paint: Paint, glyphs: Glyphs) {
     this.text = sanitize(question.question);
-    this.header = shortHeader(question.header);
+    this.header = shortHeader(question.header, glyphs.ellipsis);
     this.multi = question.multiSelect === true;
     this.options = (question.options ?? []).map((o) => ({
       raw: o.label,
@@ -95,7 +98,7 @@ class Page {
     this.input = new Input({
       prompt: "",
       placeholder: PLACEHOLDER,
-      placeholderStyle: (t) => theme.fg("dim", t),
+      placeholderStyle: (t) => styled(paint, t, { fg: paint.theme.colors.dim }),
     });
   }
 
@@ -158,12 +161,28 @@ class AskDialog implements Component, Focusable {
   /** The page shown; `pages.length` is the Submit tab, which exists only with several pages. */
   private tab = 0;
   private finished = false;
+  private readonly glyphs: Glyphs;
+  readonly render: (width: number) => string[];
 
   constructor(
     questions: readonly AskQuestion[],
     private readonly deps: Deps,
   ) {
-    this.pages = questions.map((q) => new Page(q, deps.theme));
+    this.glyphs = glyphsOf(deps.paint.mode);
+    this.pages = questions.map((q) => new Page(q, deps.paint, this.glyphs));
+    // Deferred: Pi swaps the editor back on done, which must not happen mid-render
+    this.render = guard(
+      (width) =>
+        this.draw(width).map((line) =>
+          fitToWidth(line, width, this.glyphs.ellipsis),
+        ),
+      (cause) => queueMicrotask(() => this.finish(asError(cause))),
+    );
+  }
+
+  private ink(text: string, token: Token, bold = false): string {
+    const { paint } = this.deps;
+    return styled(paint, text, { fg: paint.theme.colors[token], bold });
   }
 
   private get tabbed(): boolean {
@@ -179,19 +198,7 @@ class AskDialog implements Component, Focusable {
     try {
       this.key(data);
     } catch (error: unknown) {
-      this.finish(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  render(width: number): string[] {
-    try {
-      return this.draw(width).map((line) => truncateToWidth(line, width));
-    } catch (error: unknown) {
-      // Deferred: Pi swaps the editor back on done, which must not happen mid-render
-      queueMicrotask(() =>
-        this.finish(error instanceof Error ? error : new Error(String(error))),
-      );
-      return [];
+      this.finish(asError(error));
     }
   }
 
@@ -255,8 +262,7 @@ class AskDialog implements Component, Focusable {
   }
 
   private draw(width: number): string[] {
-    const { theme } = this.deps;
-    const rule = theme.fg("accent", "─".repeat(width));
+    const rule = this.ink(this.glyphs.rule.repeat(width), "accent");
     const lines = [rule];
     if (this.tabbed) lines.push(this.chips(width), "");
     const page = this.page;
@@ -264,38 +270,46 @@ class AskDialog implements Component, Focusable {
     lines.push("");
     // Wrapped, not cut: a cut drops the end of the hint, where cancel is
     for (const line of wrapTextWithAnsi(this.hint(), Math.max(1, width - 1)))
-      lines.push(` ${theme.fg("muted", line)}`);
+      lines.push(` ${this.ink(line, "muted")}`);
     lines.push(rule);
     return lines;
   }
 
   private chips(width: number): string {
-    const { theme } = this.deps;
-    const active = (label: string) =>
-      theme.bg("selectedBg", theme.bold(theme.fg("text", ` ${label} `)));
+    const { paint } = this.deps;
+    const { colors } = paint.theme;
+    const { mark } = this.glyphs;
+    const active = (label: string) => {
+      if (paint.mode === "ascii") return `[${label}]`;
+      return styled(paint, ` ${label} `, {
+        bold: true,
+        ...(paint.mode === "color"
+          ? { fg: colors.text, bg: colors.selectedBg }
+          : { inverse: true }),
+      });
+    };
     const chips = this.pages.map((p, i) => {
       if (i === this.tab) return active(p.header);
       return p.answer()
-        ? ` ${theme.fg("accent", "✓ ")}${theme.fg("text", p.header)} `
-        : ` ${theme.fg("dim", p.header)} `;
+        ? ` ${this.ink(`${mark.done} `, "success")}${this.ink(p.header, "text")} `
+        : ` ${this.ink(p.header, "dim")} `;
     });
     const submit =
       this.tab === this.pages.length
         ? active("Submit")
-        : ` ${theme.fg("text", "Submit")} `;
+        : ` ${this.ink("Submit", "text")} `;
     const row = ` ${[...chips, submit].join(" ")}`;
     if (visibleWidth(row) <= width) return row;
     const page = this.page;
     return page
-      ? ` ${active(page.header)} ${theme.fg("muted", `(${this.tab + 1}/${this.pages.length})`)}`
+      ? ` ${active(page.header)} ${this.ink(`(${this.tab + 1}/${this.pages.length})`, "muted")}`
       : ` ${active("Submit")}`;
   }
 
   private question(page: Page, width: number): string[] {
-    const { theme } = this.deps;
     const wrap = (text: string, indent: number) =>
       wrapTextWithAnsi(text, Math.max(1, width - indent));
-    const marker = (on: boolean) => (on ? theme.fg("accent", " > ") : "   ");
+    const marker = (on: boolean) => (on ? this.ink(" > ", "accent") : "   ");
     const box = (i: number) =>
       page.multi
         ? page.ticked.has(i)
@@ -303,29 +317,29 @@ class AskDialog implements Component, Focusable {
           : "[ ] "
         : this.tabbed
           ? page.picked === i
-            ? "(•) "
+            ? `(${this.glyphs.mark.running}) `
             : "( ) "
           : "";
     const indent = " ".repeat(visibleWidth(marker(false) + box(0)) + 2);
 
     const lines: string[] = [];
     for (const line of wrap(page.text, 1))
-      lines.push(` ${theme.fg("text", line)}`);
+      lines.push(` ${this.ink(line, "text")}`);
     lines.push("");
     page.options.forEach((o, i) => {
       lines.push(
         marker(i === page.cursor) +
-          theme.fg("text", box(i) + o.label) +
-          (o.recommended ? ` ${theme.fg("success", "recommended")}` : ""),
+          this.ink(box(i) + o.label, "text") +
+          (o.recommended ? ` ${this.ink("recommended", "success")}` : ""),
       );
       if (o.description)
         for (const line of wrap(o.description, indent.length))
-          lines.push(indent + theme.fg("muted", line));
+          lines.push(indent + this.ink(line, "muted"));
     });
 
     const lead =
       marker(page.onInput) +
-      theme.fg("text", page.options.length ? "Other" : "Answer") +
+      this.ink(page.options.length ? "Other" : "Answer", "text") +
       "  ";
     for (const p of this.pages) p.input.focused = false;
     page.input.focused = this.focused && page.onInput;
@@ -333,41 +347,41 @@ class AskDialog implements Component, Focusable {
     const field = page.onInput
       ? (page.input.render(Math.max(1, width - visibleWidth(lead)))[0] ?? "")
       : typed
-        ? theme.fg("text", sanitize(typed))
-        : theme.fg("dim", PLACEHOLDER);
+        ? this.ink(sanitize(typed), "text")
+        : this.ink(PLACEHOLDER, "dim");
     lines.push(lead + field);
     return lines;
   }
 
   private review(): string[] {
-    const { theme } = this.deps;
     const headers = alignHeaders(this.pages.map((p) => p.header));
     return this.pages.map((p, i) => {
       const answer = p.answer();
-      return ` ${theme.fg("muted", headers[i] ?? "")}${
+      return ` ${this.ink(headers[i] ?? "", "muted")}${
         answer
-          ? theme.fg("text", sanitize(answerLine(answer)))
-          : theme.fg("warning", "not answered")
+          ? this.ink(sanitize(answerLine(answer)), "text")
+          : this.ink("not answered", "warning")
       }`;
     });
   }
 
   private hint(): string {
     const { keys } = this.deps;
+    const { sep } = this.glyphs;
     const key = (id: Parameters<typeof keyName>[1]) => keyName(keys, id);
     const cancel = `${key("tui.select.cancel")} cancel`;
     // Shift+Tab has no action id of its own, so the hint names it literally
     const tab = this.tabbed
-      ? `${key("tui.input.tab")}/shift+tab switch · `
+      ? `${key("tui.input.tab")}/shift+tab switch${sep}`
       : "";
     const page = this.page;
     if (page) {
       const space = page.multi
-        ? "space tick · "
+        ? `space tick${sep}`
         : this.tabbed && page.options.length
-          ? "space pick · "
+          ? `space pick${sep}`
           : "";
-      return `${key("tui.select.up")}/${key("tui.select.down")} move · ${space}${key("tui.select.confirm")} answer · ${tab}${cancel}`;
+      return `${key("tui.select.up")}/${key("tui.select.down")} move${sep}${space}${key("tui.select.confirm")} answer${sep}${tab}${cancel}`;
     }
     const answers = this.answers();
     const submit = answers.every((a) => a)
@@ -375,6 +389,6 @@ class AskDialog implements Component, Focusable {
       : answers.some((a) => a)
         ? "submit anyway"
         : "decline";
-    return `${key("tui.select.confirm")} ${submit} · ${tab}${cancel}`;
+    return `${key("tui.select.confirm")} ${submit}${sep}${tab}${cancel}`;
   }
 }

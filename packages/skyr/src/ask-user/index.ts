@@ -352,7 +352,11 @@ async function inDialog(
         signal?.addEventListener("abort", onAbort, { once: true });
         // The factory is the only place with the terminal
         tui.terminal.write("\x07");
-        return createAskDialog(questions, { theme, keys, done });
+        return createAskDialog(questions, {
+          paint: { theme, mode: tierOf(process.env) },
+          keys,
+          done,
+        });
       },
     );
   } catch (error: unknown) {

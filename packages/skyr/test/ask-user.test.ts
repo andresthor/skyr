@@ -452,11 +452,11 @@ test("the queue never wedges or overlaps: a waiter aborted behind an open dialog
   await after;
 
   const throwing = dialogs({
-    theme: {
-      fg: () => {
+    theme: Object.assign(piTheme(), {
+      style: () => {
         throw new Error("boom");
       },
-    } as unknown as Theme,
+    }),
   });
   const drawn = execute(tool, throwing.ui);
   (await throwing.nextOpen()).component.render(40);

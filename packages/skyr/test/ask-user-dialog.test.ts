@@ -1,16 +1,11 @@
 /** The ask_user dialog on its own: keys in, lines and `done` out. */
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test, vi } from "vitest";
 import { createAskDialog } from "../src/ask-user/dialog.js";
 import type { AskQuestion } from "../src/ask-user/index.js";
-import { keybindings } from "./voice.js";
-
-const plain = {
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as unknown as Theme;
+import type { Tier } from "../src/ui/caps.js";
+import type { ThemeLike } from "../src/ui/palette.js";
+import { keybindings, testPaint, testTheme } from "./voice.js";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -31,11 +26,15 @@ const storage: AskQuestion = {
 
 function dialog(
   questions: AskQuestion[] = [storage],
-  o: { keys?: ReturnType<typeof keybindings>; theme?: Theme } = {},
+  o: {
+    keys?: ReturnType<typeof keybindings>;
+    mode?: Tier;
+    theme?: ThemeLike;
+  } = {},
 ) {
   const done = vi.fn();
   const component = createAskDialog(questions, {
-    theme: o.theme ?? plain,
+    paint: testPaint(o.mode, o.theme),
     keys: o.keys ?? keybindings(),
     done,
   });
@@ -306,14 +305,9 @@ test("on a narrow pane the hint wraps instead of losing its end: every word stay
 });
 
 test("a cut header keeps the style it is drawn in: no reset inside a chip or the Submit tab's header column", () => {
-  // Real SGR pairs, so a reset that ends a background or colour early shows in the line
-  const sgr = {
-    fg: (_color: string, text: string) => `\x1b[36m${text}\x1b[39m`,
-    bg: (_color: string, text: string) => `\x1b[44m${text}\x1b[49m`,
-    bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
-  } as unknown as Theme;
+  // Real SGR, so a reset that ends a background or colour early shows in the line
   const long = { ...scope, header: "Infrastructure choice" };
-  const d = dialog([long, storage], { theme: sgr });
+  const d = dialog([long, storage]);
   const chips = d.component.render(80)[1] ?? "";
   expect(stripTerminalSequences(chips)).toContain(" Infrastruct… ");
   expect(chips).not.toContain("\x1b[0m");
@@ -324,11 +318,12 @@ test("a cut header keeps the style it is drawn in: no reset inside a chip or the
 });
 
 test("a throw while drawing or handling a key closes the dialog with that error instead of reaching the TUI's stack", async () => {
-  const throwing = {
-    fg: () => {
+  const throwing: ThemeLike = {
+    ...testTheme(),
+    style: () => {
       throw new Error("boom");
     },
-  } as unknown as Theme;
+  };
   const drawn = dialog([storage], { theme: throwing });
   expect(drawn.component.render(40)).toEqual([]);
   expect(drawn.done).not.toHaveBeenCalled();
@@ -396,4 +391,51 @@ test("every line fits the width, from 1 to 80 columns, with wide characters, emo
   expect(narrow.text(24)[1]).toBe("  Scope  (1/4)");
   narrow.press(BACKTAB);
   expect(narrow.text(24)[1]).toBe("  Submit ");
+});
+
+const ESC_CODE = "\x1b";
+const sgrCodes = (raw: string) =>
+  [...raw.matchAll(new RegExp(`${ESC_CODE}\\[([0-9;:]*)m`, "g"))].flatMap((m) =>
+    (m[1] ?? "").split(/[;:]/),
+  );
+
+test("under TERM=dumb the dialog draws no escape and only ASCII", () => {
+  const d = dialog([scope, { ...storage, header: "Infrastructure choice" }], {
+    mode: "ascii",
+  });
+  for (const keys of [[], [ENTER], [ENTER]]) {
+    d.press(...keys);
+    const raw = d.component.render(60).join("\n");
+    expect(raw).not.toContain(ESC_CODE);
+    expect(raw).toMatch(/^[\x20-\x7e\n]*$/);
+  }
+  expect(d.component.render(60)[0]).toBe("-".repeat(60));
+});
+
+test("under NO_COLOR the dialog keeps bold and draws no colour or background", () => {
+  const d = dialog([scope, storage], { mode: "mono" });
+  for (const keys of [[], [ENTER]]) {
+    d.press(...keys);
+    const codes = sgrCodes(d.component.render(60).join("\n"));
+    expect(codes).toContain("1");
+    // bold, inverse and their ends; any 3x, 4x, 9x or 10x code is a colour or a background
+    for (const code of codes)
+      expect(["0", "1", "7", "22", "27"]).toContain(code);
+  }
+});
+
+test("a cut label ends in the tier's ellipsis", () => {
+  const long: AskQuestion = {
+    ...storage,
+    options: [{ label: "x".repeat(100) }, { label: "y" }],
+  };
+  expect(dialog([long]).text(30).join("\n")).toContain(`${"x".repeat(24)}…`);
+  const ascii = dialog([long], { mode: "ascii" }).text(30).join("\n");
+  expect(ascii).toContain(`${"x".repeat(22)}...`);
+  expect(ascii).not.toContain("…");
+});
+
+test("the recommended mark is a word, not colour alone", () => {
+  const rec = dialog([features], { mode: "mono" });
+  expect(rec.text()).toContain(" > [ ] Billing recommended");
 });

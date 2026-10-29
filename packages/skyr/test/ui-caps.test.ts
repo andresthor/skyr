@@ -45,6 +45,7 @@ test("the glyph table: unicode in colour and mono, ASCII under TERM=dumb", () =>
     rail: "│",
     branch: { mid: "├", last: "└" },
     sep: " · ",
+    rule: "─",
   };
   expect(glyphsOf("color")).toEqual(unicode);
   expect(glyphsOf("mono")).toEqual(unicode);
@@ -64,6 +65,7 @@ test("the glyph table: unicode in colour and mono, ASCII under TERM=dumb", () =>
     rail: "|",
     branch: { mid: "|", last: "`" },
     sep: " - ",
+    rule: "-",
   });
 });
 

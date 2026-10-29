@@ -230,13 +230,11 @@ test("a ui section with a non-boolean footer or an unknown key is reported once 
   });
   expect(sets()).toHaveLength(1);
   expect(notices()).toHaveLength(1);
-  expect(notices()[0]?.args).toEqual([
-    [
-      'skyr.json: ui."colour" is not a setting; ignored (settings: footer, builtinRows)',
-      "skyr.json: ui.footer must be true or false; using true",
-    ].join("\n"),
-    "warning",
-  ]);
+  // The problem strings themselves are pinned in ui-config.test.ts; through the session the
+  // notice only has to name the setting and the unknown key it is about
+  expect(notices()[0]?.args[0]).toContain("ui.footer");
+  expect(notices()[0]?.args[0]).toContain("colour");
+  expect(notices()[0]?.args[1]).toBe("warning");
 });
 
 test("a ui section that is not an object is reported and the footer stays on", async () => {

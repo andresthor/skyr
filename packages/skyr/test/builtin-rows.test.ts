@@ -740,6 +740,7 @@ describe("read, write and edit rows", () => {
     const path = fileWith("one\n");
     const host = await builtinHost("edit", editArgs(path), await registered());
     host.argsComplete();
+    // The failing preview emits nothing observable (only invalidate, which the host's no-op ui drops), so 100 ms is the bound.
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(plain(host.lines(100))).toHaveLength(2);
   });

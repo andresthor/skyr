@@ -70,3 +70,17 @@ test("nothing under src/ imports a pi-coding-agent value statically", () => {
   }
   expect(offenders).toEqual([]);
 });
+
+test("nothing outside src/ui calls theme.fg, bg, bold, italic, underline, inverse, strikethrough or style", () => {
+  const UI = join(KIT, "ui") + sep;
+  const offenders: string[] = [];
+  for (const f of readdirSync(KIT, { recursive: true }) as string[]) {
+    if (!f.endsWith(".ts") || join(KIT, f).startsWith(UI)) continue;
+    const src = readFileSync(join(KIT, f), "utf8");
+    for (const [call] of src.matchAll(
+      /\btheme\.(?:fg|bg|bold|italic|underline|inverse|strikethrough|style)\(/g,
+    ))
+      offenders.push(`${f} → ${call}`);
+  }
+  expect(offenders).toEqual([]);
+});

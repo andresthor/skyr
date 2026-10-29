@@ -166,6 +166,16 @@ test("an unknown context reads ? and an empty meter", () => {
   expect(head(unknown)).toContain("? ▫▫▫▫▫▫ ▫▫▫▫ ?/1M");
 });
 
+test("a context window of 0 keeps its percent and loses the meter and the ratio", () => {
+  const zero = {
+    ...facts,
+    context: { tokens: 412_000, percent: 41.2, window: 0 },
+  };
+  expect(head(zero)).toContain("41%");
+  expect(head(zero)).not.toContain("▪");
+  expect(head(zero)).not.toContain("/");
+});
+
 test("the clock goes first, then the profile, both before the model prefix", () => {
   const narrowest = (needle: string) =>
     Math.min(...WIDTHS_SWEEP.filter((w) => head(facts, w).includes(needle)));

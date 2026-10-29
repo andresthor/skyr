@@ -208,7 +208,9 @@ export function footerLines(
         ? "?"
         : `${Math.round(percent)}%${level === 2 && paint.mode !== "color" ? "!" : ""}`;
     const parts = [gauge(label, tone)];
-    if (show.meter) {
+    // Pi's getContextUsage never returns a zero window (pinned agent-session.js); a later
+    // runtime that does gets no meter or ratio rather than a division by zero
+    if (show.meter && usage.window > 0) {
       const { fine, coarse } = meterCells(usage.tokens ?? 0, usage.window);
       const bar = ([on, of]: [number, number]) =>
         gauge(glyphs.meter.on.repeat(on), tone) +
@@ -217,7 +219,7 @@ export function footerLines(
         [bar(fine), ...(coarse && show.coarse ? [bar(coarse)] : [])].join(" "),
       );
     }
-    if (show.tokens)
+    if (show.tokens && usage.window > 0)
       parts.push(
         ink(
           `${usage.tokens === null ? "?" : formatCount(usage.tokens)}/${formatCount(usage.window)}`,

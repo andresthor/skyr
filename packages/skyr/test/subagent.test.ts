@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   fauxAssistantMessage,
@@ -14,7 +14,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { registerSkyr } from "../src/index.js";
 import { delivery, type LaneOutcome } from "../src/subagent/result.js";
 import {
@@ -1104,8 +1104,19 @@ test("Esc on a single call keeps its details and names the stop", async () => {
     { mode: 0o755 },
   );
 
+  // The mark's creation arrives as a directory-watch event, not an `existsSync` poll, so
+  // load cannot make the wait miss its window; the watch is up before the run starts.
+  const hookRan = new Promise<void>((resolve) => {
+    const stop = watch(marks, (_event, file) => {
+      if (file === "entered") {
+        stop.close();
+        resolve();
+      }
+    });
+    onTestFinished(() => stop.close());
+  });
   const run = parent.session.prompt("go");
-  await vi.waitFor(() => expect(existsSync(entered)).toBe(true));
+  await hookRan;
   await parent.session.abort();
   await run;
   writeFileSync(gate, "");

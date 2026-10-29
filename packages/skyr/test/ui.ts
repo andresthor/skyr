@@ -7,12 +7,15 @@ import {
   type ExtensionUIContext,
   initTheme,
   type MessageRenderer,
+  type Theme,
   ToolExecutionComponent,
   type ToolRenderers,
   type WorkingIndicatorOptions,
 } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  parseColor,
+  styleText,
   type Terminal,
   TuiMainScreen,
 } from "@earendil-works/pi-tui";
@@ -221,6 +224,38 @@ export function htmlRender(
       result.isError ?? false,
     ),
   };
+}
+
+/** The colour each thinking level's rule is drawn in by `piTheme`. */
+const THINKING_COLOURS: Readonly<Record<string, string>> & { off: string } = {
+  off: "#505050",
+  minimal: "#6e6e6e",
+  low: "#5f87af",
+  medium: "#81a2be",
+  high: "#b294bb",
+  xhigh: "#d183e8",
+};
+
+/**
+ * The Pi `Theme` a `custom()` factory is handed, as far as skyr reads it: `plainTheme`'s colours
+ * and a plain `style`, the token-name `fg`/`bg`/`bold` drawing text unchanged, and a
+ * `getThinkingBorderColor` that colours by level as Pi's does.
+ */
+export function piTheme(): Theme {
+  const theme = {
+    ...plainTheme,
+    fg: (_token: string, text: string) => text,
+    bg: (_token: string, text: string) => text,
+    bold: (text: string) => text,
+    getThinkingBorderColor: (level: string) => (text: string) =>
+      styleText(
+        text,
+        { fg: parseColor(THINKING_COLOURS[level] ?? THINKING_COLOURS.off) },
+        "truecolor",
+      ),
+  };
+  // Pi's Theme is a class with private state; the dialog reads only these members
+  return theme as unknown as Theme;
 }
 
 const ESC = "\x1b";

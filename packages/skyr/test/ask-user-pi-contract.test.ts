@@ -6,7 +6,7 @@ import {
   defineTool,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { Editor } from "@earendil-works/pi-tui";
+import { Editor, isKeyRelease, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { expect, test } from "vitest";
 import { parentSession, sections, toolsSeen } from "./session.js";
@@ -143,4 +143,47 @@ test("a reload drops an extension's bus subscription, while a subscription made 
   bus.emit("ping", undefined);
   // the factory re-ran on reload, so the new load's listener answers once, the old one never
   expect(heard.sort()).toEqual(["extension", "host"]);
+});
+
+test("getThinkingLevel throws while an extension loads and answers inside a tool's execute", async () => {
+  const seen: string[] = [];
+  const probe = (pi: ExtensionAPI) => {
+    try {
+      seen.push(`load: ${pi.getThinkingLevel()}`);
+    } catch {
+      seen.push("load: threw");
+    }
+    pi.registerTool({
+      name: "level",
+      label: "level",
+      description: "Reports the thinking level.",
+      parameters: Type.Object({}),
+      async execute() {
+        seen.push(`execute: ${pi.getThinkingLevel()}`);
+        return ok("seen");
+      },
+    });
+  };
+  const { session } = await parentSession({
+    respond: (context) =>
+      context.messages.at(-1)?.role === "toolResult"
+        ? fauxAssistantMessage("done")
+        : fauxAssistantMessage([fauxToolCall("level", {}, { id: "l" })]),
+    extensions: [probe],
+  });
+  await session.prompt("go");
+  expect(seen[0]).toBe("load: threw");
+  expect(seen.at(-1)).toMatch(/^execute: (off|minimal|low|medium|high|xhigh)$/);
+});
+
+test("matchesKey reads a digit from plain, CSI-u and keypad input, and not from a shifted one", () => {
+  for (const data of ["1", "\x1b[49u", "\x1b[57400u"])
+    expect(matchesKey(data, "1")).toBe(true);
+  expect(matchesKey("\x1b[49;2u", "1")).toBe(false);
+  expect(matchesKey("2", "1")).toBe(false);
+});
+
+test("a key release is told apart from a press by its CSI-u event type", () => {
+  expect(isKeyRelease("\x1b[49;1:3u")).toBe(true);
+  expect(isKeyRelease("\x1b[49u")).toBe(false);
 });

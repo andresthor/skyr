@@ -41,14 +41,8 @@ import {
   textOf,
   toolsSeen,
 } from "./session.js";
-import { toolRowHost } from "./ui.js";
+import { piTheme, toolRowHost } from "./ui.js";
 import { keybindings } from "./voice.js";
-
-const plain = {
-  fg: (_color: string, text: string) => text,
-  bg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as unknown as Theme;
 
 const DOWN = "\x1b[B";
 const ENTER = "\r";
@@ -148,7 +142,12 @@ function dialogs(
         };
         const write = vi.fn();
         const tui = { terminal: { rows: 40, write }, requestRender() {} };
-        const component = factory(tui, o.theme ?? plain, keybindings(), done);
+        const component = factory(
+          tui,
+          o.theme ?? piTheme(),
+          keybindings(),
+          done,
+        );
         if ("focused" in component) component.focused = true;
         mountedNow++;
         state.maxMounted = Math.max(state.maxMounted, mountedNow);
@@ -188,6 +187,7 @@ type AskTool = ToolDefinition & {
 function registered(
   mode: "tui" | "print" | "rpc" | null = "tui",
   events: ExtensionAPI["events"] = createEventBus(),
+  thinking: () => ReturnType<ExtensionAPI["getThinkingLevel"]> = () => "high",
 ): AskTool {
   let tool: AskTool | undefined;
   const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
@@ -198,6 +198,7 @@ function registered(
     on: (event: string, fn: (event: unknown, ctx: unknown) => void) =>
       handlers.set(event, fn),
     events,
+    getThinkingLevel: thinking,
   } as unknown as ExtensionAPI);
   // null: Pi builds the first loadout before session_start has run
   if (mode)

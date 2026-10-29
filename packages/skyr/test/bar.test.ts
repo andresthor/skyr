@@ -177,11 +177,20 @@ test("subagents and shells share one bar: a shell under running subagents adds a
     },
   });
 
+  // The bash call moved its job onto the bar within the call that has now ended, so a frame
+  // holding both groups was pushed before its end fired.
+  const bashEnded = new Promise<void>((resolve) => {
+    const stop = parent.session.subscribe((event) => {
+      if (event.type === "tool_execution_end" && event.toolName === "bash") {
+        stop();
+        resolve();
+      }
+    });
+  });
   const run = parent.session.prompt("go");
   await held.entered;
-  await vi.waitFor(() =>
-    expect(parent.widgets.at(-1)?.[0]).toMatch(/^1 agent • {3}1 shell • /),
-  );
+  await bashEnded;
+  expect(parent.widgets.at(-1)?.[0]).toMatch(/^1 agent • {3}1 shell • /);
   expect(parent.widgetSets).toEqual([BAR]);
 
   await parent.session.prompt("/shells stop all");
@@ -206,7 +215,8 @@ test("a reload with a child running leaves one bar, set once by the new session,
   expect(parent.widgetSets).toEqual([BAR, BAR]);
   expect(parent.mounted(BAR)).toBeDefined();
   expect(parent.widgets.at(-1)).toEqual([]);
-  await vi.waitFor(() => expect(vi.getTimerCount()).toBe(intervals));
+  // Reload awaits the old session's shutdown, which stopped the clock before this point.
+  expect(vi.getTimerCount()).toBe(intervals);
 });
 
 test("the pulse never crashes Pi's renderer at 20, 40 and 86 columns", async () => {
@@ -263,7 +273,9 @@ test("a render that throws draws nothing and tells the user once", async () => {
   const bar = host.bar();
   expect(bar?.render(100)).toEqual([]);
   expect(bar?.render(100)).toEqual([]);
-  await vi.waitFor(() => expect(host.parent.notices).toHaveLength(1));
+  // The failed render's report is queued as a microtask: one flush delivers the notice.
+  await Promise.resolve();
+  expect(host.parent.notices).toHaveLength(1);
   expect(host.parent.notices[0]).toBe(
     "skyr: the bar stopped drawing after an error (theme gone); /reload brings it back",
   );
@@ -282,9 +294,8 @@ test("a host whose repaint throws costs the store change nothing", async () => {
     {},
   );
 
-  await vi.waitFor(() =>
-    expect(host.parent.notices.at(-1)).toContain("(tui gone)"),
-  );
+  // The child's start already tripped the bar: the throwing repaint is in the notices.
+  expect(host.parent.notices.at(-1)).toContain("(tui gone)");
   // The child's end is a store change too; it must still complete the call
   await host.finish();
   expect(
@@ -396,6 +407,24 @@ const explodingChild = () =>
     errorMessage: "provider exploded",
   });
 
+/**
+ * Resolves once the parent's settled run is handed its next turn: the turn a delivered failure
+ * starts. Everything its failure changed on the bar — the frames and the unseen lead — is in
+ * place by then.
+ */
+function delivered(parent: Parent): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const stop = parent.session.subscribe((event) => {
+      if (event.type === "agent_settled") settled = true;
+      else if (settled && event.type === "turn_start") {
+        stop();
+        resolve();
+      }
+    });
+  });
+}
+
 test("opening a tab marks its failures seen: the pulse stops leading with them once the bar closes", async () => {
   const parent = await parentSession({
     mode: "tui",
@@ -404,13 +433,11 @@ test("opening a tab marks its failures seen: the pulse stops leading with them o
     ),
   });
 
+  const failureTurn = delivered(parent);
   await parent.session.prompt("go");
-  await vi.waitFor(
-    () =>
-      expect(parent.widgets.at(-1)?.[0]).toMatch(/^× "run boom" · .*unseen/),
-    { timeout: 15_000 },
-  );
+  await failureTurn;
   await parent.session.waitForIdle();
+  expect(parent.widgets.at(-1)?.[0]).toMatch(/^× "run boom" · .*unseen/);
 
   press(parent, "alt+a");
   const open = parent.mounted(BAR)?.render(100) ?? [];
@@ -485,12 +512,11 @@ test("a session start resets open, tab and the failures it was holding", async (
     ),
   });
   const bar = asciiBar(parent);
+  const failureTurn = delivered(parent);
   await parent.session.prompt("go");
-  await vi.waitFor(
-    () => expect(parent.widgets.at(-1)?.[0]).toMatch(/^x "run boom"/),
-    { timeout: 15_000 },
-  );
+  await failureTurn;
   await parent.session.waitForIdle();
+  expect(parent.widgets.at(-1)?.[0]).toMatch(/^x "run boom"/);
   press(parent, "alt+s");
   expect(bar().tab).toBe("SHELLS");
 
@@ -579,17 +605,15 @@ test("a failure that lands while its tab is open is already seen", async () => {
       () => fauxAssistantMessage([call({ prompt: "boom", background: true })]),
     ),
   });
+  const failureTurn = delivered(parent);
   await parent.session.prompt("go");
   await gate.entered;
   press(parent, "alt+a");
 
   gate.release();
-  await vi.waitFor(
-    () =>
-      expect(parent.mounted(BAR)?.render(100)[1]).toMatch(/provider exploded/),
-    { timeout: 15_000 },
-  );
+  await failureTurn;
   await parent.session.waitForIdle();
+  expect(parent.mounted(BAR)?.render(100)[1]).toMatch(/provider exploded/);
   press(parent, "alt+a");
   expect(parent.mounted(BAR)?.render(100)).toEqual([]);
 });
@@ -633,11 +657,11 @@ test("a tick whose repaint throws stops the bar and says so once", async () => {
 
   failing = true;
   vi.advanceTimersByTime(1_000);
-  await vi.waitFor(() =>
-    expect(host.parent.notices).toEqual([
-      "skyr: the bar stopped drawing after an error (tui gone); /reload brings it back",
-    ]),
-  );
+  // The tick's report is queued as a microtask after the throw.
+  await Promise.resolve();
+  expect(host.parent.notices).toEqual([
+    "skyr: the bar stopped drawing after an error (tui gone); /reload brings it back",
+  ]);
   expect(vi.getTimerCount()).toBe(baseline);
   // A running child would draw a pulse; a bar that tripped draws nothing
   expect(host.bar()?.render(100)).toEqual([]);
@@ -722,14 +746,11 @@ async function failingOn(
       }) as never,
     },
   });
+  const failureTurn = delivered(parent);
   await parent.session.prompt("go");
-  await vi.waitFor(
-    () => expect(bar?.render(100)[0]).toMatch(/^ ?× "run boom"/),
-    {
-      timeout: 15_000,
-    },
-  );
+  await failureTurn;
   await parent.session.waitForIdle();
+  expect(bar?.render(100)[0]).toMatch(/^ ?× "run boom"/);
   return { parent, bar: () => bar?.render(100) ?? [] };
 }
 

@@ -8,6 +8,7 @@ import type {
   CustomEditor,
   ExtensionContext,
   ExtensionUIContext,
+  SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { loadPi } from "../pi.js";
 import { type Tier, tierOf } from "../ui/caps.js";
@@ -21,11 +22,35 @@ export interface EditorHost {
   /** Registers how a feature extends the editor class; called once at registration. The class it returns sits under the working line. */
   extend(extension: (Base: EditorClass, paint: Paint) => EditorClass): void;
   /** Installs the editor for a terminal session, once; leaves the slot alone when another extension holds it. */
-  mount(ctx: Pick<ExtensionContext, "ui">): Promise<void>;
+  mount(
+    ctx: Pick<ExtensionContext, "ui" | "sessionManager">,
+    reason: SessionStartEvent["reason"],
+  ): Promise<void>;
   /** Whether Pi still has the host's own factory installed. */
   owns(ui: { getEditorComponent(): unknown }): boolean;
   /** A session ended: a mount still waiting for Pi's module installs nothing. */
   stop(): void;
+}
+
+/** The session's user prompts, oldest first, as Pi reads them back into an editor's history. */
+function promptsOf(
+  sessionManager: Pick<
+    ExtensionContext["sessionManager"],
+    "buildContextEntries"
+  >,
+): string[] {
+  const prompts: string[] = [];
+  for (const entry of sessionManager.buildContextEntries()) {
+    if (entry.type !== "message" || entry.message.role !== "user") continue;
+    const { content } = entry.message;
+    // Entries are read unvalidated: old or hand-edited files hold user messages without content, which Pi reads as empty
+    if (typeof content === "string") prompts.push(content);
+    else if (Array.isArray(content))
+      prompts.push(
+        content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+      );
+  }
+  return prompts;
 }
 
 export function createEditorHost(deps: {
@@ -42,12 +67,14 @@ export function createEditorHost(deps: {
     extend(next) {
       extension = next;
     },
-    async mount(ctx) {
+    async mount(ctx, reason) {
       if (!extension) return;
       const mine = ++generation;
       const installed = ctx.ui.getEditorComponent();
       // A foreign editor wins; Pi's own loader then shows
       if (installed && installed !== factory) return;
+      // At startup Pi fills the editor after the bind; otherwise it filled the editor this one replaces
+      let unfilled = reason === "startup";
       const { CustomEditor } = await loadPi();
       if (mine !== generation) return;
       // Pi's theme handle is one live proxy, so /theme reaches the editor
@@ -57,9 +84,18 @@ export function createEditorHost(deps: {
         working: deps.working,
         notify: (message, type) => ctx.ui.notify(message, type),
       });
-      factory = (tui, theme, keys) =>
+      factory = (tui, theme, keys) => {
         // Pi does not copy this constructor-only flag; without it Pi draws its loader in a row of its own
-        new Editor(tui, theme, keys, { embedWorkingStatus: true });
+        const editor = new Editor(tui, theme, keys, {
+          embedWorkingStatus: true,
+        });
+        // Read per build: Pi builds again after prompts the first build never saw
+        if (!unfilled)
+          for (const prompt of promptsOf(ctx.sessionManager))
+            editor.addToHistory(prompt);
+        unfilled = false;
+        return editor;
+      };
       ctx.ui.setEditorComponent(factory);
     },
     owns: (ui) => factory !== undefined && ui.getEditorComponent() === factory,

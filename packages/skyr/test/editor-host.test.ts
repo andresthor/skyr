@@ -19,9 +19,28 @@ type Ctx = ReturnType<typeof voiceCtx>;
 
 const newHost = () =>
   createEditorHost({ working: createWorking(), mode: "color" });
+type Entry = { type: string; message?: { role: string; content?: unknown } };
+
+/** A message entry as a session file holds it. */
+const said = (role: string, content: unknown): Entry => ({
+  type: "message",
+  message: { role, content },
+});
+
 /** The host's mount, handed the narrow context the tests build. */
-const mount = (host: ReturnType<typeof newHost>, ctx: Ctx) =>
-  host.mount(ctx as never);
+const mount = (
+  host: ReturnType<typeof newHost>,
+  ctx: Ctx,
+  reason: "startup" | "reload" | "new" | "resume" | "fork" = "startup",
+  entries: Entry[] = [],
+) =>
+  host.mount(
+    {
+      ui: ctx.ui,
+      sessionManager: { buildContextEntries: () => entries },
+    } as never,
+    reason,
+  );
 
 const workingIndicator = () =>
   realIndicator("working", "Working", {
@@ -100,4 +119,80 @@ test("a mount still waiting for Pi's module when the session ends installs nothi
   await pending;
   expect(ctx.ui.setEditorComponent).not.toHaveBeenCalled();
   expect(host.owns(ctx.ui)).toBe(false);
+});
+
+/** Presses ↑ in the mounted editor and reads what it brought back. */
+async function historyAfter(
+  reason: Parameters<typeof mount>[2],
+  entries: Entry[],
+  presses = 1,
+) {
+  const host = newHost();
+  host.extend((Base) => Base);
+  const ctx = voiceCtx();
+  await mount(host, ctx, reason, entries);
+  const ed = mountedEditor(ctx.ui);
+  const seen: string[] = [];
+  for (let i = 0; i < presses; i++) {
+    ed.handleInput("\x1b[A");
+    seen.push(ed.getText());
+  }
+  return seen;
+}
+
+test("after a reload, resume or fork, ↑ brings back the session's latest prompt first and the earlier ones in order", async () => {
+  const entries = [
+    said("user", "first"),
+    said("assistant", [{ type: "text", text: "ok" }]),
+    said("user", [
+      { type: "text", text: "sec" },
+      { type: "text", text: "ond" },
+    ]),
+    said("user", "third"),
+  ];
+  for (const reason of ["reload", "resume", "fork", "new"] as const)
+    expect(await historyAfter(reason, entries, 3)).toEqual([
+      "third",
+      "second",
+      "first",
+    ]);
+});
+
+test("at startup the editor starts with no history, because Pi fills it after the bind", async () => {
+  expect(await historyAfter("startup", [said("user", "earlier")])).toEqual([
+    "",
+  ]);
+});
+
+test("a rebuild of the factory carries the prompts sent since the last build, and a startup mount's first build starts bare", async () => {
+  const host = newHost();
+  host.extend((Base) => Base);
+  const ctx = voiceCtx();
+  const entries: Entry[] = [said("user", "before")];
+  await mount(host, ctx, "startup", entries);
+  const last = () => {
+    const ed = mountedEditor(ctx.ui);
+    ed.handleInput("\x1b[A");
+    return ed.getText();
+  };
+  expect(last()).toBe("");
+  entries.push(said("user", "after"));
+  expect(last()).toBe("after");
+});
+
+test("only the user's text counts: assistant messages, tool results and image-only messages add nothing", async () => {
+  const entries = [
+    said("user", "kept"),
+    said("assistant", "no"),
+    said("toolResult", [{ type: "text", text: "no" }]),
+    said("user", [{ type: "image", data: "", mimeType: "image/png" }]),
+    { type: "custom", message: undefined },
+  ];
+  expect(await historyAfter("reload", entries, 2)).toEqual(["kept", "kept"]);
+});
+
+test("an old entry with null content does not throw", async () => {
+  expect(
+    await historyAfter("reload", [said("user", "kept"), said("user", null)]),
+  ).toEqual(["kept"]);
 });

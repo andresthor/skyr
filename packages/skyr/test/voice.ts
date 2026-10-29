@@ -371,6 +371,9 @@ function fakePi(): { pi: ExtensionAPI; captured: Captured } {
   return { pi: pi as unknown as ExtensionAPI, captured };
 }
 
+/** A session with no messages: the host replays nothing into the editor's history. */
+const noEntries = { buildContextEntries: () => [] };
+
 /**
  * Voice registered through `wireVoice`, the entry that takes the seams replacing Corti and the
  * microphone. `signIns` lists the token requests voice made; each is answered 503, so no token
@@ -390,7 +393,11 @@ export function registeredVoice(
   // Pi runs the chrome's mount and then voice's handler, each awaited; one fake handler composes them
   const voiceStart = captured.handlers.get("session_start");
   captured.handlers.set("session_start", async (e, ctx) => {
-    if (ctx.mode === "tui" && ctx.hasUI) await host.mount(ctx as never);
+    if (ctx.mode === "tui" && ctx.hasUI)
+      await host.mount(
+        { ui: ctx.ui, sessionManager: noEntries } as never,
+        (e as { reason?: "startup" } | null)?.reason ?? "startup",
+      );
     await voiceStart?.(e, ctx);
   });
   return { ...captured, signIns };

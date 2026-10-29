@@ -50,12 +50,11 @@ export function registerChrome(pi: ExtensionAPI): Chrome {
     }
   });
   // Its own handler: a throw in one mount cannot cost the other their start
-  pi.on("session_start", async (_event, ctx) => {
-    if (canDraw(ctx)) await editor.mount(ctx);
+  pi.on("session_start", async (event, ctx) => {
+    if (canDraw(ctx)) await editor.mount(ctx, event.reason);
   });
-  // `message_end` fires before its message is saved, so it asks for a refresh a moment later
   pi.on("message_end", (_event, ctx) => footer.refreshSoon(ctx));
-  // The rest fire after the entries they change are appended
+  // Unlike message_end, these fire after the entries they change are appended
   pi.on("session_info_changed", (_event, ctx) => footer.refresh(ctx));
   pi.on("turn_end", (_event, ctx) => footer.refresh(ctx));
   pi.on("tool_execution_start", (_event, ctx) => footer.refresh(ctx));

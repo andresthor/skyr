@@ -332,7 +332,9 @@ leaves Pi's footer, from the next session.
 Pi's seven built-in tools, `read`, `write`, `edit`, `bash`, `grep`, `find` and `ls`, draw records in
 the transcript: `✓ grep "pattern" src` with the count of matches and files (or lines, or entries)
 and the time. A failure shows its reason and up to three lines of the tool's message; for `bash`,
-the last three lines of its output (and the path of its full log, when Pi kept one) and `exit 2`. `ctrl+o` shows the listing, the file or the
+the last three lines of its output (and the path of its full log, when Pi kept one) and `exit 2`.
+A successful `bash` row keeps the last three lines of its output, so the tail it showed while
+running stays when the call settles. `ctrl+o` shows the listing, the file or the
 output, up to 400 lines and a count of the rest. A running `bash` row shows the last three lines of
 its output so far and no clock: the working line and the bar carry the time. An `edit` shows its
 diff under the record: once its arguments are complete, the diff Pi computes from the file while

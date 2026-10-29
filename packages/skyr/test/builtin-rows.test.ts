@@ -351,7 +351,7 @@ describe("bash rows", () => {
   const row = async (args: Record<string, unknown>) =>
     builtinHost("bash", args, await registered());
 
-  test("a running row shows the last three lines of the output so far, and starts no interval, then a final one leaves none", async () => {
+  test("a running row shows the last three lines of the output so far, and starts no interval, then a final one keeps them", async () => {
     vi.useFakeTimers();
     onTestFinished(() => {
       vi.useRealTimers();
@@ -367,9 +367,26 @@ describe("bash rows", () => {
       "   │ five",
     ]);
     expect(vi.getTimerCount()).toBe(0);
-    host.update({ content: text("done\n"), durationMs: 1200 });
-    expect(plain(host.lines(80))[1]).toMatch(/^ ✓ bash {5}make +1\.2s$/);
+    host.update({
+      content: text("six\nseven\neight\nnine\n"),
+      durationMs: 1200,
+    });
+    expect(plain(host.lines(80)).slice(1)).toEqual([
+      expect.stringMatching(/^ ✓ bash {5}make +1\.2s$/),
+      "   │ … 1 more line",
+      "   │ seven",
+      "   │ eight",
+      "   │ nine",
+    ]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("a quiet success settles to one line, with no tail to keep", async () => {
+    const cwd = tree();
+    const host = await row({ command: "true" });
+    host.update(await realTool("bash", { command: "true" }, cwd));
+    expect(plain(host.lines(80))).toHaveLength(2);
+    expect(plain(host.lines(80))[1]).toMatch(/^ ✓ bash {5}true/);
   });
 
   test("the tail is sanitized and never wider than the pane", async () => {
@@ -433,6 +450,7 @@ describe("bash rows", () => {
       ),
     );
     expect(plain(ok.lines(80))[1]).toMatch(/^ ✓ bash/);
+    expect(plain(ok.lines(80))[2]).toBe("   │ Command exited with code 9");
   });
 
   test("a failed row shows the last three output lines under the count of the rest; expanded shows all", async () => {

@@ -126,13 +126,20 @@ export function bashView({
     ...(cut ? [{ text: "truncated", kind: "extra" } as const] : []),
     ...durationFact(settled),
   ];
-  const lines =
-    expanded && output.trim() !== "(no output)" ? outputLines(output) : [];
-  const foot = expanded ? logLines(fullOutput) : [];
+  const lines = outputLines(output);
   return {
     head: { ...head, mark: "done", facts },
-    ...(lines.length + foot.length > 0
-      ? { rail: { lines, foot, collapsed: 0, ink: "muted" as const } }
+    // The tail the running row showed stays: the transcript must not jump when a call settles
+    ...(lines.length > 0 && output.trim() !== "(no output)"
+      ? {
+          rail: {
+            lines,
+            foot: logLines(fullOutput),
+            collapsed: TAIL_LINES,
+            tail: true,
+            ink: "muted" as const,
+          },
+        }
       : {}),
   };
 }

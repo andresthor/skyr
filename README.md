@@ -40,7 +40,8 @@ Pi loads the TypeScript source directly, so edits apply on the next start.
 ## Ask user
 
 The model can ask you a question in place of the input editor and wait. Pick an option with the
-arrows and Enter, or tick several with Space when the question allows it, or type your own answer
+arrows and Enter, or with its number, or tick several with Space or their numbers when the
+question allows it, or type your own answer
 in the `Other` row. The option the model recommends is marked and the cursor starts on it; nothing
 is ticked for you. Esc declines, and the model is told to stop and wait; on a row holding text,
 Esc first clears it. It can ask up to four questions at once: Tab and Shift+Tab move between

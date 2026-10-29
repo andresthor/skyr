@@ -48,6 +48,8 @@ interface Hint {
   rank: number;
 }
 
+const DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
+
 const asError = (cause: unknown) =>
   cause instanceof Error ? cause : new Error(String(cause));
 
@@ -245,12 +247,24 @@ class AskDialog implements Component, Focusable {
     else if (keys.matches(data, "tui.select.confirm")) this.confirm(page);
     else if (page.onInput) page.input.handleInput(data);
     // Space has no action id; on the Other row it is typing, so it acts on option rows only.
-    // Between tabs a tick or a radio pick counts as an answer; Enter would also move on.
-    else if (matchesKey(data, Key.space)) {
-      if (page.multi && !page.ticked.delete(page.cursor))
-        page.ticked.add(page.cursor);
-      if (this.tabbed) page.accept();
-    }
+    else if (matchesKey(data, Key.space)) this.tick(page);
+    else this.digit(page, DIGITS.findIndex((d) => matchesKey(data, d)) + 1);
+  }
+
+  // Between tabs a tick or a radio pick counts as an answer; Enter would also move on.
+  private tick(page: Page): void {
+    if (page.multi && !page.ticked.delete(page.cursor))
+      page.ticked.add(page.cursor);
+    if (this.tabbed) page.accept();
+  }
+
+  /** A row's number: picks the option like Enter, ticks it like Space, or moves to Other. */
+  private digit(page: Page, n: number): void {
+    if (n === 0 || n > page.options.length + 1) return;
+    page.cursor = n - 1;
+    if (page.onInput) return;
+    if (page.multi) this.tick(page);
+    else this.confirm(page);
   }
 
   private confirm(page: Page): void {
@@ -359,9 +373,26 @@ class AskDialog implements Component, Focusable {
   }
 
   private question(page: Page, width: number): string[] {
+    const { paint } = this.deps;
+    const { colors } = paint.theme;
     const wrap = (text: string, indent: number) =>
       wrapTextWithAnsi(text, Math.max(1, width - indent));
-    const marker = (on: boolean) => (on ? this.ink(" > ", "accent") : "   ");
+    // The cursor row and what hangs under it, as one block: filled in colour, bold in mono
+    const block = (rows: string[], selected: boolean) =>
+      rows.map((row) => {
+        const cut = fitToWidth(row, width, this.glyphs.ellipsis);
+        if (!selected || paint.mode !== "color") return cut;
+        return styled(paint, cut + " ".repeat(width - visibleWidth(cut)), {
+          bg: colors.selectedBg,
+        });
+      });
+    const label = (text: string, selected: boolean) =>
+      selected && paint.mode === "mono"
+        ? this.ink(text, "text", true)
+        : this.ink(text, "text");
+    const marker = (on: boolean) =>
+      on ? ` ${this.ink(this.glyphs.now, "accent")} ` : "   ";
+    const number = (n: number) => `${this.ink(String(n), "accent", true)}  `;
     const box = (i: number) =>
       page.multi
         ? page.ticked.has(i)
@@ -372,26 +403,36 @@ class AskDialog implements Component, Focusable {
             ? `(${this.glyphs.mark.running}) `
             : "( ) "
           : "";
-    const indent = " ".repeat(visibleWidth(marker(false) + box(0)) + 2);
+    const indent = 6 + box(0).length;
 
     const lines: string[] = [];
     for (const line of wrap(page.text, 1))
       lines.push(` ${this.ink(line, "text")}`);
     lines.push("");
     page.options.forEach((o, i) => {
+      const selected = i === page.cursor;
       lines.push(
-        marker(i === page.cursor) +
-          this.ink(box(i) + o.label, "text") +
-          (o.recommended ? ` ${this.ink("recommended", "success")}` : ""),
+        ...block(
+          [
+            marker(selected) +
+              number(i + 1) +
+              label(box(i) + o.label, selected) +
+              (o.recommended ? ` ${this.ink("recommended", "success")}` : ""),
+            ...(o.description
+              ? wrap(o.description, indent).map(
+                  (line) => " ".repeat(indent) + this.ink(line, "muted"),
+                )
+              : []),
+          ],
+          selected,
+        ),
       );
-      if (o.description)
-        for (const line of wrap(o.description, indent.length))
-          lines.push(indent + this.ink(line, "muted"));
     });
 
     const lead =
       marker(page.onInput) +
-      this.ink(page.options.length ? "Other" : "Answer", "text") +
+      (page.options.length ? number(page.options.length + 1) : "") +
+      label(page.options.length ? "Other" : "Answer", page.onInput) +
       "  ";
     for (const p of this.pages) p.input.focused = false;
     page.input.focused = this.focused && page.onInput;
@@ -401,7 +442,7 @@ class AskDialog implements Component, Focusable {
       : typed
         ? this.ink(sanitize(typed), "text")
         : this.ink(PLACEHOLDER, "dim");
-    lines.push(lead + field);
+    lines.push(...block([lead + field], page.onInput));
     return lines;
   }
 
@@ -424,11 +465,16 @@ class AskDialog implements Component, Focusable {
     const hints: Hint[] = [];
     const page = this.page;
     if (page) {
-      if (page.options.length)
+      if (page.options.length) {
+        hints.push({
+          text: `1-${page.options.length + 1} ${page.multi ? "tick" : "pick"}`,
+          rank: 4,
+        });
         hints.push({
           text: `${key("tui.select.up")}/${key("tui.select.down")} move`,
           rank: 2,
         });
+      }
       if (page.multi) hints.push({ text: "space tick", rank: 3 });
       else if (this.tabbed && page.options.length)
         hints.push({ text: "space pick", rank: 3 });

@@ -44,7 +44,7 @@ function dialog(
     for (const key of keys) component.handleInput?.(key);
   };
   const text = (width = 60) =>
-    component.render(width).map((l) => stripTerminalSequences(l));
+    component.render(width).map((l) => stripTerminalSequences(l).trimEnd());
   return { component, done, press, text };
 }
 
@@ -58,7 +58,7 @@ test("the keys follow Pi's bindings when the user rebinds them", () => {
   const rebound = dialog([storage], {
     keys: keybindings({ "tui.select.down": "ctrl+n" }),
   });
-  expect(rebound.text().join("\n")).toContain("up/ctrl+n move");
+  expect(rebound.text(100).join("\n")).toContain("up/ctrl+n move");
   rebound.press(DOWN, ENTER);
   expect(rebound.done.mock.calls).toEqual([[[{ labels: ["SQLite"] }]]]);
 
@@ -112,7 +112,7 @@ const features: AskQuestion = {
 
 test("a multi-select question returns every ticked label in option order", () => {
   const d = dialog([features]);
-  expect(d.text().join("\n")).toContain("space tick");
+  expect(d.text(100).join("\n")).toContain("space tick");
   d.press(DOWN, SPACE, UP, UP, SPACE, SPACE, SPACE, ENTER);
   expect(d.done.mock.calls).toEqual([[[{ labels: ["Auth", "Search"] }]]]);
 });
@@ -138,7 +138,7 @@ test("the cursor starts on the recommended option, which the dialog marks", () =
       options: [{ label: "SQLite" }, { label: "Postgres", recommended: true }],
     },
   ]);
-  expect(d.text()).toContain(" > Postgres recommended");
+  expect(d.text()).toContain(" › 2  Postgres recommended");
   d.press(ENTER);
   expect(d.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
 });
@@ -146,10 +146,10 @@ test("the cursor starts on the recommended option, which the dialog marks", () =
 test("a multi-select question starts with nothing ticked, its recommended option included", () => {
   const multi = dialog([features]);
   const lines = multi.text();
-  expect(lines).toContain(" > [ ] Billing recommended");
+  expect(lines).toContain(" › 2  [ ] Billing recommended");
   expect(lines.join("\n")).not.toContain("[x]");
   multi.press(SPACE);
-  expect(multi.text()).toContain(" > [x] Billing recommended");
+  expect(multi.text()).toContain(" › 2  [x] Billing recommended");
 });
 
 const scope: AskQuestion = {
@@ -175,7 +175,7 @@ test("several questions: Tab and Shift+Tab move through them and Review, Enter a
   expect(screen()).toContain(" Scope    A");
   expect(screen()).toContain(" Storage  not answered");
   d.press(BACKTAB, BACKTAB, BACKTAB);
-  expect(d.text()).toContain(" > (•) A");
+  expect(d.text()).toContain(" › 1  (•) A");
   d.press(TAB, DOWN, ENTER);
   expect(screen()).toContain(naming.question);
   d.press(..."skyr", ENTER);
@@ -232,7 +232,7 @@ test("Space marks a tabbed single choice without moving on, and does nothing on 
   const tabbed = dialog([scope, storage]);
   expect(bottom(tabbed)).toContain("space pick · ");
   tabbed.press(DOWN, SPACE);
-  expect(tabbed.text()).toContain(" > (•) B");
+  expect(tabbed.text()).toContain(" › 2  (•) B");
   expect(tabbed.text().join("\n")).toContain(scope.question);
   tabbed.press(TAB);
   expect(tabbed.text(80)[0]).toContain("✓ Scope");
@@ -315,7 +315,7 @@ test("the bottom rule is one row at every width", () => {
     const d = dialog(questions);
     for (let width = 1; width <= 120; width++) {
       const rows = d.text(width);
-      expect(rows.at(-1)).toMatch(/^[─ a-z/+1-9·]*$/);
+      expect(rows.at(-1)).toMatch(/^[─ a-z/+\-1-9·]*$/);
       expect(visibleWidth(rows.at(-1) ?? "")).toBeLessThanOrEqual(width);
       expect(rows.at(-2)).not.toMatch(/^─+$/);
     }
@@ -463,15 +463,15 @@ test("a cut label ends in the tier's ellipsis", () => {
     ...storage,
     options: [{ label: "x".repeat(100) }, { label: "y" }],
   };
-  expect(dialog([long]).text(30).join("\n")).toContain(`${"x".repeat(24)}…`);
+  expect(dialog([long]).text(30).join("\n")).toContain(`${"x".repeat(23)}…`);
   const ascii = dialog([long], { mode: "ascii" }).text(30).join("\n");
-  expect(ascii).toContain(`${"x".repeat(22)}...`);
+  expect(ascii).toContain(`${"x".repeat(21)}...`);
   expect(ascii).not.toContain("…");
 });
 
 test("the recommended mark is a word, not colour alone", () => {
   const rec = dialog([features], { mode: "mono" });
-  expect(rec.text()).toContain(" > [ ] Billing recommended");
+  expect(rec.text()).toContain(" › 2  [ ] Billing recommended");
 });
 
 test("rule rows are made of the rule glyph at widths 1-80 and never overflow", () => {
@@ -487,4 +487,132 @@ test("rule rows are made of the rule glyph at widths 1-80 and never overflow", (
       }
     }
   }
+});
+
+test("a digit picks its option and moves to the next unanswered question", () => {
+  const d = dialog([scope, storage, naming]);
+  d.press("2");
+  expect(d.text()).toContain(` ${storage.question}`);
+  d.press("1");
+  expect(d.text()).toContain(` ${naming.question}`);
+  d.press(..."skyr", ENTER, ENTER);
+  expect(d.done.mock.calls).toEqual([
+    [
+      [
+        { labels: ["B"] },
+        { labels: ["SQLite"] },
+        { labels: [], other: "skyr" },
+      ],
+    ],
+  ]);
+});
+
+test("a digit on a lone question answers it", () => {
+  const d = dialog([storage]);
+  d.press("2");
+  expect(d.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
+});
+
+test("a digit ticks and unticks on a multi-select question", () => {
+  const d = dialog([features]);
+  d.press("1", "3", "1");
+  expect(d.text()).toContain(" › 1  [ ] Auth");
+  expect(d.text()).toContain("   3  [x] Search");
+  d.press(ENTER);
+  expect(d.done.mock.calls).toEqual([[[{ labels: ["Search"] }]]]);
+});
+
+test("a tick by digit between tabs counts as an answer, as a Space tick does", () => {
+  const d = dialog([features, storage]);
+  d.press("2", TAB);
+  expect(d.text(80)[0]).toContain("✓ Features");
+});
+
+test("with the Other input focused a digit is typed, and so on a free-text question", () => {
+  const d = dialog([storage]);
+  d.press(DOWN, DOWN, "1", "2");
+  expect(d.text()).toContain(" › 3  Other  12");
+  expect(d.done).not.toHaveBeenCalled();
+  const free = dialog([naming]);
+  free.press("4", "2", ENTER);
+  expect(free.done.mock.calls).toEqual([[[{ labels: [], other: "42" }]]]);
+});
+
+test("the Other row's number moves the cursor there and the next digit is typed", () => {
+  const d = dialog([storage]);
+  d.press("3");
+  expect(d.done).not.toHaveBeenCalled();
+  expect(d.text()).toContain(" › 3  Other  type an answer");
+  d.press("1", ENTER);
+  expect(d.done.mock.calls).toEqual([[[{ labels: [], other: "1" }]]]);
+  const multi = dialog([features]);
+  multi.press("4", "7");
+  expect(multi.text()).toContain(" › 4  Other  7");
+});
+
+test("a Kitty-encoded and a keypad digit pick too, and type on the Other row", () => {
+  for (const digit of ["\x1b[50u", "\x1b[57401u"]) {
+    const d = dialog([storage]);
+    d.press(digit);
+    expect(d.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
+  }
+  const typed = dialog([storage]);
+  typed.press("3", "\x1b[49u");
+  expect(typed.text()).toContain(" › 3  Other  1");
+});
+
+test("a shifted digit and a digit past the last row do nothing", () => {
+  const d = dialog([storage]);
+  d.press("\x1b[49;2u", "4", "9", "0");
+  expect(d.done).not.toHaveBeenCalled();
+  expect(d.text()).toContain(" › 1  SQLite");
+  const review = dialog([scope, storage]);
+  review.press(BACKTAB, "1");
+  expect(review.done).not.toHaveBeenCalled();
+});
+
+test("a rebound select key beats a digit", () => {
+  const d = dialog([storage], {
+    keys: keybindings({ "tui.select.confirm": "1" }),
+  });
+  d.press(DOWN, "1");
+  expect(d.done.mock.calls).toEqual([[[{ labels: ["Postgres"] }]]]);
+});
+
+test("the cursor row is marked by a glyph in every tier", () => {
+  for (const [mode, glyph] of [
+    ["color", "›"],
+    ["mono", "›"],
+    ["ascii", ">"],
+  ] as const) {
+    const d = dialog([storage], { mode });
+    d.press(DOWN);
+    expect(d.text()).toContain(` ${glyph} 2  Postgres`);
+    expect(d.text()).toContain("   1  SQLite");
+  }
+});
+
+test("in colour the cursor row and its description are filled to the width; elsewhere nothing is", () => {
+  const filled = (mode: Tier) =>
+    dialog([storage], { mode })
+      .component.render(40)
+      .filter((line) => line.includes("\x1b[48;"))
+      .map((line) => visibleWidth(line));
+  // the option row and the description under it
+  expect(filled("color")).toEqual([40, 40]);
+  expect(filled("mono")).toEqual([]);
+  expect(filled("ascii")).toEqual([]);
+});
+
+test("the numbers and the 1-N hint match the rows", () => {
+  const d = dialog([storage]);
+  expect(bottom(d)).toContain("1-3 pick");
+  expect(d.text().join("\n")).toMatch(
+    /1 {2}SQLite[\s\S]*2 {2}Postgres[\s\S]*3 {2}Other/,
+  );
+  expect(bottom(dialog([features]))).toContain("1-4 tick");
+  expect(bottom(dialog([naming]))).not.toMatch(/1-\d/);
+  const review = dialog([scope, storage]);
+  review.press(BACKTAB);
+  expect(bottom(review)).not.toMatch(/1-\d/);
 });

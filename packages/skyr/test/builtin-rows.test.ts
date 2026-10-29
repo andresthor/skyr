@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type {
   ExtensionAPI,
   ToolRenderers,
@@ -7,10 +7,12 @@ import type {
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, onTestFinished, test, vi } from "vitest";
 import { loadPi } from "../src/pi.js";
+import { editRenderers } from "../src/tools/builtin/files.js";
 import { grepView } from "../src/tools/builtin/search.js";
 import { registerBuiltinRows } from "../src/tools/builtin-rows.js";
 import { scratchDir } from "./session.js";
 import {
+  BUILTIN_TOOLS,
   type BuiltinTool,
   builtinHost,
   CORPUS,
@@ -21,6 +23,7 @@ import {
   type RowResult,
   realTool,
   resolveChain,
+  toolRowHost,
   WIDTHS_SWEEP,
 } from "./ui.js";
 
@@ -184,10 +187,18 @@ describe("grep, find and ls rows", () => {
     expect(resolver?.("grep", () => undefined)).toBeUndefined();
     expect(resolver?.("grep", () => pi)).not.toBe(pi);
     const other = await piRenderers("read");
-    // read has no view in this build, whatever the renderers are
-    expect(resolver?.("read", () => other)).toBe(other);
-    // a tool name that is a property of every object
+    // a tool with no view, whatever its renderers are, and a name every object has
+    expect(resolver?.("subagent", () => other)).toBe(other);
     expect(resolver?.("constructor", () => other)).toBe(other);
+    for (const tool of BUILTIN_TOOLS) {
+      const own = await piRenderers(tool);
+      const swapped = {
+        ...own,
+        renderResult: () => ({ invalidate() {}, render: () => [] }),
+      };
+      expect(resolver?.(tool, () => swapped)).toBe(swapped);
+      expect(resolver?.(tool, () => own)).not.toBe(own);
+    }
   });
 
   test("the resolver calls next() once", async () => {
@@ -310,6 +321,8 @@ describe("grepView", () => {
     grepView({
       args: { pattern: "x", ...args },
       settled: settled(text, details),
+      state: {},
+      memo: {},
       expanded: false,
     })?.head.facts.map((f) => f.text);
 
@@ -422,15 +435,15 @@ describe("bash rows", () => {
     expect(plain(ok.lines(80))[1]).toMatch(/^ ✓ bash/);
   });
 
-  test("a failed row shows the first three output lines and the count of the rest; expanded shows all", async () => {
+  test("a failed row shows the last three output lines under the count of the rest; expanded shows all", async () => {
     const cwd = tree();
     const host = await row({ command: "seq" });
     host.update(await realTool("bash", { command: "seq 1 8; exit 2" }, cwd));
     expect(plain(host.lines(80)).slice(2)).toEqual([
-      "   │ 1",
-      "   │ 2",
-      "   │ 3",
       "   │ … 5 more lines",
+      "   │ 6",
+      "   │ 7",
+      "   │ 8",
     ]);
     host.expand(true);
     expect(
@@ -440,6 +453,31 @@ describe("bash rows", () => {
     ).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
   });
 
+  test("a failed rail of 1000 lines hides the same count collapsed and expanded, and keeps the log path in reach", async () => {
+    const output = Array.from({ length: 1000 }, (_, i) => `l${i + 1}`).join(
+      "\n",
+    );
+    const host = await row({ command: "seq" });
+    host.update({
+      content: text(`${output}\n\nCommand exited with code 2`),
+      details: { fullOutputPath: "/tmp/full.log" },
+      isError: true,
+    });
+    const collapsed = plain(host.lines(80)).slice(2);
+    expect(collapsed).toEqual([
+      "   │ … 997 more lines",
+      "   │ l998",
+      "   │ l999",
+      "   │ l1000",
+      "   │ log /tmp/full.log",
+    ]);
+    host.expand(true);
+    const expanded = plain(host.lines(80)).slice(2);
+    expect(expanded).toHaveLength(400 + 1 + 1);
+    expect(expanded.at(-2)).toBe("   │ … 600 more lines");
+    expect(expanded.at(-1)).toBe("   │ log /tmp/full.log");
+  });
+
   test("an expanded rail stops at 400 lines and counts the rest", async () => {
     const cwd = tree();
     const host = await row({ command: "seq" });
@@ -447,7 +485,7 @@ describe("bash rows", () => {
     host.expand(true);
     const lines = plain(host.lines(80));
     expect(lines).toHaveLength(2 + 400 + 1);
-    expect(lines.at(-1)).toBe("   │ … 500 more lines not shown");
+    expect(lines.at(-1)).toBe("   │ … 500 more lines");
   });
 
   test("aborted, timed out and truncated results draw their own explanation", async () => {
@@ -535,5 +573,390 @@ describe("bash rows", () => {
         }
       }
     }
+  });
+});
+
+const ESC = String.fromCharCode(27);
+const BACKGROUND = new RegExp(`${ESC}\\[(?:4[0-8]|10[0-7])`);
+const COLOUR = new RegExp(`${ESC}\\[(?:3[0-8]|4[0-8]|9\\d|10[0-7])`);
+
+describe("read, write and edit rows", () => {
+  const text = (value: string): RowResult["content"] => [
+    { type: "text", text: value },
+  ];
+
+  test("a read shows its range and line count, a truncated one says so, and a missing file fails with its reason", async () => {
+    const cwd = tree();
+    const read = async (args: Record<string, unknown>) => {
+      const host = await builtinHost("read", args, await registered());
+      host.update(await realTool("read", args, cwd));
+      return plain(host.lines(100))[1] ?? "";
+    };
+    expect(await read({ path: "src/a.ts" })).toMatch(
+      /^ ✓ read {5}src\/a\.ts +3 lines$/,
+    );
+    expect(await read({ path: "src/a.ts", offset: 2, limit: 1 })).toMatch(
+      /^ ✓ read {5}src\/a\.ts:2-2 +1 line$/,
+    );
+    expect(await read({ path: "src/a.ts", offset: 2 })).toMatch(
+      /src\/a\.ts:2- +/,
+    );
+    expect(await read({ path: "nope.ts" })).toMatch(
+      /^ × read {5}nope\.ts +ENOENT/,
+    );
+    writeFileSync(join(cwd, "big.txt"), "line\n".repeat(5000));
+    expect(await read({ path: "big.txt" })).toMatch(/2000 lines · truncated/);
+  });
+
+  test("an image read says image, and a read of binary-looking text draws sanitized lines", async () => {
+    const host = await builtinHost(
+      "read",
+      { path: "a.png" },
+      await registered(),
+    );
+    host.update({
+      content: [
+        { type: "text", text: "Read image file [image/png]" },
+        { type: "image", data: "AAAA", mimeType: "image/png" },
+      ] as never,
+    });
+    expect(plain(host.lines(80))[1]).toMatch(/^ ✓ read {5}a\.png +image$/);
+    const binary = await builtinHost("read", { path: "b" }, await registered());
+    binary.update({ content: text("\u0000\u001b[2J\u0007ok\n‮evil\n") });
+    binary.expand(true);
+    const lines = binary.lines(80);
+    expect(lines.join("")).not.toContain("\u001b[2J");
+    expect(plain(lines).join("\n")).toContain("ok");
+  });
+
+  test("a SKILL.md or AGENTS.md read is a plain record", async () => {
+    for (const path of ["skills/x/SKILL.md", "AGENTS.md"]) {
+      const host = await builtinHost("read", { path }, await registered());
+      host.update({ content: text("# a\nb\n") });
+      expect(plain(host.lines(80))[1]).toMatch(
+        new RegExp(`^ ✓ read {5}${path.replace(".", "\\.")} +2 lines$`),
+      );
+    }
+  });
+
+  test("a write counts the lines it was given, none while the arguments stream, and its failure has its reason; expanded shows the content", async () => {
+    const cwd = tree();
+    const args = { path: "src/w.ts", content: "a\nb\nc\n" };
+    const host = await builtinHost(
+      "write",
+      { path: "src/w.ts" },
+      await registered(),
+    );
+    expect(plain(host.lines(80))[1]).toMatch(/^ • write {4}src\/w\.ts$/);
+    host.streamArgs(args);
+    host.update(await realTool("write", args, cwd));
+    expect(plain(host.lines(80))[1]).toMatch(
+      /^ ✓ write {4}src\/w\.ts +3 lines$/,
+    );
+    host.expand(true);
+    expect(plain(host.lines(80)).slice(2)).toEqual([
+      "   │ a",
+      "   │ b",
+      "   │ c",
+    ]);
+    const failed = await builtinHost("write", args, await registered());
+    failed.update({
+      content: text("write: EACCES: permission denied"),
+      isError: true,
+    });
+    expect(plain(failed.lines(80))[1]).toMatch(
+      /^ × write {4}src\/w\.ts +EACCES/,
+    );
+  });
+
+  test("an expanded write stops at 400 lines and counts the rest", async () => {
+    const content = "x\n".repeat(5000);
+    const host = await builtinHost(
+      "write",
+      { path: "w", content },
+      await registered(),
+    );
+    host.update({ content: text("Successfully wrote to w") });
+    host.expand(true);
+    const lines = plain(host.lines(80));
+    expect(lines).toHaveLength(2 + 400 + 1);
+    expect(lines.at(-1)).toBe("   │ … 4600 more lines");
+  });
+
+  const editArgs = (path: string) => ({
+    path,
+    edits: [{ oldText: "two", newText: "2" }],
+  });
+  const fileWith = (body: string) => {
+    const path = join(scratchDir("edit"), "a.ts");
+    writeFileSync(path, body);
+    return path;
+  };
+
+  test("a live preview appears under the running head once the arguments are complete, and the settled diff replaces it", async () => {
+    const path = fileWith("one\ntwo\nthree\n");
+    const host = await builtinHost("edit", editArgs(path), await registered());
+    host.streamArgs(editArgs(path));
+    expect(plain(host.lines(100))).toHaveLength(2);
+    host.argsComplete();
+    await vi.waitFor(() =>
+      expect(plain(host.lines(100)).length).toBeGreaterThan(2),
+    );
+    const running = plain(host.lines(100));
+    expect(running[1]).toMatch(/^ • edit {5}/);
+    expect(running.slice(2).join("\n")).toContain("-2 two");
+    expect(running.slice(2).join("\n")).toContain("+2 2");
+    host.update(await realTool("edit", editArgs(path), dirname(path)));
+    const done = plain(host.lines(100));
+    expect(done[1]).toMatch(/^ ✓ edit {5}.*\+1 −1$/);
+    expect(done.slice(2).join("\n")).toContain("+2 2");
+  });
+
+  test("a new theme re-colours a settled diff, and a repaint under the same theme does not colour it again", async () => {
+    vi.stubEnv("TERM", "xterm");
+    vi.stubEnv("NO_COLOR", "");
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    let theme = "dark";
+    const renderDiff = vi.fn((diff: string) => `<${theme}>${diff}`);
+    const host = toolRowHost(
+      editRenderers(await piRenderers("edit"), renderDiff),
+      { path: "a.ts" },
+    );
+    host.update({
+      content: [{ type: "text", text: "ok" }],
+      details: { diff: "-1 a\n+1 b" },
+    });
+    expect(host.lines(80).join("\n")).toContain("<dark>-1 a");
+    host.lines(80);
+    expect(renderDiff).toHaveBeenCalledTimes(1);
+    theme = "light";
+    host.invalidate();
+    expect(host.lines(80).join("\n")).toContain("<light>-1 a");
+  });
+
+  test("a preview error draws nothing under the head", async () => {
+    const path = fileWith("one\n");
+    const host = await builtinHost("edit", editArgs(path), await registered());
+    host.argsComplete();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(plain(host.lines(100))).toHaveLength(2);
+  });
+
+  test("the settled row counts +N −M from the diff, collapsed shows six lines and a count, expanded all", async () => {
+    const diff = [
+      ...Array.from({ length: 4 }, (_, i) => `-${i + 1} old ${i}`),
+      ...Array.from({ length: 6 }, (_, i) => `+${i + 1} new ${i}`),
+      " 11 same",
+      " 12 same",
+    ].join("\n");
+    const host = await builtinHost(
+      "edit",
+      { path: "a.ts" },
+      await registered(),
+    );
+    host.update({ content: text("ok"), details: { diff, patch: "" } });
+    const collapsed = plain(host.lines(80));
+    expect(collapsed[1]).toMatch(/\+6 −4$/);
+    expect(collapsed).toHaveLength(2 + 6 + 1);
+    expect(collapsed.at(-1)).toBe("   │ … 6 more lines");
+    host.expand(true);
+    expect(plain(host.lines(80))).toHaveLength(2 + 12);
+  });
+
+  test("an edit whose details lack a diff draws Pi's row, and a failed edit its reason", async () => {
+    const host = await builtinHost(
+      "edit",
+      { path: "a.ts" },
+      await registered(),
+    );
+    host.update({
+      content: text("Successfully replaced"),
+      details: { patch: "x" },
+    });
+    expect(plain(host.lines(80)).join("\n")).not.toContain("✓");
+    const failed = await builtinHost(
+      "edit",
+      { path: "a.ts" },
+      await registered(),
+    );
+    failed.update({
+      content: text("Could not find the text in a.ts"),
+      isError: true,
+    });
+    expect(plain(failed.lines(80))[1]).toMatch(
+      /^ × edit {5}a\.ts +Could not find/,
+    );
+  });
+
+  test("NO_COLOR and TERM=dumb emit no escape from an edit row, and no line of any edit row carries a background", async () => {
+    const diff = "-1 a\n+1 b\n 2 c";
+    const draw = async () => {
+      const host = await builtinHost(
+        "edit",
+        { path: "a.ts" },
+        await registered(),
+      );
+      host.update({ content: text("ok"), details: { diff } });
+      host.expand(true);
+      return host.lines(80).join("\n");
+    };
+    expect(await draw()).not.toMatch(BACKGROUND);
+    for (const [name, value] of [
+      ["NO_COLOR", "1"],
+      ["TERM", "dumb"],
+    ] as const) {
+      vi.stubEnv(name, value);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      const drawn = await draw();
+      if (name === "TERM") expect(drawn).not.toContain("\u001b");
+      // NO_COLOR keeps bold and drops colour
+      else expect(drawn).not.toMatch(COLOUR);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test("a hostile path, content and diff never crash Pi's renderer at 20, 40 and 86 columns", async () => {
+    const resolvers = await registered();
+    for (const value of CORPUS) {
+      const cases: [BuiltinTool, Record<string, unknown>, RowResult[]][] = [
+        [
+          "read",
+          { path: value, offset: 3, limit: 9 },
+          [
+            { content: text(`${value}\n${value}`) },
+            { content: text(value), details: { truncation: 1 } },
+          ],
+        ],
+        [
+          "write",
+          { path: value, content: value },
+          [{ content: text("Successfully wrote") }],
+        ],
+        [
+          "edit",
+          { path: value, edits: [] },
+          [
+            {
+              content: text("ok"),
+              details: { diff: `-1 ${value}\n+1 ${value}\n 2 ${value}` },
+            },
+            { content: text(`edit: ${value}`), isError: true },
+          ],
+        ],
+      ];
+      for (const [name, args, results] of cases) {
+        const host = await builtinHost(name, args, resolvers);
+        for (const width of [20, 40, 86]) {
+          for (const result of [{ content: text("") }, ...results]) {
+            host.update(result);
+            for (const expand of [false, true]) {
+              host.expand(expand);
+              host.invalidate();
+              const lines = host.lines(width);
+              for (const line of lines)
+                expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+              const drawn = piScreen(
+                { invalidate() {}, render: () => lines },
+                width,
+              );
+              expect(drawn.firstFrameCrash).toBeUndefined();
+              expect(drawn.crash).toBeUndefined();
+            }
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("the fallback and the edges of the new rows", () => {
+  const text = (value: string): RowResult["content"] => [
+    { type: "text", text: value },
+  ];
+
+  test("an unknown details shape draws Pi's own row for every tool, without our record", async () => {
+    const odd = { truncation: "no", diff: 3, patch: 1, matchLimitReached: "x" };
+    const cases: [BuiltinTool, Record<string, unknown>, RegExp][] = [
+      ["read", { path: "a.ts" }, /read/],
+      ["write", { path: "a.ts", content: "x" }, /write/],
+      ["bash", { command: "make" }, /make/],
+      ["grep", { pattern: "needle" }, /grep/],
+      ["find", { pattern: "*.ts" }, /find/],
+      ["ls", { path: "src" }, /ls/],
+    ];
+    for (const [name, args, header] of cases) {
+      const host = await builtinHost(name, args, await registered());
+      host.update({
+        content: text("OUTPUT"),
+        details: name === "write" ? "odd" : odd,
+      });
+      // Pi's read and write rows keep their output behind ctrl+o
+      host.expand(true);
+      const lines = plain(host.lines(80));
+      expect(lines.join("\n"), name).not.toMatch(/[✓×]/);
+      expect(lines.join("\n"), name).toMatch(header);
+      // Pi's write row shows the content it was given, not the result
+      expect(lines.join("\n"), name).toContain(
+        name === "write" ? "x" : "OUTPUT",
+      );
+    }
+    // Pi's edit keeps its own card, background and all, because it is Pi's content
+    const edit = await builtinHost(
+      "edit",
+      { path: "a.ts" },
+      await registered(),
+    );
+    edit.update({ content: text("done"), details: { patch: "x" } });
+    expect(plain(edit.lines(80)).join("\n")).not.toContain("✓");
+    expect(edit.lines(80).join("")).toContain(`${ESC}[48`);
+  });
+
+  test("a thrown bash failure with cut output drops Pi's notice from the rail and says truncated", async () => {
+    const host = await builtinHost(
+      "bash",
+      { command: "seq" },
+      await registered(),
+    );
+    host.update({
+      content: text(
+        "4001\n4002\n\n[Showing lines 4001-5000 of 5000. Full output: /tmp/x.log]\n\nCommand aborted",
+      ),
+      isError: true,
+    });
+    host.expand(true);
+    const lines = plain(host.lines(100));
+    expect(lines[1]).toMatch(/aborted · truncated$/);
+    expect(lines.join("\n")).not.toContain("Showing lines");
+    expect(lines.slice(2)).toEqual(["   │ 4001", "   │ 4002"]);
+  });
+
+  test("a file tool's head has no subject until its path has streamed in", async () => {
+    for (const name of ["read", "write", "edit"] as const) {
+      const host = await builtinHost(name, {}, await registered());
+      expect(plain(host.lines(80))[1]).toMatch(new RegExp(`^ • ${name} *$`));
+      host.streamArgs({ path: "src/a.ts" });
+      expect(plain(host.lines(80))[1]).toMatch(/src\/a\.ts$/);
+    }
+  });
+
+  test("an edit's diff rail stops at 400 lines and counts the rest", async () => {
+    const diff = Array.from(
+      { length: 900 },
+      (_, i) => `+${i + 1} line ${i}`,
+    ).join("\n");
+    const host = await builtinHost(
+      "edit",
+      { path: "a.ts" },
+      await registered(),
+    );
+    host.update({ content: text("ok"), details: { diff } });
+    host.expand(true);
+    const lines = plain(host.lines(80));
+    expect(lines).toHaveLength(2 + 400 + 1);
+    expect(lines.at(-1)).toBe("   │ … 500 more lines");
   });
 });

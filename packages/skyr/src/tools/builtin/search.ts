@@ -15,8 +15,8 @@ import {
   type Details,
   detailsOf,
   limited,
+  outputLines,
   pathSubject,
-  railOf,
   strOf,
   textOf,
   withoutNotice,
@@ -58,7 +58,11 @@ function listed(
     head: { ...head, mark: "done", facts },
     ...(expanded && listing !== ""
       ? {
-          rail: { lines: railOf(listing), collapsed: 0, ink: "muted" as const },
+          rail: {
+            lines: outputLines(listing),
+            collapsed: 0,
+            ink: "muted" as const,
+          },
         }
       : {}),
   };

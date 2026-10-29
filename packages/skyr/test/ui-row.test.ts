@@ -56,6 +56,27 @@ describe("toolRenderers", () => {
     expect(done[1]).toMatch(/^ ✓ probe {4}hello +0\.9s$/);
   });
 
+  test("a muted rail line is sanitized by the row, a styled one is only cut", () => {
+    const host = toolRowHost(
+      toolRenderers<Args>(
+        (): Row => ({
+          head: { ...HEAD, mark: "done", facts: [] },
+          rail: {
+            lines: ["a\u001b]0;title\u0007b\u202e"],
+            collapsed: 3,
+            ink: "muted",
+          },
+        }),
+      ),
+      { name: "x" },
+    );
+    host.update({ content: [] });
+    expect(host.lines(60).slice(2)).toEqual([expect.stringContaining("ab")]);
+    const drawn = host.lines(60).join("");
+    for (const bad of ["\u202e", "\u0007", "title"])
+      expect(drawn).not.toContain(bad);
+  });
+
   test("expanding a row never changes its first line", () => {
     const host = toolRowHost(probe, { name: "hello" });
     host.update({

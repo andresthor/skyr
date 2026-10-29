@@ -15,7 +15,6 @@ import {
   limited,
   numOf,
   outputLines,
-  railOf,
   strOf,
   textOf,
   withoutNotice,
@@ -41,15 +40,19 @@ function statusOf(
 ): { why: string; stopped: boolean; output: string } | undefined {
   const found = STATUS.exec(text);
   if (!found) return undefined;
-  const [all, code, aborted, seconds] = found;
+  const [, code, aborted, seconds] = found;
   const output = text.slice(0, found.index);
   if (code !== undefined)
     return { why: `exit ${code}`, stopped: false, output };
   if (aborted) return { why: "aborted", stopped: true, output };
   if (seconds !== undefined)
     return { why: `timed out after ${seconds}s`, stopped: false, output };
-  return all ? { why: "no exit status", stopped: false, output } : undefined;
+  return { why: "no exit status", stopped: false, output };
 }
+
+/** Where Pi kept the full output of a cut call, as the line a rail ends with. */
+const logLines = (path: string | undefined): string[] =>
+  path === undefined ? [] : [`log ${sanitize(path)}`];
 
 const BASH_DETAILS = {
   truncation: "truncation",
@@ -109,7 +112,13 @@ export function bashView({
           ...durationFact(settled),
         ],
       },
-      rail: { lines: railOf(output), collapsed: TAIL_LINES, ink: "muted" },
+      rail: {
+        lines: outputLines(output),
+        foot: logLines(fullOutput),
+        collapsed: TAIL_LINES,
+        tail: true,
+        ink: "muted",
+      },
     };
   }
   const output = cut ? withoutNotice(text) : text;
@@ -117,16 +126,13 @@ export function bashView({
     ...(cut ? [{ text: "truncated", kind: "extra" } as const] : []),
     ...durationFact(settled),
   ];
-  const shown = expanded
-    ? [
-        ...(output.trim() === "(no output)" ? [] : railOf(output)),
-        ...(fullOutput ? [`log ${sanitize(fullOutput)}`] : []),
-      ]
-    : [];
+  const lines =
+    expanded && output.trim() !== "(no output)" ? outputLines(output) : [];
+  const foot = expanded ? logLines(fullOutput) : [];
   return {
     head: { ...head, mark: "done", facts },
-    ...(shown.length > 0
-      ? { rail: { lines: shown, collapsed: 0, ink: "muted" as const } }
+    ...(lines.length + foot.length > 0
+      ? { rail: { lines, foot, collapsed: 0, ink: "muted" as const } }
       : {}),
   };
 }

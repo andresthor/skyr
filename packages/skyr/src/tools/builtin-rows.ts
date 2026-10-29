@@ -4,47 +4,69 @@
  * and handing the host's renderers back for anything else. A view that does not know a result's
  * shape, or throws, makes the row draw the host's components instead (`toolRenderers`).
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ToolRenderers,
+} from "@earendil-works/pi-coding-agent";
 import type { PiModule } from "../pi.js";
 import type { Row, ToolView } from "../ui/row.js";
 import { toolRenderers } from "../ui/row.js";
 import { readUiSettings } from "../ui-config.js";
 import { bashView } from "./builtin/bash.js";
+import { editRenderers, readView, writeView } from "./builtin/files.js";
 import { findView, grepView, lsView } from "./builtin/search.js";
+
+/** Makes a tool's ledger renderers over the renderers Pi would have used. */
+type Restyle = (base: ToolRenderers, host: PiModule) => ToolRenderers;
 
 /** Views take the arguments of their own tool; a resolver only knows the name. */
 type View = (v: ToolView<never>) => Row | undefined;
 
-const VIEWS = new Map<string, View>([
-  ["bash", bashView],
-  ["grep", grepView],
-  ["find", findView],
-  ["ls", lsView],
+const viewed =
+  (view: View): Restyle =>
+  (base) =>
+    toolRenderers(view, base);
+
+const RESTYLES = new Map<string, Restyle>([
+  ["bash", viewed(bashView)],
+  ["read", viewed(readView)],
+  ["write", viewed(writeView)],
+  ["edit", (base, host) => editRenderers(base, host.renderDiff)],
+  ["grep", viewed(grepView)],
+  ["find", viewed(findView)],
+  ["ls", viewed(lsView)],
 ]);
 
 /**
- * What Pi's renderers for each viewed tool are, as source text: the renderers of `bash` are made
- * fresh on each call, so identity cannot tell Pi's from another extension's, and source can.
+ * What Pi's renderers for each restyled tool are, as source text: the renderers of `bash` are
+ * made fresh on each call, so identity cannot tell Pi's from another extension's, and source can.
  */
 function fingerprints(host: PiModule): Map<string, string> {
-  const own = {
+  const own: Record<string, (cwd: string) => Renderers> = {
     bash: host.createBashToolDefinition,
+    read: host.createReadToolDefinition,
+    write: host.createWriteToolDefinition,
+    edit: host.createEditToolDefinition,
     grep: host.createGrepToolDefinition,
     find: host.createFindToolDefinition,
     ls: host.createLsToolDefinition,
   };
   return new Map(
-    Object.entries(own)
-      .filter(([name]) => VIEWS.has(name))
-      .map(([name, create]) => [name, fingerprintOf(create(process.cwd()))]),
+    Object.entries(own).map(([name, create]) => [
+      name,
+      fingerprintOf(create(process.cwd())),
+    ]),
   );
 }
 
-const fingerprintOf = (renderers: {
+/** What a fingerprint reads of a definition. */
+interface Renderers {
   renderShell?: unknown;
   renderCall?: unknown;
   renderResult?: unknown;
-}): string =>
+}
+
+const fingerprintOf = (renderers: Renderers): string =>
   [renderers.renderShell, renderers.renderCall, renderers.renderResult]
     .map(String)
     .join("\u0000");
@@ -64,8 +86,8 @@ export async function registerBuiltinRows(
   pi.registerToolRenderer((name, next) => {
     // Once: every resolver after this one runs again on a second call
     const base = next();
-    const view = VIEWS.get(name);
-    if (!base || !view || own.get(name) !== fingerprintOf(base)) return base;
-    return toolRenderers(view, base);
+    const restyle = RESTYLES.get(name);
+    if (!base || !restyle || own.get(name) !== fingerprintOf(base)) return base;
+    return restyle(base, host);
   });
 }

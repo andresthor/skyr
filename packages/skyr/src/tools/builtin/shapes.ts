@@ -5,15 +5,11 @@
  */
 import { homedir } from "node:os";
 import { isRecord } from "../../guards.js";
-import { glyphsOf, tierOf } from "../../ui/caps.js";
 import type { Settled } from "../../ui/row.js";
 import { sanitize, sanitizeBlock } from "../../ui/text.js";
 
 export type Details = Readonly<Record<string, unknown>>;
 type Kind = "truncation" | "number" | "boolean" | "string";
-
-/** The most lines an expanded rail draws; a result can hold thousands. */
-const RAIL_CAP = 400;
 
 /**
  * `details` when each key of `spec` it holds has its type, `{}` for none; undefined for a
@@ -39,7 +35,7 @@ export function detailsOf(
 }
 
 /** The truncation a tool reports, when it cut its output. */
-const truncationOf = (details: Details) =>
+export const truncationOf = (details: Details) =>
   isRecord(details.truncation) && details.truncation.truncated === true
     ? details.truncation
     : undefined;
@@ -87,20 +83,9 @@ export function pathSubject(raw: string | undefined): string {
     : path;
 }
 
-/** Output as lines fit for a rail: sanitized, tabs as two spaces, blank lines dropped. */
+/** Output as rail lines: sanitized, tabs as two spaces, blank lines dropped. The rail caps them. */
 export const outputLines = (text: string): string[] =>
   sanitizeBlock(text)
     .split("\n")
     .map((line) => line.replaceAll("\t", "  ").trimEnd())
     .filter((line) => line.trim() !== "");
-
-/** `outputLines` of a whole result: no more than `RAIL_CAP`, with a last line counting the rest. */
-export function railOf(text: string): string[] {
-  const lines = outputLines(text);
-  if (lines.length <= RAIL_CAP) return lines;
-  const { ellipsis } = glyphsOf(tierOf(process.env));
-  return [
-    ...lines.slice(0, RAIL_CAP),
-    `${ellipsis} ${lines.length - RAIL_CAP} more lines not shown`,
-  ];
-}

@@ -32,22 +32,28 @@ import {
   type RecordSpec,
   railRoom,
 } from "./record.js";
-import { describeCause, sanitize } from "./text.js";
+import { describeCause, sanitize, sanitizeBlock } from "./text.js";
 
 export interface Row {
   readonly head: RecordSpec;
   /** Child records under the head (a lane tree). */
   readonly children?: readonly RecordSpec[];
   /**
-   * Lines under the record, all sanitized. Until the row is expanded only the first `collapsed`
-   * show, with a muted note of how many are hidden; expanded shows them all. With `markdown`
-   * ink the lines are markdown source, drawn with Pi's markdown colours in the colour tier and as
-   * plain text in the others; the count is of the lines it comes to at the width.
+   * Lines under the record, sanitized when drawn. Until the row is expanded only the first
+   * `collapsed` show (the last, with `tail`), with a muted note of how many are hidden; expanded
+   * shows up to `RAIL_CAP`, with the same note for the rest. With `markdown` ink the lines are
+   * markdown source, drawn with Pi's markdown colours in the colour tier and as plain text in the
+   * others; the count is of the lines it comes to at the width. With `styled` ink the lines carry
+   * their own colour, so the caller has sanitized them, and they are only cut.
    */
   readonly rail?: {
     readonly lines: readonly string[];
     readonly collapsed: number;
-    readonly ink: "muted" | "text" | "markdown";
+    /** Collapsed, keep the last lines instead of the first, the note above them. */
+    readonly tail?: true;
+    /** Drawn after the rest whatever the cap or the collapse, for what must stay in reach: a log path. */
+    readonly foot?: readonly string[];
+    readonly ink: "muted" | "text" | "markdown" | "styled";
   };
 }
 
@@ -66,6 +72,10 @@ export interface ToolView<Args> {
   readonly settled?: Settled;
   /** The content of the latest partial result of a running call, for a tool that streams. */
   readonly partial?: Settled["content"];
+  /** Pi's per-row state, shared with the host's renderers: read it, never write it. */
+  readonly state: object;
+  /** What this row's component keeps between paints; Pi builds a new component when the theme changes. */
+  readonly memo: Memo;
   readonly expanded: boolean;
 }
 
@@ -118,10 +128,19 @@ const markdownThemeOf = (theme: Theme): MarkdownTheme => ({
 const isDrawn = (line: string) => stripTerminalSequences(line).trim() !== "";
 
 /** What a drawn component keeps between paints: markdown caches its parse by text and width. */
-interface Memo {
+export interface Memo {
   markdown?: Markdown;
   source?: string;
+  /** A diff's colouring, which depends on the theme the component was built with. */
+  coloured?: { diff: string; lines: string[] };
 }
+
+/** The most lines an expanded rail draws; a result can hold thousands. */
+const RAIL_CAP = 400;
+
+/** The note a rail or a message leaves for the lines it does not show. */
+const moreLines = (ellipsis: string, hidden: number) =>
+  `${ellipsis} ${plural(hidden, "more line")}`;
 
 function markdownLines(
   theme: Theme,
@@ -154,33 +173,36 @@ function linesOf(
     out.push(drawRecord(paint, child, width, pad));
   const { rail } = row;
   if (!rail) return out;
+  // A styled line carries its own escapes, so only the caller can have made it safe
+  const source =
+    rail.ink === "styled" ? rail.lines : rail.lines.map(sanitizeBlock);
   const wantsMarkdown = rail.ink === "markdown";
   // Markdown draws 24-bit colour, hyperlinks and Unicode rules, which NO_COLOR and TERM=dumb forbid
   const markdown = wantsMarkdown && paint.mode === "color";
   const rendered = markdown
-    ? markdownLines(
-        theme,
-        memo,
-        rail.lines.join("\n"),
-        railRoom(paint, width, pad),
-      )
-    : rail.lines;
+    ? markdownLines(theme, memo, source.join("\n"), railRoom(paint, width, pad))
+    : source;
   // A preview of markdown spends its lines on text, not on the blank lines between blocks
   const lines =
     wantsMarkdown && !expanded ? rendered.filter(isDrawn) : rendered;
-  const shown = expanded ? lines : lines.slice(0, rail.collapsed);
+  const shown = expanded
+    ? lines.slice(0, RAIL_CAP)
+    : rail.tail
+      ? lines.slice(Math.max(0, lines.length - rail.collapsed))
+      : lines.slice(0, rail.collapsed);
   const ink = markdown ? "styled" : wantsMarkdown ? "text" : rail.ink;
-  out.push(...drawRail(paint, shown, ink, width, pad));
   const hidden = lines.length - shown.length;
-  if (hidden > 0)
+  const note =
+    hidden > 0
+      ? drawRail(paint, [moreLines(ellipsis, hidden)], "muted", width, pad)
+      : [];
+  const body = drawRail(paint, shown, ink, width, pad);
+  out.push(
+    ...(rail.tail && !expanded ? [...note, ...body] : [...body, ...note]),
+  );
+  if (rail.foot?.length)
     out.push(
-      ...drawRail(
-        paint,
-        [`${ellipsis} ${plural(hidden, "more line")}`],
-        "muted",
-        width,
-        pad,
-      ),
+      ...drawRail(paint, rail.foot.map(sanitizeBlock), "muted", width, pad),
     );
   return out;
 }
@@ -288,6 +310,8 @@ export function toolRenderers<Args>(
             args: argsOf<Args>(args),
             settled: state.settled,
             partial: state.partial,
+            state: context.state,
+            memo,
             expanded,
           },
           theme,
@@ -329,6 +353,8 @@ export function toolRenderers<Args>(
           {
             args: argsOf<Args>(context.args),
             settled: state.settled,
+            state: context.state,
+            memo,
             expanded,
           },
           theme,
@@ -405,7 +431,7 @@ export function messageComponent(
       return [
         ...shown,
         ...(hidden > 0
-          ? [`${glyphsOf(paint.mode).ellipsis} ${plural(hidden, "more line")}`]
+          ? [moreLines(glyphsOf(paint.mode).ellipsis, hidden)]
           : []),
       ].map(
         (line) =>

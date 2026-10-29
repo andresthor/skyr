@@ -53,8 +53,7 @@ function actionOf(name: string, args: unknown): string {
   );
 }
 
-/** @internal the chrome gets its state from `trackWorking`; the editor tests build one to draw from */
-export function createWorking(): Working & {
+function createWorking(): Working & {
   agentStart(): void;
   toolStart(id: string, name: string, args: unknown): void;
   toolEnd(id: string): void;

@@ -7,10 +7,16 @@ import { keybindings } from "./voice.js";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
+/** Esc as a plain terminal sends it, and as one that speaks the Kitty protocol does. */
+const ESCAPES = ["\x1b", "\x1b[27u"];
 
 /** A real Pi editor under the bar's keys, over a bar that records what it is asked. */
 function barEditor(
-  o: { listing?: () => boolean; user?: Parameters<typeof keybindings>[0] } = {},
+  o: {
+    listing?: () => boolean;
+    idle?: () => boolean;
+    user?: Parameters<typeof keybindings>[0];
+  } = {},
 ) {
   const bar = {
     listing: vi.fn(o.listing ?? (() => true)),
@@ -18,7 +24,11 @@ function barEditor(
     close: vi.fn(),
   };
   const notify = vi.fn();
-  const Editor = withBarKeys(CustomEditor, { bar, notify });
+  const Editor = withBarKeys(CustomEditor, {
+    bar,
+    notify,
+    idle: o.idle ?? (() => true),
+  });
   const ed = new Editor(
     { terminal: { rows: 40 }, requestRender: () => {} } as never,
     { borderColor: (s: string) => s, selectList: {} } as never,
@@ -26,7 +36,9 @@ function barEditor(
   );
   ed.focused = true;
   ed.addToHistory("earlier");
-  return { ed, bar, notify };
+  const onEscape = vi.fn();
+  ed.onEscape = onEscape;
+  return { ed, bar, notify, onEscape };
 }
 
 test("with the bar listing and an empty draft, ↓ and ↑ move the bar and do not reach the editor's history", () => {
@@ -68,7 +80,7 @@ test("rebinding tui.select.down moves the bar's key and gives the old key back t
 
 test("alt+j and alt+k are never taken, and neither are keys the bar does not use", () => {
   const { ed, bar } = barEditor();
-  for (const key of ["\x1bj", "\x1bk", "a", "\r", "\x1b", "\x1b[C"])
+  for (const key of ["\x1bj", "\x1bk", "a", "\r", "\x1b[C"])
     ed.handleInput(key);
   expect(bar.move).not.toHaveBeenCalled();
   expect(bar.close).not.toHaveBeenCalled();
@@ -100,4 +112,60 @@ test("↑ and ↓ reach the editor's history when the bar has nothing to move", 
   ed.handleInput(UP);
   expect(bar.move).toHaveBeenCalledTimes(1);
   expect(ed.getText()).toBe("earlier");
+});
+
+test.each(ESCAPES)(
+  "with the bar open and the agent working, Esc reaches Pi's interrupt and the bar stays open (%j)",
+  (esc) => {
+    const { ed, bar, onEscape } = barEditor({ idle: () => false });
+    ed.handleInput(esc);
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    expect(bar.close).not.toHaveBeenCalled();
+  },
+);
+
+test.each(ESCAPES)(
+  "with the bar open and the agent idle, Esc closes the bar and Pi does not see it (%j)",
+  (esc) => {
+    const { ed, bar, onEscape } = barEditor();
+    ed.handleInput(esc);
+    expect(bar.close).toHaveBeenCalledTimes(1);
+    expect(onEscape).not.toHaveBeenCalled();
+  },
+);
+
+test("with the bar closed, or open but not listing, Esc reaches Pi as before", () => {
+  const { ed, bar, onEscape } = barEditor({ listing: () => false });
+  ed.handleInput("\x1b");
+  expect(onEscape).toHaveBeenCalledTimes(1);
+  expect(bar.close).not.toHaveBeenCalled();
+});
+
+test("autocomplete showing takes Esc", () => {
+  const { ed, bar } = barEditor();
+  vi.spyOn(ed, "isShowingAutocomplete").mockReturnValue(true);
+  ed.handleInput("\x1b");
+  expect(bar.close).not.toHaveBeenCalled();
+});
+
+test("rebinding app.interrupt moves the bar's Esc", () => {
+  const { ed, bar } = barEditor({ user: { "app.interrupt": "ctrl+g" } });
+  ed.handleInput("\x1b");
+  expect(bar.close).not.toHaveBeenCalled();
+  ed.handleInput("\x07");
+  expect(bar.close).toHaveBeenCalledTimes(1);
+});
+
+test("an idle check that throws hands Esc to Pi", async () => {
+  const { ed, bar, notify, onEscape } = barEditor({
+    idle: () => {
+      throw new Error("stale ctx");
+    },
+  });
+  ed.handleInput("\x1b");
+  expect(onEscape).toHaveBeenCalledTimes(1);
+  expect(bar.close).not.toHaveBeenCalled();
+  await Promise.resolve();
+  expect(notify).toHaveBeenCalledTimes(1);
+  expect(notify.mock.calls[0]?.[0]).toContain("stale ctx");
 });

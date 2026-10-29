@@ -1,12 +1,20 @@
 // The editor skyr installs: one factory per terminal session, built from Pi's own editor class.
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createBar } from "../src/chrome/bar.js";
 import { createEditorHost } from "../src/chrome/editor-host.js";
-import { createWorking } from "../src/chrome/working.js";
 import { loaderIndicator } from "../src/ui/spinner.js";
-import { realIndicator } from "./ui.js";
-import { mountedEditor, testPaint, voiceCtx } from "./voice.js";
+import { parentSession } from "./session.js";
+import { realIndicator, recordingUi } from "./ui.js";
+import {
+  keybindings,
+  mountedEditor,
+  testPaint,
+  voiceCtx,
+  withCreds,
+} from "./voice.js";
+import { fakeWorking } from "./working.js";
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
@@ -22,7 +30,7 @@ const ownFrames = loaderIndicator(testPaint()).frames ?? [];
 
 const newHost = () =>
   createEditorHost({
-    working: createWorking(),
+    working: fakeWorking(),
     bar: createBar(),
     mode: "color",
     ownFrames: () => ownFrames,
@@ -41,11 +49,13 @@ const mount = (
   ctx: Ctx,
   reason: "startup" | "reload" | "new" | "resume" | "fork" = "startup",
   entries: Entry[] = [],
+  isIdle: () => boolean = () => true,
 ) =>
   host.mount(
     {
       ui: ctx.ui,
       sessionManager: { buildContextEntries: () => entries },
+      isIdle,
     } as never,
     reason,
   );
@@ -236,7 +246,7 @@ test("the bar's keys sit under the extension: the extension's key hook sees ever
     close: vi.fn(),
   };
   const host = createEditorHost({
-    working: createWorking(),
+    working: fakeWorking(),
     bar,
     mode: "color",
     ownFrames: () => ownFrames,
@@ -259,4 +269,77 @@ test("the bar's keys sit under the extension: the extension's key hook sees ever
   ed.handleInput("\x1b[B");
   expect(seen).toEqual(["\x1b[A", "\x1b[B"]);
   expect(bar.move.mock.calls).toEqual([[1]]);
+});
+
+test("the editor's idle check asks the ctx it was mounted with", async () => {
+  const bar = { listing: vi.fn(() => true), move: vi.fn(), close: vi.fn() };
+  const host = createEditorHost({
+    working: fakeWorking(),
+    bar,
+    mode: "color",
+    ownFrames: () => ownFrames,
+  });
+  const ctx = voiceCtx();
+  let idle = false;
+  await mount(host, ctx, "startup", [], () => idle);
+  const ed = mountedEditor(ctx.ui);
+  ed.handleInput("\x1b");
+  expect(bar.close).not.toHaveBeenCalled();
+  idle = true;
+  ed.handleInput("\x1b");
+  expect(bar.close).toHaveBeenCalledTimes(1);
+});
+
+test("a ctx gone stale reads as busy, so Esc goes to Pi's interrupt", async () => {
+  const bar = {
+    listing: vi.fn(() => true),
+    move: vi.fn(() => true),
+    close: vi.fn(),
+  };
+  const host = createEditorHost({
+    working: fakeWorking(),
+    bar,
+    mode: "color",
+    ownFrames: () => ownFrames,
+  });
+  const ctx = voiceCtx();
+  await mount(host, ctx, "startup", [], () => {
+    throw new Error("stale");
+  });
+  const ed = mountedEditor(ctx.ui);
+  const onEscape = vi.fn();
+  ed.onEscape = onEscape;
+  ed.handleInput("\x1b");
+  expect(onEscape).toHaveBeenCalledTimes(1);
+  expect(bar.close).not.toHaveBeenCalled();
+});
+
+test("skyr's real session mounts the working line over voice over the bar's keys over Pi's editor, so voice sees Esc before the bar", async () => {
+  withCreds();
+  const { ui, calls } = recordingUi();
+  await parentSession({
+    respond: () => fauxAssistantMessage("ok"),
+    mode: "tui",
+    ui,
+  });
+  const factory = calls.find(({ method }) => method === "setEditorComponent")
+    ?.args[0] as (...args: unknown[]) => object;
+  const editor = factory(
+    { requestRender: () => {}, terminal: { rows: 40 } },
+    { borderColor: (s: string) => s, selectList: {} },
+    keybindings(),
+  );
+  const chain: string[] = [];
+  for (
+    let proto = Object.getPrototypeOf(editor);
+    proto && proto.constructor.name !== "Editor";
+    proto = Object.getPrototypeOf(proto)
+  )
+    if (proto.constructor.name) chain.push(proto.constructor.name);
+  expect(chain).toEqual([
+    "WorkingLineEditor",
+    "VoiceEditor",
+    "BarKeysEditor",
+    "CustomEditor",
+  ]);
 });

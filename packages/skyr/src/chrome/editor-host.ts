@@ -25,7 +25,7 @@ export interface EditorHost {
   extend(extension: (Base: PiEditorClass, paint: Paint) => PiEditorClass): void;
   /** Installs the editor for a terminal session, once; leaves the slot alone when another extension holds it. */
   mount(
-    ctx: Pick<ExtensionContext, "ui" | "sessionManager">,
+    ctx: Pick<ExtensionContext, "ui" | "sessionManager" | "isIdle">,
     reason: SessionStartEvent["reason"],
   ): Promise<void>;
   /** Whether Pi still has the host's own factory installed. */
@@ -85,8 +85,18 @@ export function createEditorHost(deps: {
       const paint: Paint = { theme: ctx.ui.theme, mode };
       const notify: ExtensionUIContext["notify"] = (message, type) =>
         ctx.ui.notify(message, type);
-      // Under the extension, so a feature's key hook sees every key before the bar does
-      const Base = withBarKeys(CustomEditor, { bar: deps.bar, notify });
+      const Base = withBarKeys(CustomEditor, {
+        bar: deps.bar,
+        notify,
+        // This mount's own ctx, which goes stale when its session ends; a stale one reads as busy, so Esc stays Pi's
+        idle: () => {
+          try {
+            return ctx.isIdle();
+          } catch {
+            return false;
+          }
+        },
+      });
       const Editor = withWorkingLine(
         extension ? extension(Base, paint) : Base,
         {

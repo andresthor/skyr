@@ -174,6 +174,23 @@ test("a second session_start reinstates the voice editor while ours is the one i
   expect(starts).toHaveLength(1);
 });
 
+test("voice active takes Esc first, and the next Esc closes the bar", async () => {
+  withCreds();
+  agentDirWith();
+  const { starts, start } = recording();
+  const bar = { listing: () => true, move: vi.fn(() => true), close: vi.fn() };
+  const pi = registeredVoice({ mode: "ascii", controller: { start }, bar });
+  const ctx = voiceCtx();
+  await pi.handlers.get("session_start")!(null, ctx);
+  const ed = mountedEditor(ctx.ui);
+  await pi.shortcuts.get(VOICE_SHORTCUT)!.handler(ctx);
+  starts[0]!.onReady?.();
+  ed.handleInput("\x1b");
+  expect(bar.close).not.toHaveBeenCalled();
+  ed.handleInput("\x1b");
+  expect(bar.close).toHaveBeenCalledTimes(1);
+});
+
 test("a foreign editor keeps its place, and dictation still reaches the buffer through setEditorText", async () => {
   withCreds();
   agentDirWith();

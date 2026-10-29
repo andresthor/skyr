@@ -24,9 +24,8 @@ import {
 import { type Mock, onTestFinished, vi } from "vitest";
 // biome-ignore lint/style/noRestrictedImports: Pi builds its app bindings with this class but does not export it from its root
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
-import { createBar } from "../src/chrome/bar.js";
+import { type BarKeys, createBar } from "../src/chrome/bar.js";
 import { createEditorHost } from "../src/chrome/editor-host.js";
-import { createWorking } from "../src/chrome/working.js";
 import { registerSkyr } from "../src/index.js";
 import type { Tier } from "../src/ui/caps.js";
 import type { Paint, ThemeLike } from "../src/ui/palette.js";
@@ -39,6 +38,7 @@ import {
 import { type VoiceDeps, wireVoice } from "../src/voice/index.js";
 import type { VoiceKeys, VoiceSnapshot } from "../src/voice/indicator.js";
 import { scratchDir } from "./session.js";
+import { fakeWorking } from "./working.js";
 
 /** A real Pi editor, focused, with voice's subclass on top. */
 export function realEditor(options: Partial<VoiceEditorOptions> = {}) {
@@ -382,7 +382,7 @@ const noEntries = { buildContextEntries: () => [] };
  * is cached from one test to the next.
  */
 export function registeredVoice(
-  o: VoiceDeps = {},
+  o: VoiceDeps & { bar?: BarKeys } = {},
 ): Captured & { signIns: string[] } {
   const { pi, captured } = fakePi();
   const signIns: string[] = [];
@@ -391,8 +391,8 @@ export function registeredVoice(
     return new Response("unavailable", { status: 503 });
   }) as unknown as typeof fetch;
   const host = createEditorHost({
-    working: createWorking(),
-    bar: createBar(),
+    working: fakeWorking(),
+    bar: o.bar ?? createBar(),
     mode: o.mode,
     ownFrames: () => loaderIndicator(testPaint(o.mode)).frames ?? [],
   });
@@ -402,7 +402,7 @@ export function registeredVoice(
   captured.handlers.set("session_start", async (e, ctx) => {
     if (ctx.mode === "tui" && ctx.hasUI)
       await host.mount(
-        { ui: ctx.ui, sessionManager: noEntries } as never,
+        { ui: ctx.ui, sessionManager: noEntries, isIdle: () => true } as never,
         (e as { reason?: "startup" } | null)?.reason ?? "startup",
       );
     await voiceStart?.(e, ctx);

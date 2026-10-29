@@ -482,6 +482,18 @@ test("voice's mounted editor carries the working line", async () => {
   expect(rows[1]).toBe("─".repeat(60));
 });
 
+test('the interrupt hint still reads "escape interrupt" while the bar is open', async () => {
+  withCreds();
+  agentDirWith();
+  const bar = { listing: () => true, move: () => false, close: () => {} };
+  const voice = registeredVoice({ mode: "color", bar });
+  const ctx = voiceCtx();
+  await voice.handlers.get("session_start")?.(null, ctx);
+  const ed = mountedEditor(ctx.ui);
+  ed.setWorkingStatusIndicator(skyrIndicator());
+  expect(plain(ed.render(60))[0]).toContain("escape interrupt");
+});
+
 test("under TERM=dumb a long action reaches the screen as printable ASCII", () => {
   const working = fakeWorking();
   working.agentStart();

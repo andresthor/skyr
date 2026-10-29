@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { withWorkingLine } from "../src/chrome/editor.js";
-import { createWorking, type Working } from "../src/chrome/working.js";
+import type { Working } from "../src/chrome/working.js";
 import type { Paint } from "../src/ui/palette.js";
 import { loaderIndicator } from "../src/ui/spinner.js";
 import { createVoiceEditorClass } from "../src/voice/editor.js";
@@ -28,6 +28,7 @@ import {
   voiceCtx,
   withCreds,
 } from "./voice.js";
+import { fakeWorking } from "./working.js";
 
 const START = 1_000_000;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the property under test
@@ -61,7 +62,7 @@ interface LineOptions {
 function lineEditor<E extends CustomEditor>(
   Base: EditorClass<E>,
   {
-    working = createWorking(),
+    working = fakeWorking(),
     notify = vi.fn(),
     paint = testPaint(),
     rows = 40,
@@ -87,14 +88,14 @@ const skyrIndicator = (message = "Working", paint = testPaint()) =>
 
 /** A run of the main agent that began `ago` ms ago. */
 function runningFor(ago: number) {
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   vi.advanceTimersByTime(ago);
   return working;
 }
 
 test("with a working indicator a line above the top rule shows the glyph, Pi's message, the elapsed time and the interrupt key, and the top rule is plain", () => {
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   const ed = lineEditor(CustomEditor, { working, paddingX: 1 });
   ed.setWorkingStatusIndicator(skyrIndicator());
@@ -109,7 +110,7 @@ test("with a working indicator a line above the top rule shows the glyph, Pi's m
 const glyphOf = (line = "") => stripTerminalSequences(line).trim().charAt(0);
 
 test("the glyph is the line while bash runs and the star pulse after it ends", () => {
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   const ed = lineEditor(CustomEditor, { working });
   ed.setWorkingStatusIndicator(skyrIndicator());
@@ -128,7 +129,7 @@ test("the glyph is the line while bash runs and the star pulse after it ends", (
 });
 
 test("the glyph is sand while only a subagent call runs", () => {
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   const ed = lineEditor(CustomEditor, { working });
   ed.setWorkingStatusIndicator(skyrIndicator());
@@ -179,7 +180,7 @@ test("retry, compaction and branch-summary indicators draw Pi's own text after s
 });
 
 test("retry text does not shimmer, and the working text does", () => {
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   /** The line 480 ms and 560 ms into an indicator's life: the glyph and the seconds are the same in both. */
   const twoTicks = (kind: "retry" | "working") => {
@@ -237,7 +238,7 @@ test("while dictation holds the interrupt key the line does not name it", () => 
     paint: testPaint(),
     dictating: () => dictating,
   });
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   const ed = lineEditor(Voice, { working, paddingX: 1 });
   ed.setWorkingStatusIndicator(skyrIndicator());
@@ -369,7 +370,7 @@ test("the elapsed time counts from agent_start and reads 1m04s after 64 seconds"
 });
 
 test("the line fits every width 0-200 with a hostile working message, and carries none of its escapes", () => {
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   const ed = lineEditor(CustomEditor, { working, paddingX: 1 });
   const bare = lineEditor(CustomEditor, { paddingX: 1 });
@@ -393,7 +394,7 @@ test("the line fits every width 0-200 with a hostile working message, and carrie
 });
 
 test("the ascii tier draws the line in plain ASCII with no escape", () => {
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   const ed = lineEditor(CustomEditor, {
     working,
@@ -422,7 +423,7 @@ test("the editor starts no timer: rendering it adds none beyond the indicator's 
 });
 
 test("the editor with its line never crashes Pi's renderer at 20, 40 and 86 columns", () => {
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   working.toolStart("a", "bash", { command: `${CORPUS[1]} ${CORPUS[14]}` });
   const ed = lineEditor(CustomEditor, { working, paddingX: 1 });
@@ -450,7 +451,7 @@ test("voice's mounted editor carries the working line", async () => {
 });
 
 test("under TERM=dumb a long action reaches the screen as printable ASCII", () => {
-  const working = createWorking();
+  const working = fakeWorking();
   working.agentStart();
   working.toolStart("a", "bash", { command: "a".repeat(400) });
   const ed = lineEditor(CustomEditor, { working, paint: testPaint("ascii") });

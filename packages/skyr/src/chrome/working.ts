@@ -2,6 +2,7 @@
  * What the main agent is doing, from Pi's events: the run in progress and the tools executing
  * now. The working line reads it on every frame; nothing here draws or keeps time.
  */
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { fitToWidth } from "../ui/fit.js";
 import { sanitize } from "../ui/text.js";
 
@@ -52,6 +53,7 @@ function actionOf(name: string, args: unknown): string {
   );
 }
 
+/** @internal the chrome gets its state from `trackWorking`; the editor tests build one to draw from */
 export function createWorking(): Working & {
   agentStart(): void;
   toolStart(id: string, name: string, args: unknown): void;
@@ -86,4 +88,20 @@ export function createWorking(): Working & {
       running.clear();
     },
   };
+}
+
+/** Records the main agent's run and tool calls from Pi's events, and forgets them at every session start and end. Registers its own handlers. */
+export function trackWorking(pi: Pick<ExtensionAPI, "on">): Working {
+  const working = createWorking();
+  pi.on("session_start", () => working.clear());
+  pi.on("session_shutdown", () => working.clear());
+  pi.on("agent_start", () => working.agentStart());
+  pi.on("agent_end", () => working.clear());
+  // A call another tool made is part of that tool's work, not a second action
+  pi.on("tool_execution_start", (event) => {
+    if (event.parentToolCallId === undefined)
+      working.toolStart(event.toolCallId, event.toolName, event.args);
+  });
+  pi.on("tool_execution_end", (event) => working.toolEnd(event.toolCallId));
+  return working;
 }

@@ -1,32 +1,9 @@
 // What the main agent is doing, as skyr's chrome learns it from Pi's events.
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { registerChrome } from "../src/chrome/index.js";
 import { CORPUS } from "./ui.js";
-
-type Handler = (event: unknown, ctx: unknown) => void;
-
-/** skyr's chrome on a fake Pi that keeps its handlers, so a test fires the events Pi would. */
-function chromeOnFakePi() {
-  const handlers = new Map<string, Handler>();
-  const pi = {
-    on: (event: string, fn: Handler) => handlers.set(event, fn),
-    registerShortcut: () => {},
-  };
-  const { working } = registerChrome(pi as unknown as ExtensionAPI);
-  const emit = (event: string, payload: object = {}) =>
-    handlers.get(event)?.(payload, { mode: "print" });
-  const start = (id: string, name: string, args: unknown, parent?: string) =>
-    emit("tool_execution_start", {
-      toolCallId: id,
-      toolName: name,
-      args,
-      parentToolCallId: parent,
-    });
-  return { working, emit, start };
-}
+import { chromeOnFakePi } from "./working.js";
 
 beforeEach(() => {
   vi.useFakeTimers();

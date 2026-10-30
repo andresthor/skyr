@@ -373,7 +373,7 @@ describe("bash rows", () => {
     });
     expect(plain(host.lines(80)).slice(1)).toEqual([
       expect.stringMatching(/^ ✓ bash {5}make +1\.2s$/),
-      "   │ … 1 more line",
+      "   │ six",
       "   │ seven",
       "   │ eight",
       "   │ nine",

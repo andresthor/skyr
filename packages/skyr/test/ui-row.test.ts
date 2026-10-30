@@ -77,6 +77,15 @@ describe("toolRenderers", () => {
       expect(drawn).not.toContain(bad);
   });
 
+  test("a rail that hides exactly one line draws that line: the note would cost its row", () => {
+    const host = toolRowHost(probe, { name: "hello" });
+    host.update({
+      content: [{ type: "text", text: "head\none\ntwo" }],
+      durationMs: 900,
+    });
+    expect(plain(host.lines(60)).slice(2)).toEqual(["   │ one", "   │ two"]);
+  });
+
   test("expanding a row never changes its first line", () => {
     const host = toolRowHost(probe, { name: "hello" });
     host.update({

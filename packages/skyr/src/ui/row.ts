@@ -185,11 +185,13 @@ function linesOf(
   // A preview of markdown spends its lines on text, not on the blank lines between blocks
   const lines =
     wantsMarkdown && !expanded ? rendered.filter(isDrawn) : rendered;
-  const shown = expanded
+  let shown = expanded
     ? lines.slice(0, RAIL_CAP)
     : rail.tail
       ? lines.slice(Math.max(0, lines.length - rail.collapsed))
       : lines.slice(0, rail.collapsed);
+  // The note that hides one line would cost that line its row, so draw the line
+  if (lines.length - shown.length === 1) shown = lines.slice(0);
   const ink = markdown ? "styled" : wantsMarkdown ? "text" : rail.ink;
   const hidden = lines.length - shown.length;
   const note =

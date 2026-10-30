@@ -1,387 +1,130 @@
-# skyr
+<h3 align="center">
+  skyr
+</h3>
+
+<p align="center">
+  Extensions for the <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent">Pi coding agent</a> — web tools, subagents, voice dictation, background shells and a readier terminal UI.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent">
+    <img src="https://img.shields.io/badge/Pi-%E2%89%A5%201.3.0-8bd5ca?style=for-the-badge&colorA=363a4f" alt="Pi ≥ 1.3.0"/>
+  </a>
+  &nbsp;
+  <a href="./LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-f5a97f?style=for-the-badge&colorA=363a4f" alt="License: MIT"/>
+  </a>
+</p>
+
+<p align="center">
+  <!-- hero screenshot: theme-aware <picture> block goes here -->
+  <picture></picture>
+</p>
 
 *Skýr* — Icelandic for clear, sharp. Without the accent, the yoghurt: made by stirring a
 spoonful of the last batch into the next.
 
-My setup for the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent),
-as a Pi package.
+A Pi package: tools and a terminal UI that every session of the Pi coding agent loads. Pi runs
+the TypeScript source directly, so there is nothing to build.
 
-## Install
+## Features
 
-Needs Pi 1.3.0 or later. From a checkout:
+- **Web tools** — `web_fetch` returns one URL as markdown and refuses private and local addresses; `web_search` tries Tavily, then Exa, then Parallel, each taking over when the one before fails, with no key needed.
+- **Subagents from markdown** — an agent is a markdown file; up to eight tasks run in parallel or in the background, and a writer without a directory gets its own fresh git worktree.
+- **Nothing is lost to a timeout** — a `bash` call still running at 120 s becomes a background job, `bash_stop` and `/shells` manage it, and the model is told when it ends.
+- **`ask_user`** — questions with options in place of the input editor, up to four at once, with a Review tab and a receipt that survives a resume.
+- **Dictation** — `ctrl+space` dictates into the input editor: interims follow the cursor as ghost text, commits land at the cursor, and text is never auto-sent.
+- **Advisor** — a stronger model reviews the session before the agent commits to an approach or declares a task done, once `skyr.json` names one.
+- **A three-line footer** — context meter, turns and cost, cache hit rate, and per-provider spend for the day and the month.
+- **Restyled built-in rows** — diffs on `edit` records, output tails on `bash` records, `ctrl+o` expands.
+
+&nbsp;
+
+## Quick start
 
 ```sh
-pi install /path/to/skyr/packages/skyr    # every `pi` loads it from then on
-pi -e /path/to/skyr/packages/skyr         # or try it for one run
+git clone https://github.com/andresthor/skyr.git
+pi install ./skyr/packages/skyr      # every `pi` from then on loads it
 ```
 
-Pi loads the TypeScript source directly, so edits apply on the next start.
+Needs Pi 1.3.0 or later. To try it without installing:
 
-## Tools
-
-- `web_fetch` — fetches one URL as markdown; refuses private and local addresses.
-- `web_search` — searches through Tavily, then Exa, then Parallel, each taking over when the one
-  before fails; no key needed. `TAVILY_API_KEY`, `EXA_API_KEY` or `PARALLEL_API_KEY` moves that
-  service off its rate-limited free tier. Queries go to those services and may carry
-  conversation content.
-- `subagent` — hands tasks to agents defined in markdown files. Each agent runs as a fresh
-  session with its own context and returns only its final answer. The tasks of one call run in
-  parallel; Esc stops them unless the call runs in the background.
-- `bash` — Pi's own `bash` with the same parameters, output and limits, plus `background`; a slow
-  call keeps running as a background job. See [Background shells](#background-shells).
-- `bash_stop` — stops a background job by its id; see [Background shells](#background-shells).
-- `/shells` — opens the bar on this session's background jobs and stops them; see
-  [Background shells](#background-shells).
-- `ask_user` — asks you a question in place of the input editor and waits for your answer; see
-  [Ask user](#ask-user).
-- `advisor` — asks a stronger model to review the session so far; off until `skyr.json` names a
-  model; see [Advisor](#advisor).
-
-## Ask user
-
-The model can ask you a question in place of the input editor and wait. Pick an option with the
-arrows and Enter, or with its number, or tick several with Space or their numbers when the
-question allows it, or type your own answer in the `Other` row. The option the model recommends
-is marked and the cursor starts on it; nothing is ticked for you. Esc declines, and the model is
-told to stop and wait; on a row holding text, Esc first clears it. It can ask up to four questions
-at once: Tab and Shift+Tab move between them, Space picks an option without moving on, and a Review
-tab reads every answer back as one receipt before you send them. The tabs and where you are sit in
-the dialog's top line, the keys in its bottom line, which drops the least useful ones first on a
-narrow pane. A question left unanswered goes to the model as not answered; sending none declines.
-The answers stay in the transcript as one row, `Colour → green · Extras → salt; pepper`, the same
-receipt, after a resume too. The terminal bell rings when a question opens.
-
-The terminal offers the tool, and so does a host that embeds Pi and answers form requests over
-Pi's event bus, where the questions become one form in the client; the bus contract a host
-implements is documented in the [tengi](https://github.com/andresthor/tengi) README. Runs without
-such a host, like print, JSON and plain RPC, hide it from the model, and subagents never get it. A half-typed draft comes back when the dialog
-closes; a large paste comes back written out in full instead of as its `[paste #…]` marker.
-
-## Editor
-
-While Pi works, the editor draws a working line above its top rule: a spinner that follows
-what the agent does (a star pulse while it thinks, a line while a tool runs, sand while it waits
-on subagents, a sparkle while Pi retries or compacts), the running tool and what it works on or
-else Pi's working message, the time since the run began and the interrupt key. Pi's own loader,
-shown where skyr's editor is not installed, uses the same star pulse. `NO_COLOR` drops the
-shimmer on the text, and `TERM=dumb` gets an ASCII line.
-
-skyr installs this editor in every terminal session; voice, when its credentials resolve,
-extends it. If another extension installs its own editor first, skyr leaves it: no working
-line, and Pi's own loader shows. A `/reload` keeps a draft's text and refills ↑ history with the session's
-prompts (not slash or `!` commands, nor prompts before a compaction), and drops undo; as in Pi itself, a large paste's contents are dropped too and its `[paste #…]`
-marker stays literal.
-
-## Voice
-
-`ctrl+space` (or `/voice`) starts dictating into the input editor: spoken words commit at the
-cursor as plain text, with the interim ones following the cursor as ghost text. Esc cancels and
-puts the editor back the way it was, Enter stops without sending (the next Enter sends), so text
-is never auto-sent. Quiet only asks the server for the pending final early — it never ends a
-dictation. Without `CORTI_*` credentials, `/voice` says so in one line and does nothing else.
-`/voice on` starts a dictation and leaves a running one alone; `/voice off` discards it like
-Esc. Any other argument is refused with the valid forms. A dialog from any extension that takes
-the keyboard stops a running dictation as Enter does: the mic closes, and words already spoken
-land in the editor once it is back.
-
-While voice is on, the editor's bottom rule shows it: a level meter that rises only for speech,
-`●` while the mic records (`○` before the first audio and after it closes), the state
-(`starting`, `listening`, `finishing`), and the keys that apply right now. Esc and ctrl+c both
-discard; if they reverted words already committed, the rule offers `ctrl+-` to undo that for two
-seconds or until the next key. The footer shows the same marks only while the voice editor
-cannot carry its rule — a card has the keyboard, another extension owns the editor, or the
-rule drawing failed. Under `NO_COLOR` the marks stay and lose their colour; `TERM=dumb` gets
-ASCII.
-
-Credentials, like every other secret here, come from the environment:
-
-```
-CORTI_ENVIRONMENT          e.g. eu
-CORTI_TENANT_NAME          the tenant realm
-CORTI_CLIENT_ID
-CORTI_CLIENT_SECRET
+```sh
+pi -e ./skyr/packages/skyr          # for one run
 ```
 
-Behaviour knobs live in `<agentDir>/skyr.json` under the `voice` key:
+Edits to the source apply on the next start.
+
+&nbsp;
+
+## What's inside
+
+Tools the model gets:
+
+| Tool | What it does | Details |
+| --- | --- | --- |
+| `web_search` | searches the web, cascading providers, no key needed | [docs/tools.md](docs/tools.md) |
+| `web_fetch` | fetches one URL as markdown; refuses private and local addresses | [docs/tools.md](docs/tools.md) |
+| `subagent` | hands tasks to agents defined in markdown files; tasks run in parallel or in the background | [docs/subagents.md](docs/subagents.md) |
+| `bash`, `bash_stop` | Pi's own `bash` plus background jobs that outlive their timeout | [docs/background-shells.md](docs/background-shells.md) |
+| `ask_user` | asks you a question in place of the input editor and waits | [docs/ask-user.md](docs/ask-user.md) |
+| `advisor` | asks a stronger model for a second opinion, once configured | [docs/advisor.md](docs/advisor.md) |
+
+What changes on your screen:
+
+| Piece | What it does | Details |
+| --- | --- | --- |
+| Editor | a working line with a spinner, the running tool and the interrupt key; `/reload` keeps the draft and refills ↑ history | [docs/editor.md](docs/editor.md) |
+| Voice | `ctrl+space` or `/voice` dictates into the input editor | [docs/voice.md](docs/voice.md) |
+| Bar | one line above the editor with every live subagent and shell; `/subagents` and `/shells` open it | [docs/subagents.md](docs/subagents.md) |
+| Footer | context meter, turns and cost, token totals, per-provider spend | [docs/footer.md](docs/footer.md) |
+| Built-in tool rows | restyled records for Pi's seven built-in tools | [docs/tool-rows.md](docs/tool-rows.md) |
+
+Hosts building their own Pi distribution can embed skyr with `await registerSkyr(pi)` — see
+[docs/embedding.md](docs/embedding.md).
+
+&nbsp;
+
+## Configuration
+
+Everything lives in `<agentDir>/skyr.json` — `<agentDir>` is the agent dir Pi runs,
+`~/.pi/agent` by default. Most keys apply from the next session:
 
 ```json
 {
-  "voice": {
-    "language": "en-US",
-    "interims": true,
-    "punctuation": "automatic",
-    "keyterms": ["TypeScript"],
-    "replacements": [{ "find": "type script", "replace": "TypeScript" }],
-    "formatting": { "numbers": "numerals", "times": "h24" }
-  }
+  "advisor": { "model": "corti/corti-s1-beta" },
+  "voice": { "language": "en-US", "keyterms": ["TypeScript"] },
+  "ui": { "footer": true, "builtinRows": true }
 }
 ```
 
-`keyterms` and `replacements` are appended to the built-in coding vocabulary; edits apply on the
-next session. A malformed section degrades to the defaults and is reported once per session,
-never a startup failure. Term caps are Corti's: 50 chars / 5 words per keyterm, 100 chars / 10 words per
-replacement, 1,000 per connection.
+- [`advisor`](docs/advisor.md) — off until a model is named; every call sends the whole branch to that model's provider.
+- [`voice`](docs/voice.md) — language, keyterms, replacements and Corti formatting rules; `CORTI_*` credentials come from the environment.
+- [`ui`](docs/footer.md) — give Pi's footer and rows back with `false` values. See also [built-in rows](docs/tool-rows.md).
 
-`formatting` sets how Corti writes `dates`, `times`, `numbers`, `measurements`, `numericRanges`
-and `ordinals`, with the values in [Corti's formatting docs](https://docs.corti.ai/stt/formatting);
-a field left out keeps Corti's default.
-
-## Subagents
-
-An agent is a markdown file. The frontmatter describes it; the body is added to its system
-prompt.
-
-```markdown
----
-name: scout                  # optional; defaults to the file name
-description: Finds code and explains how something works in this repository.
-tools: read, grep, find, ls  # optional; Claude Code names such as Read or Glob also work
-model: provider/model-id     # optional; anything `pi --model` accepts; defaults to the parent's
----
-You are a scout. …
-```
-
-Pi looks for agents in `agents/` under its config dir (`~/.pi/agent/agents/` by default) and, in
-a project Pi trusts, in `.claude/agents/` at the repo root (Claude Code's location) and in
-`.pi/agents/`. A project agent replaces a user agent of the same name, and a `.pi/agents/` agent
-replaces a `.claude/agents/` one.
-Edits apply after `/reload`. An agent with a field skyr does not act on, such as Claude Code's
-`disallowedTools` or another extension's, still loads; the field is named in a warning. Without
-`tools`, an agent gets `read`, `grep`, `find`, `ls`, `bash`, `web_search` and `web_fetch`. Pi
-lists the agents to the model.
-
-A call runs one to eight tasks, each in its own subagent and each with its job in `prompt`: they run
-in parallel and can't see each other's answers, and a foreground call returns once the last of them
-ends, with every answer in task order. A call with a bad task runs none of them, and its error names
-every bad task. A task needs no agent file: without `agent` it gets a general-purpose subagent with
-Pi's own prompt, the default tools, the parent's model and working directory. On any task, `role`
-(added to the system prompt), `tools`, `model` and `cwd` (an existing directory) override what the
-agent file or the default gives. A call fails only when no task gave an answer.
-
-A subagent whose tools include `edit` or `write` is a writer, and one writer runs per directory at
-a time: a second one for the same directory, from the same call or another, waits until the first
-ends. Writers in different directories, such as worktrees you made, run in parallel. A directory
-other than the parent's takes its project trust from Pi's own record for it, then from the parent's
-verdict. A writer task with no `cwd` runs in its own fresh git worktree (cut from HEAD, under the
-session's directory) instead of queueing: its answer states the path and branch, its writes are
-uncommitted there (usually untracked), and the note carries the inspect and commit-then-merge
-recipes. Nothing deletes a worktree automatically; in a non-git directory a bare writer falls back
-in-tree and its answer says so.
-
-With `background: true` on the call, it returns at once and each task's answer arrives later as a
-message that starts a new turn, once the parent is idle; answers that end while the parent is busy
-arrive together. Esc does not stop a background subagent; `/subagents` opens the bar on the live
-ones and `/subagents stop <id|slot|all>` stops them, one task at a time or all (a slot is the number
-the bar shows, and a stop names what it stopped). A `/reload` stops background
-subagents; the reloaded session receives one message naming each, so the model knows their answers
-will not come. A call's row in the transcript is a record, `✓ agent "label"` with its turns, tokens,
-time and id; several tasks get a header with their shared mark (`!` for a mix) and one record each
-under it. An HTML export draws each finished skyr row (for the built-in tools, `grep` and `find`
-only: Pi's export template draws the others itself) with its running head above it, because Pi
-gives the export's call no sign of being finished. A bar above the editor shows what runs: nothing at rest; while subagents or shells
-run, one line with a mark per run, the latest action and the longest running time; a failed
-background subagent or shell leads it, with its reason, until you open the bar. `alt+a` opens and
-closes the bar and `alt+s` switches between its AGENTS and SHELLS tabs; `/subagents` and `/shells`
-open the bar on their tab (on macOS `alt` needs Option-as-Meta; the commands always work). An open bar lists
-each run with its slot number, latest action, turns, tools, time and id, dropping columns as the
-pane narrows. It draws as many rows as the pane has room for and scrolls with ↑↓ (a "+N more"
-line marks the side where rows are hidden); under 12 terminal rows or 44 columns it stays a pulse,
-and `alt+a`, `alt+s`, `/subagents` and `/shells` list in a notice instead. With the bar open and the prompt empty, ↑ and ↓ (Pi's `tui.select.up`
-and `tui.select.down`) move a highlight through the rows, and Esc (`app.interrupt`) closes the bar
-when the agent is idle and still interrupts when something is. Pi's idle check does not see a
-running `!` command, so then Esc closes the bar first and a second Esc stops it; with a `!ls`
-draft in the box and the bar open, the first Esc closes the bar instead of leaving bash mode. A
-rebinding of those ids moves the keys, and a key the editor shares with them is the bar's while it
-lists. ↑↓ stay the editor's when the bar has nothing to move, and under another extension's
-editor (see Editor) the bar has no keys of its own. The bar is drawn only in
-Pi's terminal UI;
-rpc clients and print mode get none, and there `/subagents` and `/shells` list in a notice. A
-delivered message shows one record per subagent, with the first lines of its answer under it, or
-why it gave none; expand it to read the rest. A background subagent's token usage is in the delivered message, not in the
-footer.
-
-The model reads each answer inside a `<subagent-answer>` block, foreground or delivered, whose
-attributes carry the run's status, tokens and 8-char `id`; the subagent's own text can't open or
-close a block, and harness notes (a spill file, a worktree) follow it. A background start names
-the same id. A task with `continue: <id>` starts a second run on a finished subagent's
-saved session — same agent, tools, model and directory, a fresh prompt. The ids are valid in the
-current session only, and survive a `/reload`, a background subagent it stopped included; other
-sessions can't continue from them.
-
-A subagent runs in-process by default, but runs as its own process when (a) the child entry can
-load (a jiti-backed TypeScript child, checked by a one shot smoke probe per session) and (b) the
-call's model works from the agent dir's own `auth.json` + `models.json` — a model that only
-resolves in the parent's runtime (faux, registered providers, `--api-key` keys) stays in-process.
-Progress crosses back over a file protocol: a 500 ms heartbeat snapshot plus one final result.
-A stopped heart's bar row shows `stalled`; nothing kills a stalled child, the user decides
-via `/subagents stop`. A child process that is killed reports no token usage. A crashed host's
-finished answers are collected and delivered on the next session start; nothing keeps a stale
-child crossing sessions. Pi saves a turn's tool results only once its slowest call ends, so a
-hard kill before then loses answers that had already ended; their child session files stay on
-disk.
-
-`packages/skyr/examples/agents/` has three to copy: `scout`, `reviewer` and `web-researcher`.
-
-## Background shells
-
-skyr serves Pi's own `bash` in the TUI and in RPC mode, built from Pi's definition so a call
-behaves as Pi's does, with output, limits and `shellPath` unchanged. What it adds is that a command
-is not lost to a timeout or a wait: it can keep running, and the model is told when it ends.
-
-- **A slow call moves.** A call still running after 120 s is not killed. It keeps running as a
-  background job, the call returns what it printed so far with the job's id and log path, and a
-  message tells the model when the job ends. A `timeout` of 120 s or less keeps Pi's kill and stays
-  in the foreground; a longer `timeout` becomes the job's deadline.
-- **`background: true`** starts the command as a job and returns at once, for servers, watchers
-  and builds. `timeout`, if set, is the job's deadline. If the job can't be identified, it runs as a
-  normal call and moves at 120 s.
-- **`bash_stop {id}`** stops a job: SIGTERM to its process group, then SIGKILL after 5 s.
-  Stopping a job that has ended is not an error. Processes that leave the group (`setsid`,
-  `docker run -d`, `tmux`) are neither tracked nor stopped.
-- **`/shells`** opens the bar on this session's jobs; outside the terminal UI, or on a pane too
-  small for the tab, it lists them, running first, with their state and log. `/shells stop
-  <id|slot|$slot|all>` stops them (a bare number is a slot, as on agents); the model is told, without a new turn. Running jobs also show in the
-  bar above the editor (see Subagents; Pi's terminal UI only), and in an ACP client's task list,
-  where a moved call's card points to its job's task instead of showing an exit code.
-- **Messages.** A job's end arrives when the session is idle and starts a turn: its exit code or
-  how it was stopped, the last lines of output and the log path. After a `/compact` the model is
-  reminded of the jobs still running. A shell that exits and leaves processes in its group is
-  reported once as lingering, and `bash_stop` ends them. In the transcript a job's end is one record, with its exit code and time, and
-  its log path under `ctrl+o`; the output and the model's instructions are not drawn.
-
-**When skyr leaves `bash` alone.** Print and json runs and Windows keep Pi's `bash`, silently, and
-so do a subagent's children. skyr steps aside, with a warning that names the cause ("background
-shells are off because …; bash is left as it is"), when another extension or the host already
-provides `bash`, when Pi's `bash` takes other parameters than `command` and `timeout`, when
-`shellPath` is not bash, sh, zsh, dash or ksh, when `ps` is missing or cannot identify Pi's own
-process, or when the job directory can't be created.
-
-One case is not detected. Pi picks a tool by extension load order, and skyr registers `bash` in
-its `session_start`. An extension that loads after skyr and registers its own `bash` in its
-`session_start` or later (a sandbox switched on by a command, say) is silently shadowed by skyr's:
-skyr checked before it registered, and nothing reports it.
-
-**Jobs end with Pi.** `/reload` hands running jobs to the reloaded session. `/quit`, `/new` and
-`/resume` stop them (SIGTERM, then SIGKILL after 5 s), so quitting can take up to 6 s while a job
-ignores SIGTERM. Closing the terminal, or a SIGTERM to Pi, stops them the same way. A job's output
-still runs through Pi, so after a hard kill (SIGKILL, out of memory) a job dies the next time it
-writes; a quiet one keeps running until the next session's cleanup stops it, and the session that
-started it is told it ended with Pi. Under tengi, jobs end when tengi exits.
-Job directories are kept for seven days.
-
-## Advisor
-
-The `advisor` tool lets the model ask a stronger model for a second opinion: before it
-commits to an approach, when it is stuck, and before it declares a task done. It takes no
-arguments; skyr sends the session as a transcript and returns the advice as the tool result.
-
-It is off until `<agentDir>/skyr.json` names a model, in Pi's `provider/id` form:
-
-```json
-{ "advisor": { "model": "corti/corti-s1-beta" } }
-```
-
-The model must be one Pi knows (`/model` lists them) and has credentials for; otherwise the
-tool stays off and a warning says why (an unknown model when the session starts, missing
-credentials at the first prompt). Remove the key to turn it off; the change applies from the
-next session.
-
-**Privacy.** Once a model is set, every advisor call sends the active branch to that model's
-provider: your messages, the agent's messages and latest reasoning, every tool call and
-result (file contents and command output included), and the system prompt. `skyr.json` is
-per agent dir, so this holds in every project that agent dir serves.
-
-**Cost.** Each call sends the whole branch as input, so a call on a long session costs about
-as much as one request of that size to the advisor's model. Only what is new since the last
-call is uncached, so where the provider caches prompts, a call within a few minutes of the
-previous one reads the earlier part from the cache and costs a fraction of the first. Its tokens
-and cost count toward the session totals in the footer and `/session`.
-
-A session too long for the advisor's context window is cut: each part keeps its first and last
-user message, the call to the advisor and its most recent turns; then whole parts go, oldest
-first, though the first part always stays; and every cut is marked so the advisor knows what it
-cannot see. Parts go a few at a time, so the calls between two cuts still read the earlier parts
-from the cache; until the session is long enough for that, each call that has to drop one more
-part misses the cache.
-
-## Footer
-
-skyr replaces Pi's footer in the terminal UI, in up to three lines.
-
-- **First:** the context window's use as a percentage, a meter and tokens over the window; the
-  session's turns and cost; the model and its thinking level; the profile (the agent dir's parent:
-  `experimental`, or `pi` for `~/.pi/agent`) and the time. The cost is Pi's own total plus the usage
-  of background subagent runs delivered into the session, which Pi leaves out.
-- **Second:** the directory, git branch and session name; the token totals (`↑` input, `↓` output,
-  `R` cache read, `W` cache write) and the latest response's cache hit rate (`CH`); and the spend of
-  the provider of the current model, `anthropic Σ $4.12·day  $102·mo`: today and the last 30 local
-  days, never summed across providers.
-- **Third:** other extensions' statuses, when there are any.
-
-On a narrow pane a line gives up its parts one by one. The spend comes from the session files under
-the running profile's `<agentDir>/sessions` (a custom `sessionDir` setting is not followed), children
-of subagents included, a fork's copied entries counted once, git worktrees skipped, and files more
-than six levels down left out. skyr scans them in short slices when a session starts and after every agent run, and
-reads only what a file has gained since.
-
-The footer is drawn only in Pi's terminal UI. `{"ui": {"footer": false}}` in `<agentDir>/skyr.json`
-leaves Pi's footer, from the next session.
-
-## Built-in tool rows
-
-Pi's seven built-in tools, `read`, `write`, `edit`, `bash`, `grep`, `find` and `ls`, draw records in
-the transcript: `✓ grep "pattern" src` with the count of matches and files (or lines, or entries)
-and the time. A failure shows its reason and up to three lines of the tool's message; for `bash`,
-the last three lines of its output (and the path of its full log, when Pi kept one) and `exit 2`.
-A successful `bash` row keeps the last three lines of its output, so the tail it showed while
-running stays when the call settles. `ctrl+o` shows the listing, the file or the
-output, up to 400 lines and a count of the rest. A running `bash` row shows the last three lines of
-its output so far and no clock: the working line and the bar carry the time. An `edit` shows its
-diff under the record: once its arguments are complete, the diff Pi computes from the file while
-the call runs; after the result, the diff Pi saved, six lines collapsed with a count and all of it
-under `ctrl+o`, with `+N −M` on the record. A result skyr does not recognise is drawn as Pi's own
-row for it, with whatever colour Pi gives it: text for most tools, and its coloured card for an edit.
-
-skyr restyles only Pi's own renderers, through Pi's public tool renderer resolver; another
-extension's override of a built-in tool is left as it is. `{"ui": {"builtinRows": false}}` in
-`<agentDir>/skyr.json` gives Pi's rows back, from the next `/reload` or restart.
-
-## Embedding it
-
-A host that builds its own Pi distribution can call `await registerSkyr(pi)` instead of
-loading the default export — see `packages/skyr/src/index.ts`. The promise settles once
-skyr's shells `session_start` handler is in place; a session that starts before then keeps Pi's
-own `bash`, and skyr serves it from the next session start.
+&nbsp;
 
 ## Developing
+
+<details>
+<summary>Commands and scratch configs</summary>
 
 ```sh
 pnpm install
 pnpm test        # vitest across packages
 pnpm typecheck
-pnpm lint        # biome, knip (nothing unused; test-only exports need @internal), bin/craft-check.mjs
+pnpm lint        # biome, knip, bin/craft-check.mjs
 pnpm format      # biome: apply its fixes
 ```
 
-To try changes without touching your own `~/.pi`, run Pi against a separate config dir:
+To try changes without touching your own `~/.pi`, run Pi against a separate config dir —
+`bin/experimental`, `lib/pi-profile.sh` and `pi -ne` are covered in
+[docs/developing.md](docs/developing.md).
 
-```
-bin/experimental                  pi against configs/experimental/agent — own settings, sessions and login
-source lib/pi-profile.sh <name>   points plain `pi` at configs/<name>/agent for this shell
-pi -ne                            bare pi: no extensions, no skyr
-```
+</details>
 
-`PI_CODING_AGENT_DIR` relocates Pi's whole config dir, so configs run side by side and share
-nothing. Config dirs hold credentials and sessions and are gitignored.
-
-`bin/experimental` also attaches the extensions listed in `PI_EXTRA_EXTENSIONS` (colon-separated
-paths) — useful for ones your own `~/.pi` loads that should follow you into the scratch config.
-Set it for one run, or keep it in a gitignored `.env` at the repo root:
-
-```sh
-PI_EXTRA_EXTENSIONS="$HOME/.pi/agent/extensions/my-extension.ts"
-```
+&nbsp;
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

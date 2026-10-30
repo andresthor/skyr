@@ -104,8 +104,11 @@ export function wireVoice(
   // The session context of the last session start or toggle, for reading the buffer outside a callback;
   // no dictation starts without one (toggle sets it), so reads never race a session.
   let ctxRef: ExtensionContext | undefined;
-  // What the next dictation configures Corti with: skyr.json as the last session_start read it.
-  let config = parseVoiceSection(undefined).config;
+  // What the next dictation configures Corti with, and how long one may run: skyr.json as the
+  // last session_start read it.
+  const initial = parseVoiceSection(undefined);
+  let config = initial.config;
+  let maxMs = initial.maxSeconds * 1000;
 
   const repaint = () => tui?.requestRender();
   // Ours only while Pi still has the host's factory installed: an extension may replace it at any time.
@@ -133,6 +136,7 @@ export function wireVoice(
     {
       creds,
       config: () => config,
+      maxMs: () => maxMs,
       sink,
       onLevel: (dbfs) => display.level(dbfs),
       onChange: () => display.refresh(),
@@ -222,6 +226,7 @@ export function wireVoice(
     display.stop();
     const read = parseVoiceSection(await readSkyrSection("voice"));
     config = read.config;
+    maxMs = read.maxSeconds * 1000;
     // once per session; a malformed section degrades to defaults, never breaks the start
     if (read.problems.length)
       ctx.ui.notify(read.problems.join("\n"), "warning");

@@ -62,6 +62,9 @@ const VOICE_DEFAULTS: SttConfig = {
   formatting: {},
 };
 
+/** The hard cap on one dictation's default length, in seconds; skyr's own limit, Corti has none. */
+const DEFAULT_MAX_SECONDS = 300;
+
 /** Corti's documented values per field, its default first; a value Corti adds later is refused
  * here until it is listed. */
 const FORMATTING: Readonly<Record<keyof Formatting, readonly string[]>> = {
@@ -227,17 +230,42 @@ function parseFormatting(raw: unknown, problem: Problem): Formatting {
 }
 
 /**
+ * The `voice.maxSeconds` knob: skyr's own hard cap on one dictation, in seconds; never sent to
+ * Corti, unlike every SttConfig field. Never throws; anything but a finite number ≥ 1 falls
+ * back to the default, and each problem is one line naming the fallback.
+ */
+function parseMaxSeconds(raw: unknown, problems: string[]): number {
+  const value =
+    typeof raw === "object" && raw !== null && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>).maxSeconds
+      : undefined;
+  if (value === undefined) return DEFAULT_MAX_SECONDS;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 1)
+    return value;
+  problems.push(
+    `skyr.json: voice.maxSeconds must be a number of seconds, at least 1; using ${DEFAULT_MAX_SECONDS}`,
+  );
+  return DEFAULT_MAX_SECONDS;
+}
+
+/**
  * The Corti config the section asks for, with the built-in coding vocabulary merged in: what a
  * session is started with. Never throws; a wrong-typed field drops to its default, and each
  * problem is one line naming the field and the fallback.
  */
 export function parseVoiceSection(raw: unknown): {
   config: SttConfig;
+  /** The hard cap on one dictation, in seconds. */
+  maxSeconds: number;
   problems: string[];
 } {
   const problems: string[] = [];
   const user = userSettings(raw, problems);
-  return { config: withVocabulary(user), problems };
+  return {
+    config: withVocabulary(user),
+    maxSeconds: parseMaxSeconds(raw, problems),
+    problems,
+  };
 }
 
 /** The section's own settings, before the built-ins; each problem is pushed onto `problems`. */
@@ -253,10 +281,10 @@ function userSettings(raw: unknown, problems: string[]): SttConfig {
   }
   const section = raw as Record<string, unknown>;
   for (const key of Object.keys(section))
-    if (!Object.hasOwn(VOICE_DEFAULTS, key))
+    if (!Object.hasOwn(VOICE_DEFAULTS, key) && key !== "maxSeconds")
       problem(
         quoted(key, ECHO_CHARS),
-        `is not a setting; ignored (settings: ${Object.keys(VOICE_DEFAULTS).join(", ")})`,
+        `is not a setting; ignored (settings: ${[...Object.keys(VOICE_DEFAULTS), "maxSeconds"].join(", ")})`,
       );
 
   const {

@@ -53,8 +53,6 @@ export interface DictationTiming {
   flushMs: number;
   /** Give up with no speech and no words this long after Corti accepts the session. */
   noSpeechMs: number;
-  /** Hard cap on one dictation; stops and keeps, as if toggled. */
-  maxMs: number;
   /** Give up if the server has not accepted the session by then. */
   armTimeoutMs: number;
   /** How long an error line stays up. */
@@ -73,7 +71,6 @@ export const DEFAULT_TIMING: DictationTiming = {
   tailMs: 400,
   flushMs: 900,
   noSpeechMs: 8_000,
-  maxMs: 120_000,
   armTimeoutMs: 10_000,
   errorHoldMs: 4_000,
   discardHoldMs: 2_000,
@@ -118,6 +115,9 @@ export interface DictationControllerOptions {
   creds: SttCredentials;
   /** What a dictation configures Corti with, read each time one starts. */
   config: () => SttConfig;
+  /** The hard cap on one dictation in ms, read each time one starts; it stops and keeps, as if
+   * toggled. */
+  maxMs: () => number;
   sink: DictationSink;
   /** Fires when the state changes or a final lands. micOpen and heardSpeech move
    * without it, reaching the screen on the display's own tick instead. */
@@ -190,7 +190,7 @@ export class DictationController {
       state: this.curState,
       stateMs: now - this.stateSince,
       sinceStartMs,
-      capLeftMs: this.timing.maxMs - sinceStartMs,
+      capLeftMs: this.o.maxMs() - sinceStartMs,
       micOpen: this.d?.mic === "open",
       heardSpeech: this.d?.heard ?? false,
       noSpeechLeftMs:
@@ -335,7 +335,7 @@ export class DictationController {
           ),
         );
     });
-    this.later(d, this.timing.maxMs, () => {
+    this.later(d, this.o.maxMs(), () => {
       if (this.curState === "listening") this.finish();
     });
   }

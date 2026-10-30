@@ -43,6 +43,10 @@ Behaviour knobs live in `<agentDir>/skyr.json` under the `voice` key:
 }
 ```
 
+`maxSeconds` caps one dictation (default 300): when it runs out, the dictation stops and keeps
+what it heard, as if toggled off, counting down its last 15 seconds on the rule. It is skyr's
+own limit — Corti has none — and never reaches Corti's config.
+
 `keyterms` and `replacements` are appended to the built-in coding vocabulary; edits apply on the
 next session. A malformed section degrades to the defaults and is reported once per session,
 never a startup failure. Term caps are Corti's: 50 chars / 5 words per keyterm, 100 chars / 10 words per

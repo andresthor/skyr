@@ -22,12 +22,14 @@ const TIMING: DictationTiming = {
   tailMs: 400,
   flushMs: 900,
   noSpeechMs: 8_000,
-  maxMs: 120_000,
   armTimeoutMs: 10_000,
   errorHoldMs: 4_000,
   discardHoldMs: 2_000,
   stallMs: 1_500,
 };
+
+/** The hard cap the harness starts dictations with, in ms. */
+const MAX_MS = 120_000;
 
 const CONFIG: SttConfig = {
   language: "en",
@@ -70,6 +72,7 @@ class FakeSession implements SttSession {
 function harness(
   timing: Partial<DictationTiming> = {},
   o: {
+    maxMs?: number;
     onLevel?: (dbfs: number) => void;
     stopNeverResolves?: boolean;
     sinkOverride?: Partial<DictationSink>;
@@ -84,6 +87,7 @@ function harness(
     {
       creds: CREDS,
       config: () => CONFIG,
+      maxMs: () => o.maxMs ?? MAX_MS,
       sink: {
         begin: () => events.push({ op: "begin" }),
         interim: (s) => events.push({ op: "interim", arg: s }),
@@ -236,7 +240,7 @@ test("a failure before any words says only what went wrong", () => {
 });
 
 test("the hard cap stops like Enter does, keeping the tail so the last word isn't clipped", async () => {
-  const h = harness({ maxMs: 1_000 });
+  const h = harness({}, { maxMs: 1_000 });
   h.controller.toggle();
   h.opts().onReady?.();
   h.opts().onLevel?.(SPEECH);
@@ -474,12 +478,12 @@ test("a drain that outlasts the stall window is not a dead mic: the mic closed o
 test("the time left before the cap counts from this dictation's start", async () => {
   const h = harness();
   h.controller.toggle();
-  expect(h.controller.facts().capLeftMs).toBe(TIMING.maxMs);
+  expect(h.controller.facts().capLeftMs).toBe(MAX_MS);
   await vi.advanceTimersByTimeAsync(60);
-  expect(h.controller.facts().capLeftMs).toBe(TIMING.maxMs - 60);
+  expect(h.controller.facts().capLeftMs).toBe(MAX_MS - 60);
   h.controller.cancel();
   h.controller.toggle();
-  expect(h.controller.facts().capLeftMs).toBe(TIMING.maxMs);
+  expect(h.controller.facts().capLeftMs).toBe(MAX_MS);
   h.controller.cancel();
 });
 
@@ -539,7 +543,7 @@ test("a stop while Corti still connects fails as Corti not answering if it never
 });
 
 test("the hard cap stops only a listening dictation: one still connecting is left to its own timeout", async () => {
-  const h = harness({ maxMs: 1_000 });
+  const h = harness({}, { maxMs: 1_000 });
   h.controller.toggle();
   h.opts().onLevel?.(SPEECH);
   await vi.advanceTimersByTimeAsync(1_000);

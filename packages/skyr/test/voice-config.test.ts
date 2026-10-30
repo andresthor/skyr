@@ -83,7 +83,7 @@ describe("parseVoiceSection", () => {
     });
     expect(config.language).toBe("da");
     expect(problems).toEqual([
-      'skyr.json: voice."colors" is not a setting; ignored (settings: language, interims, punctuation, keyterms, replacements, formatting)',
+      'skyr.json: voice."colors" is not a setting; ignored (settings: language, interims, punctuation, keyterms, replacements, formatting, maxSeconds)',
     ]);
   });
 
@@ -282,5 +282,27 @@ describe("the built-in vocabulary", () => {
     }
     const finds = DEFAULTS.replacements.map((r) => r.find.toLowerCase());
     expect(new Set(finds).size).toBe(finds.length);
+  });
+});
+
+describe("maxSeconds", () => {
+  test("an absent section caps a dictation at the default", () => {
+    expect(parseVoiceSection(undefined).maxSeconds).toBe(300);
+  });
+
+  test("a number of seconds passes through and never reaches the Corti config", () => {
+    const { maxSeconds, config } = parseVoiceSection({ maxSeconds: 90 });
+    expect(maxSeconds).toBe(90);
+    expect(config).toEqual(DEFAULTS);
+  });
+
+  test("anything but a finite number of at least 1 degrades to the default, one problem naming it", () => {
+    for (const value of [0, -5, "90", null, true, Number.POSITIVE_INFINITY]) {
+      const { maxSeconds, problems } = parseVoiceSection({ maxSeconds: value });
+      expect(maxSeconds).toBe(300);
+      expect(problems).toEqual([
+        "skyr.json: voice.maxSeconds must be a number of seconds, at least 1; using 300",
+      ]);
+    }
   });
 });

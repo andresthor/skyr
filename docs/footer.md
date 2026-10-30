@@ -15,8 +15,11 @@ skyr replaces Pi's footer in the terminal UI, in up to three lines.
 On a narrow pane a line gives up its parts one by one. The spend comes from the session files under
 the running profile's `<agentDir>/sessions` (a custom `sessionDir` setting is not followed), children
 of subagents included, a fork's copied entries counted once, git worktrees skipped, and files more
-than six levels down left out. skyr scans them in short slices when a session starts and after every agent run, and
-reads only what a file has gained since.
+than six levels down left out. What counts for a provider is its assistant messages, its usage
+entries, and a tool result whose details name the reviewing model — the advisor's calls, whose
+cost would otherwise sit on the session total while billing that provider invisibly. skyr scans
+them in short slices when a session starts and after every agent run, and reads only what a file
+has gained since.
 
 The footer is drawn only in Pi's terminal UI. `{"ui": {"footer": false}}` in `<agentDir>/skyr.json`
 leaves Pi's footer, from the next session.

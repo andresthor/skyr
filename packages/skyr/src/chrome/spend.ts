@@ -91,7 +91,20 @@ const field = (value: unknown, key: string): unknown =>
     ? (value as Record<string, unknown>)[key]
     : undefined;
 
-/** Who a session line charged, when, and how much; undefined for a line that names no provider. */
+/**
+ * The provider a model spec names: `corti/corti-s1-beta` → `corti`. A spec without a `/` names
+ * none, so it stays out rather than billing a bucket nothing reads.
+ */
+function providerOfModel(spec: unknown): string | undefined {
+  if (typeof spec !== "string" || spec.indexOf("/") <= 0) return undefined;
+  return spec.slice(0, spec.indexOf("/"));
+}
+
+/**
+ * Who a session line charged, when, and how much; undefined for a line that names no provider.
+ * A tool result carries none itself — its call was another model's, and the advisor's details
+ * name that model — so its provider is derived where the record holds no field of its own.
+ */
 function chargeOf(line: string, earliest: number): Charge | undefined {
   let entry: unknown;
   try {
@@ -105,10 +118,14 @@ function chargeOf(line: string, earliest: number): Charge | undefined {
   const holder =
     type === "usage"
       ? entry
-      : type === "message" && field(message, "role") === "assistant"
+      : type === "message" &&
+          (field(message, "role") === "assistant" ||
+            field(message, "role") === "toolResult")
         ? message
         : undefined;
-  const provider = field(holder, "provider");
+  const provider =
+    field(holder, "provider") ??
+    providerOfModel(field(field(holder, "details"), "model"));
   const cost = field(field(field(holder, "usage"), "cost"), "total");
   const stamp = field(entry, "timestamp");
   if (typeof provider !== "string" || typeof stamp !== "string")

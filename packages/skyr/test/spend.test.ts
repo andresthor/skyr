@@ -48,6 +48,25 @@ const usageEntry = (provider: string, cost: number, at: Date) =>
     usage: { cost: { total: cost } },
   });
 
+/** An advisor-shaped tool result: the review's usage on it, the reviewing model in its details. */
+const toolResult = (
+  cost: number,
+  at: Date,
+  details: unknown,
+  isError = false,
+) =>
+  JSON.stringify({
+    type: "message",
+    timestamp: at.toISOString(),
+    message: {
+      role: "toolResult",
+      toolName: "advisor",
+      isError,
+      usage: { cost: { total: cost } },
+      details,
+    },
+  });
+
 /** A sessions root, files written under it by relative path. */
 function tree() {
   const root = join(scratchDir("sessions"), "sessions");
@@ -112,16 +131,11 @@ test("a provider's figures never include another's", async () => {
   expect(spend.figures("openai")).toEqual({ day: 0, month: 0 });
 });
 
-test("entries with no provider, and tool-result, compaction and branch-summary usage, are not attributed", async () => {
+test("entries with no provider, and compaction and branch-summary usage, are not attributed", async () => {
   const files = tree();
   const cost = { usage: { cost: { total: 7 } } };
   files.write("--a--/s1.jsonl", [
     assistant(undefined, 7, noon(0)),
-    JSON.stringify({
-      type: "message",
-      timestamp: noon(0).toISOString(),
-      message: { role: "toolResult", provider: "p", ...cost },
-    }),
     JSON.stringify({
       type: "compaction",
       timestamp: noon(0).toISOString(),
@@ -138,6 +152,33 @@ test("entries with no provider, and tool-result, compaction and branch-summary u
   const spend = harness(files.root);
   await spend.scan();
   expect(spend.figures("p")).toEqual({ day: 1, month: 1 });
+});
+
+test("a tool result's usage is attributed to the model its details name, a failed review included", async () => {
+  const files = tree();
+  files.write("--a--/s1.jsonl", [
+    toolResult(0.25, noon(0), { model: "corti/corti-s1-beta", tokens: 100 }),
+    toolResult(0.13, noon(0), { model: "corti/corti-s1-beta" }, true),
+  ]);
+  const spend = harness(files.root);
+  await spend.scan();
+  expect(spend.figures("corti")).toEqual({ day: 0.38, month: 0.38 });
+});
+
+test("a tool result that names no provider of its own adds nothing, however big its usage", async () => {
+  const files = tree();
+  // The subagent's own shape: the run's usage aggregated on the result, a list of runs as its
+  // details. The child's own session file carries that spend, so this copy must not double-bill.
+  files.write("--a--/s1.jsonl", [
+    toolResult(5, noon(0), [
+      { model: "corti/corti-s1", usage: { cost: { total: 5 } } },
+    ]),
+    toolResult(1, noon(0), { model: "no-slash-model" }),
+  ]);
+  files.write("--a--/s1/child.jsonl", [assistant("corti", 5, noon(0))]);
+  const spend = harness(files.root);
+  await spend.scan();
+  expect(spend.figures("corti")).toEqual({ day: 5, month: 5 });
 });
 
 test("entries without a finite non-negative cost or a timestamp are skipped", async () => {

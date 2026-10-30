@@ -42,6 +42,8 @@ export interface Parent
   /** Every request faux received, from the parent and from any child on its provider. */
   requests: TranscriptContext[];
   notices: string[];
+  /** The footer statuses, by `setStatus` key; a clear deletes, as Pi's footer data does. */
+  statuses: Map<string, string>;
 }
 
 type Widget = Component & { dispose?(): void };
@@ -232,10 +234,15 @@ export async function parentSession(o: {
   });
   const { setWidget, ...widgets } = widgetHost();
   const notices: string[] = [];
+  const statuses = new Map<string, string>();
   // Own keys only: Pi spreads the UI object. Pi itself calls none of the other methods.
   const uiContext = {
     setWidget,
     notify: (message: string) => notices.push(message),
+    setStatus: (key: string, text: string | undefined) => {
+      if (text === undefined) statuses.delete(key);
+      else statuses.set(key, text);
+    },
     setWorkingIndicator: () => {},
     setFooter: () => {},
     getEditorComponent: () => undefined,
@@ -257,6 +264,7 @@ export async function parentSession(o: {
     requests,
     ...widgets,
     notices,
+    statuses,
   };
 }
 

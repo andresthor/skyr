@@ -12,8 +12,8 @@ It is off until `<agentDir>/skyr.json` names a model, in Pi's `provider/id` form
 
 The model must be one Pi knows (`/model` lists them) and has credentials for; otherwise the
 tool stays off and a warning says why (an unknown model when the session starts, missing
-credentials at the first prompt). Remove the key to turn it off; the change applies from the
-next session.
+credentials at the first prompt), while the footer carries `! adv off` from the session's first
+prompt on. Remove the key to turn it off; the change applies from the next session.
 
 **Privacy.** Once a model is set, every advisor call sends the active branch to that model's
 provider: your messages, the agent's messages and latest reasoning, every tool call and

@@ -133,6 +133,32 @@ describe("activation and config", () => {
     expect(credentials()).toHaveLength(2);
   });
 
+  test.each(["tui", "rpc"] as const)(
+    "a model Pi cannot run keeps `! adv off` on the status bar (%s)",
+    async (mode) => {
+      const parent = await parentSession({
+        respond: answer,
+        mode,
+        skyr: { advisor: { model: "faux/nope" } },
+      });
+      await parent.session.prompt("go");
+
+      expect(parent.statuses.get("skyr.advisor")).toBe("! adv off");
+    },
+  );
+
+  test("a model that runs leaves the status bar clear, dropping any earlier signal", async () => {
+    const parent = await parentSession({
+      respond: answer,
+      mode: "tui",
+      skyr: ADVISOR_ON,
+    });
+    parent.statuses.set("skyr.advisor", "! adv off");
+    await parent.session.prompt("go");
+
+    expect(parent.statuses.get("skyr.advisor")).toBeUndefined();
+  });
+
   test("a broken skyr.json is reported once, not once per module", async () => {
     const parent = await parentSession({
       respond: answer,

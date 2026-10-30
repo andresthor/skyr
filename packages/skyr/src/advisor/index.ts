@@ -7,11 +7,14 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ModelRegistry,
+  Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readSkyrSection } from "../config.js";
 import { loadPi } from "../pi.js";
+import { glyphsOf, tierOf } from "../ui/caps.js";
 import { formatTokens } from "../ui/format.js";
+import { styled } from "../ui/palette.js";
 import {
   durationFact,
   failedRow,
@@ -44,6 +47,22 @@ interface AdvisorDetails {
 }
 
 const ERROR_CHARS = 200;
+
+const ADVISOR_STATUS_KEY = "skyr.advisor";
+
+/**
+ * The footer row while `skyr.json` names a model Pi cannot run: the warning mark and `adv off`,
+ * written at each prompt from the first one on. The glyph carries the state, so a terminal
+ * without colour still reads it. Rpc's ui has no theme although the type declares one, so the
+ * row goes plain there.
+ */
+function offSignal(theme: Theme | undefined): string {
+  const mode = tierOf(process.env);
+  const text = `${glyphsOf(mode).mark.mixed} adv off`;
+  return theme
+    ? styled({ theme, mode }, text, { fg: theme.colors.warning })
+    : text;
+}
 
 // A thrown call persists `details: {}`, and a restored session may hold an older shape.
 function isAdvice(details: unknown): details is AdvisorDetails {
@@ -171,6 +190,15 @@ export function registerAdvisor(pi: ExtensionAPI): void {
         "warning",
       );
     }
+    // The notice above is one toast; this is its durable form, on the footer from the session's
+    // first prompt on. Cleared by Pi when the session ui resets, re-armed at the next prompt.
+    // Only tui and rpc carry statuses, so they are the only modes written.
+    const off = "missing" in resolved && resolved.missing !== "unset";
+    if (ctx.mode === "tui" || ctx.mode === "rpc")
+      ctx.ui.setStatus(
+        ADVISOR_STATUS_KEY,
+        off ? offSignal(ctx.ui.theme) : undefined,
+      );
     const wanted = "model" in resolved;
     const active = pi.getActiveTools();
     if (wanted === active.includes("advisor")) return;

@@ -20,7 +20,7 @@ import {
   type ToolView,
   toolRenderers,
 } from "../ui/row.js";
-import { oneLine, quoted, sanitize } from "../ui/text.js";
+import { clip, oneLine, quoted, sanitize } from "../ui/text.js";
 import {
   ANSWER_CHARS,
   type AnswerEntry,
@@ -86,6 +86,8 @@ const UNANSWERED =
 const CLOSED =
   "ask_user: the client closed the dialog without an answer. Do not guess the answer; end your turn and wait for the user's next message.";
 const ERROR_CHARS = 200;
+// Under Pi's 2048-byte status cap, which cuts without an ellipsis
+const STATUS_CHARS = 200;
 
 const asked = (question: string) => sanitize(question).trim().toLowerCase();
 
@@ -315,6 +317,20 @@ function dialogQueue(): (
 }
 
 /**
+ * What Pi's program status and herdr's pane say while the dialog waits, in Claude Code's shape
+ * for its own questions: `answer: <question> (<label> · <label>)`, the first question only, with
+ * `+N more` for the rest. One line of model text, sanitised and clipped.
+ */
+function waitingOn(questions: readonly AskQuestion[]): string {
+  const [first, ...rest] = questions;
+  const parts = [`answer: ${sanitize(first?.question ?? "").trim()}`];
+  const labels = first?.options?.map((o) => sanitize(o.label).trim());
+  if (labels) parts.push(`(${labels.join(" · ")})`);
+  if (rest.length > 0) parts.push(`+${rest.length} more`);
+  return clip(parts.join(" "), STATUS_CHARS);
+}
+
+/**
  * Asks in the dialog, drawn in place of the editor until the user answers or declines
  * (`undefined`); an abort, or a failure inside `custom()` to open or to draw, is thrown with the
  * text the model should read.
@@ -323,10 +339,12 @@ async function inDialog(
   ui: ExtensionContext["ui"],
   questions: readonly AskQuestion[],
   signal: AbortSignal | undefined,
-  pi: Pick<ExtensionAPI, "getThinkingLevel">,
+  pi: Pick<ExtensionAPI, "getThinkingLevel" | "events">,
 ): Promise<Answers | undefined> {
   let onAbort: (() => void) | undefined;
+  let opened = false;
   let answers: Answers | undefined | Error;
+  const waiting = waitingOn(questions);
   try {
     answers = await ui.custom<Answers | undefined | Error>(
       (tui, theme, keys, done) => {
@@ -334,19 +352,25 @@ async function inDialog(
         signal?.addEventListener("abort", onAbort, { once: true });
         // The factory is the only place with the terminal
         tui.terminal.write("\x07");
-        return createAskDialog(questions, {
+        const dialog = createAskDialog(questions, {
           paint: { theme, mode: tierOf(process.env) },
           // Read at mount, where a throw fails the call; the dialog draws it in the colour tier only
           rule: theme.getThinkingBorderColor(pi.getThinkingLevel()),
           keys,
           done,
         });
+        // herdr's Pi integration counts opens; the finally below closes this one exactly once
+        pi.events.emit("herdr:blocked", { active: true, label: waiting });
+        opened = true;
+        return dialog;
       },
+      { blocked: { kind: "question", message: waiting } },
     );
   } catch (error: unknown) {
     throw failed(error instanceof Error ? error.message : String(error));
   } finally {
     if (onAbort) signal?.removeEventListener("abort", onAbort);
+    if (opened) pi.events.emit("herdr:blocked", { active: false });
   }
   if (answers instanceof Error) throw failed(answers.message);
   // An answer given before a late abort is kept; only an empty close reads the signal

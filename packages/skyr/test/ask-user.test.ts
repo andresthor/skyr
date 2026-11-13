@@ -64,6 +64,7 @@ interface Opened {
   component: Component;
   done(result: unknown): void;
   write: ReturnType<typeof vi.fn>;
+  options: Parameters<ExtensionUIContext["custom"]>[1];
 }
 
 type Factory = (
@@ -105,7 +106,7 @@ function dialogs(o: { theme?: Theme } = {}) {
   const state = { maxMounted: 0, opened: opens.count };
 
   const custom = vi.fn(
-    (factory: Factory) =>
+    (factory: Factory, options?: Opened["options"]) =>
       new Promise((resolve, reject) => {
         if (failNext) {
           const error = failNext;
@@ -130,7 +131,7 @@ function dialogs(o: { theme?: Theme } = {}) {
         if ("focused" in component) component.focused = true;
         mountedNow++;
         state.maxMounted = Math.max(state.maxMounted, mountedNow);
-        opens.arrive({ component, done, write });
+        opens.arrive({ component, done, write, options });
       }),
   );
   return {
@@ -542,6 +543,198 @@ test("escape sequences, bidi overrides and wide text from the model or the user 
   expectInert(submitTab, 40);
   press(review.component, ENTER);
   await two;
+});
+
+/** What herdr's Pi integration hears on the bus, in order. */
+function herdrHears(bus: EventBus): unknown[] {
+  const heard: unknown[] = [];
+  bus.on("herdr:blocked", (data) => {
+    heard.push(data);
+  });
+  return heard;
+}
+
+const herdrOpen = (label: string) => ({ active: true, label });
+const HERDR_CLOSE = { active: false };
+
+test("while a dialog waits, skyr hands Pi's status and herdr's pane 'answer:', the first question, its option labels and how many questions follow", async () => {
+  const fake = dialogs();
+  const bus = createEventBus();
+  const heard = herdrHears(bus);
+  const { session } = await parentSession({
+    mode: "tui",
+    ui: fake.ui,
+    eventBus: bus,
+    respond: steps(
+      [askCall("pick")],
+      [askCall("free", { ...NAME, options: undefined })],
+      [fauxToolCall("ask_user", TWO, { id: "two" })],
+    ),
+  });
+  const run = session.prompt("go");
+  const shown: unknown[] = [];
+  for (const keys of [
+    [ENTER],
+    ["skyr", ENTER],
+    [ENTER, "skyr", ENTER, ENTER],
+  ]) {
+    const opened = await fake.nextOpen();
+    shown.push(opened.options);
+    press(opened.component, ...keys);
+  }
+  await run;
+
+  const expected = [
+    "answer: Which storage should the cache use? (SQLite · Postgres)",
+    "answer: What should it be called?",
+    "answer: Which storage should the cache use? (SQLite · Postgres) +1 more",
+  ];
+  expect(shown).toEqual(
+    expected.map((message) => ({ blocked: { kind: "question", message } })),
+  );
+  expect(heard).toEqual(
+    expected.flatMap((label) => [herdrOpen(label), HERDR_CLOSE]),
+  );
+});
+
+test("escape sequences, bidi overrides, zero-widths and newlines from the model never reach the waiting status, which is one line cut to 200 characters and an ellipsis", async () => {
+  const bus = createEventBus();
+  const heard = herdrHears(bus);
+  const tool = registered("tui", bus);
+  const fake = dialogs();
+  const statusOf = async (params: unknown) => {
+    const call = execute(tool, fake.ui, params);
+    const opened = await fake.nextOpen();
+    press(opened.component, ENTER);
+    await call;
+    return opened.options?.blocked?.message ?? "";
+  };
+
+  const hostile = await statusOf(
+    ask({
+      question: `Pick\none ${HOSTILE}${ZERO_WIDTH}?`,
+      options: [{ label: `a${HOSTILE}` }, { label: `b${ZERO_WIDTH}c${BIDI}` }],
+    }),
+  );
+  const long = await statusOf(ask({ question: `${"word ".repeat(100)}?` }));
+
+  for (const message of [hostile, long]) {
+    expect(message).not.toMatch(/\p{Cc}/u);
+    for (const text of ["cHduZWQ", BIDI, ZERO_WIDTH])
+      expect(message).not.toContain(text);
+  }
+  expect(hostile).toMatch(/^answer: Pick one evil.*\? \(aevil.* · bc\)$/);
+  expect(long.startsWith("answer: word word")).toBe(true);
+  expect(long.endsWith("…")).toBe(true);
+  expect([...long]).toHaveLength(201);
+  expect(heard).toEqual([
+    herdrOpen(hostile),
+    HERDR_CLOSE,
+    herdrOpen(long),
+    HERDR_CLOSE,
+  ]);
+});
+
+const WAITING =
+  "answer: Which storage should the cache use? (SQLite · Postgres)";
+const throwingTheme = () =>
+  Object.assign(piTheme(), {
+    style: () => {
+      throw new Error("boom");
+    },
+  });
+
+test.each<[string, (() => Theme) | undefined, (opened: Opened) => void]>([
+  ["is answered", undefined, (o: Opened) => press(o.component, ENTER)],
+  ["is declined", undefined, (o: Opened) => press(o.component, ESC)],
+  ["fails to draw", throwingTheme, (o: Opened) => void o.component.render(40)],
+])(
+  "herdr's pane is marked blocked once while the dialog is open, and cleared once when it %s",
+  async (_, theme, close) => {
+    const bus = createEventBus();
+    const heard = herdrHears(bus);
+    const fake = dialogs({ theme: theme?.() });
+    const call = execute(registered("tui", bus), fake.ui).catch(
+      (error: unknown) => error,
+    );
+    const opened = await fake.nextOpen();
+    expect(heard).toEqual([herdrOpen(WAITING)]);
+    close(opened);
+    await call;
+    expect(heard).toEqual([herdrOpen(WAITING), HERDR_CLOSE]);
+  },
+);
+
+test("a dialog Pi mounts and then fails to show still clears herdr's blocked mark once", async () => {
+  const bus = createEventBus();
+  const heard = herdrHears(bus);
+  const fake = dialogs();
+  // Pi rejects custom() when showing the mounted component throws
+  const ui = {
+    ...fake.ui,
+    custom: (factory: Factory) => {
+      factory(
+        { terminal: { rows: 40, write() {} }, requestRender() {} },
+        piTheme(),
+        keybindings(),
+        () => {},
+      );
+      return Promise.reject(new Error("boom"));
+    },
+  } as unknown as ReturnType<typeof dialogs>["ui"];
+  await expect(execute(registered("tui", bus), ui)).rejects.toThrow(
+    failedWith("boom"),
+  );
+  expect(heard).toEqual([herdrOpen(WAITING), HERDR_CLOSE]);
+});
+
+test("an abort while the dialog is open clears herdr's blocked mark once, through Pi's own bus", async () => {
+  const fake = dialogs();
+  const bus = createEventBus();
+  const heard = herdrHears(bus);
+  const { session } = await parentSession({
+    mode: "tui",
+    ui: fake.ui,
+    eventBus: bus,
+    respond: steps([askCall("a")]),
+  });
+  const run = session.prompt("go");
+  await fake.nextOpen();
+  expect(heard).toEqual([herdrOpen(WAITING)]);
+  await session.abort();
+  await run;
+  expect(heard).toEqual([herdrOpen(WAITING), HERDR_CLOSE]);
+});
+
+test("a call aborted before its dialog opens, or aborted waiting behind another, or whose dialog fails to open or to mount, sends herdr nothing", async () => {
+  const bus = createEventBus();
+  const heard = herdrHears(bus);
+  const tool = registered("tui", bus);
+  const fake = dialogs();
+
+  const aborted = new AbortController();
+  aborted.abort();
+  await expect(execute(tool, fake.ui, ask(), aborted.signal)).rejects.toThrow(
+    ABORTED,
+  );
+  const first = execute(tool, fake.ui);
+  const waiting = new AbortController();
+  const queued = execute(tool, fake.ui, ask(), waiting.signal);
+  const open = await fake.nextOpen();
+  waiting.abort();
+  await expect(queued).rejects.toThrow(ABORTED);
+  press(open.component, ENTER);
+  await first;
+  fake.failNextOpen(new Error("boom"));
+  await expect(execute(tool, fake.ui)).rejects.toThrow(failedWith("boom"));
+  const unreadable = registered("tui", bus, () => {
+    throw new Error("not initialized");
+  });
+  await expect(execute(unreadable, fake.ui)).rejects.toThrow(
+    failedWith("not initialized"),
+  );
+
+  expect(heard).toEqual([herdrOpen(WAITING), HERDR_CLOSE]);
 });
 
 test("the call row survives arguments that are still streaming in", () => {

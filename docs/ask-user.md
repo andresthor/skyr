@@ -10,7 +10,10 @@ tab reads every answer back as one receipt before you send them. The tabs and wh
 the dialog's top line, the keys in its bottom line, which drops the least useful ones first on a
 narrow pane. A question left unanswered goes to the model as not answered; sending none declines.
 The answers stay in the transcript as one row, `Colour → green · Extras → salt; pepper`, the same
-receipt, after a resume too. The terminal bell rings when a question opens.
+receipt, after a resume too. The terminal bell rings when a question opens. While it is open, a
+terminal or dashboard that reads Pi's program status, and a herdr pane, show Pi blocked on one
+line in Claude Code's shape, `answer: Which storage? (SQLite · Postgres)`, with `+1 more` when
+further questions follow; it carries the model's words, cleaned and cut to 200 characters.
 
 The terminal offers the tool, and so does a host that embeds Pi and answers form requests over
 Pi's event bus, where the questions become one form in the client; the bus contract a host

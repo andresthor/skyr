@@ -532,7 +532,7 @@ describe("the result", () => {
     const [result] = advisorResults(parent.session);
     expect(result?.isError).toBe(false);
     expect(result?.content).toEqual([{ type: "text", text: advice }]);
-    expect(result?.usage?.input).toBeGreaterThan(0);
+    expect(result?.usage?.totalTokens).toBeGreaterThan(0);
     expect(result?.details).toEqual({
       model: "faux/faux-2",
       tokens: result?.usage?.totalTokens,

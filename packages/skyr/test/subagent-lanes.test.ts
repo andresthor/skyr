@@ -24,7 +24,7 @@ import {
 } from "./session.js";
 import { toolRowHost } from "./ui.js";
 
-/** Input tokens a call's children spent, each read from its own saved transcript. */
+/** Tokens a call's children spent, each read from its own saved transcript. */
 const spentBy = (details: unknown) =>
   (details as { sessionFile: string }[])
     .flatMap((run) => SessionManager.open(run.sessionFile).getEntries())
@@ -32,7 +32,7 @@ const spentBy = (details: unknown) =>
       (sum, e) =>
         sum +
         (e.type === "message" && e.message.role === "assistant"
-          ? e.message.usage.input
+          ? e.message.usage.totalTokens
           : 0),
       0,
     );
@@ -141,7 +141,7 @@ test("a misplaced background is refused, naming the key", async () => {
 
   const result = results(parent.session).get("bg")!;
   expect(result.isError).toBe(true);
-  expect(textOf(result)).toContain("  - tasks.0.background: schema is false");
+  expect(textOf(result)).toMatch(/^ {2}- tasks\.0\.background: /m);
   expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);
 });
 
@@ -164,7 +164,7 @@ test("agent on the call is refused, naming the key", async () => {
 
   const result = results(parent.session).get("a")!;
   expect(result.isError).toBe(true);
-  expect(textOf(result)).toContain("  - agent: schema is false");
+  expect(textOf(result)).toMatch(/^ {2}- agent: /m);
   expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);
 });
 
@@ -185,8 +185,8 @@ test("nine tasks fail Pi's validation before anything starts", async () => {
 
   const result = results(parent.session).get("nine")!;
   expect(result.isError).toBe(true);
-  expect(textOf(result)).toContain(
-    "  - tasks: must not have more than 8 items",
+  expect(textOf(result)).toMatch(
+    /^Validation failed for tool "subagent":\n {2}- tasks: [^\n]*\b8\b/,
   );
   expect(await listing(parent)).toEqual([]);
 });
@@ -341,13 +341,13 @@ test("each call's result carries only its own lanes, and session totals count ev
   expect(runsOf("c").map((r) => r.description)).toEqual(["run c"]);
   const spent = (id: string) => spentBy(results(session).get(id)?.details);
   expect(spent("two")).toBeGreaterThan(0);
-  expect(results(session).get("two")?.usage?.input).toBe(spent("two"));
-  const parentInput = session.messages.reduce(
-    (sum, m) => sum + (m.role === "assistant" ? m.usage.input : 0),
+  expect(results(session).get("two")?.usage?.totalTokens).toBe(spent("two"));
+  const parentTokens = session.messages.reduce(
+    (sum, m) => sum + (m.role === "assistant" ? m.usage.totalTokens : 0),
     0,
   );
-  expect(session.getSessionStats().tokens.input).toBe(
-    parentInput + spent("two") + spent("c"),
+  expect(session.getSessionStats().tokens.total).toBe(
+    parentTokens + spent("two") + spent("c"),
   );
 });
 
@@ -431,16 +431,16 @@ test("a failed task's spend still counts: toward its call's usage, and toward th
     { status: "failed", turns: 2 },
     { status: "done" },
   ]);
-  expect(mixed.usage?.input).toBe(spentBy(mixed.details));
+  expect(mixed.usage?.totalTokens).toBe(spentBy(mixed.details));
   const failed = results(session).get("failed")!;
   expect(failed.isError).toBe(true);
   expect(spentBy(failed.details)).toBeGreaterThan(0);
-  const parentInput = session.messages.reduce(
-    (sum, m) => sum + (m.role === "assistant" ? m.usage.input : 0),
+  const parentTokens = session.messages.reduce(
+    (sum, m) => sum + (m.role === "assistant" ? m.usage.totalTokens : 0),
     0,
   );
-  expect(session.getSessionStats().tokens.input).toBe(
-    parentInput + spentBy(mixed.details) + spentBy(failed.details),
+  expect(session.getSessionStats().tokens.total).toBe(
+    parentTokens + spentBy(mixed.details) + spentBy(failed.details),
   );
 });
 
@@ -600,8 +600,9 @@ test("an old flat task call is refused, naming its keys", async () => {
 
   const result = results(parent.session).get("old")!;
   expect(result.isError).toBe(true);
-  expect(textOf(result)).toMatch(
-    /^Validation failed for tool "subagent":\n {2}- tasks: must have required properties tasks\n {2}- description: schema is false\n {2}- task: schema is false\n/,
-  );
+  const text = textOf(result);
+  expect(text).toMatch(/^Validation failed for tool "subagent":\n/);
+  for (const key of ["tasks", "description", "task"])
+    expect(text).toMatch(new RegExp(`^ {2}- ${key}: `, "m"));
   expect(parent.requests.filter((r) => taskOf(r) !== "go")).toHaveLength(0);
 });

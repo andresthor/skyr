@@ -8,6 +8,7 @@ import {
   fauxToolCall,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
   call,
@@ -22,6 +23,7 @@ import {
   taskOf,
   textOf,
 } from "./session.js";
+import { shellRuntime } from "./shells-runtime.js";
 
 /** A continue call: tool-call id = its task, so results are looked up by task. */
 const cont = (task: string, id: string) =>
@@ -69,7 +71,7 @@ async function noticeSeen(parent: Parent): Promise<string> {
 }
 
 /** The subagent messages in the parent's session record. */
-const delivered = (parent: Parent) =>
+const delivered = (parent: Pick<Parent, "session">) =>
   parent.session.messages.flatMap((m) =>
     m.role === "custom" && m.customType === "skyr.subagent" ? [m] : [],
   );
@@ -137,21 +139,34 @@ test("the message names each stopped run and says Pi reloaded, and the model rea
     );
 });
 
-test("a foreground run stopped by a reload is not delivered again", async () => {
+test("a foreground run a session switch stopped reads as stopped in its own result, and the resumed session gets no message about it", async () => {
   const { child, entered } = heldChildren("fg");
-  const parent = await parentSession({
+  const rt = await shellRuntime({
     respond: parentThen([call({ prompt: "fg" })], child),
   });
+  const file = rt.session.sessionFile!;
 
-  const run = parent.session.prompt("go");
+  const run = rt.session.prompt("go");
   await entered();
-  await parent.session.reload();
+  // Pi ends the turn before any session_shutdown, so the stop is the turn's, not the session's.
+  await rt.resume(file);
   await run;
+  await rt.session.waitForIdle();
 
-  expect(textOf(results(parent.session).get("fg")!)).toContain(
-    "was stopped because Pi reloaded before it answered",
-  );
-  expect(delivered(parent)).toEqual([]);
+  // The resumed transcript drops the aborted turn's result; the record keeps it.
+  const saved = SessionManager.open(file)
+    .getEntries()
+    .flatMap((e) =>
+      e.type === "message" && e.message.role === "toolResult"
+        ? [textOf(e.message)]
+        : [],
+    );
+  expect(saved).toEqual([
+    expect.stringContaining(
+      '"run fg" was stopped by the user before it answered',
+    ),
+  ]);
+  expect(delivered(rt)).toEqual([]);
 });
 
 test("a reload with nothing running in the background sends no message", async () => {

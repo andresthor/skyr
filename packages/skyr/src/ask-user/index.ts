@@ -325,9 +325,6 @@ async function inDialog(
   signal: AbortSignal | undefined,
   pi: Pick<ExtensionAPI, "getThinkingLevel">,
 ): Promise<Answers | undefined> {
-  // Pi restores the editor with setText(getText()), which drops the paste store a [paste #…]
-  // marker points into; written out in full first, the draft survives that restore
-  ui.setEditorText(ui.getEditorText());
   let onAbort: (() => void) | undefined;
   let answers: Answers | undefined | Error;
   try {

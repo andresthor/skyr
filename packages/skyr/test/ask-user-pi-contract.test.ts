@@ -6,7 +6,7 @@ import {
   defineTool,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { Editor, isKeyRelease, matchesKey } from "@earendil-works/pi-tui";
+import { isKeyRelease, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { expect, test } from "vitest";
 import { parentSession, sections, toolsSeen } from "./session.js";
@@ -65,24 +65,6 @@ test("a model-only tool is active on registration but never callable from anothe
   });
   expect(session.getActiveToolNames()).toContain("model_only");
   expect(session.getCallableToolNames()).not.toContain("model_only");
-});
-
-test("Editor.setText(getText()) leaves a paste marker with nothing behind it; getExpandedText() taken first keeps the pasted lines", () => {
-  const editor = new Editor(
-    { terminal: { rows: 40 }, requestRender: () => {} } as never,
-    { borderColor: (s: string) => s, selectList: {} } as never,
-  );
-  const pasted = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
-  editor.handleInput(`\x1b[200~${pasted}\x1b[201~`);
-  editor.handleInput("!");
-  expect(editor.getText()).toBe("[paste #1 +40 lines]!");
-  const expanded = editor.getExpandedText();
-  expect(expanded).toBe(`${pasted}!`);
-
-  editor.setText(editor.getText());
-  expect(editor.getExpandedText()).toBe("[paste #1 +40 lines]!");
-  editor.setText(expanded);
-  expect(editor.getExpandedText()).toBe(`${pasted}!`);
 });
 
 test("prepareLoadout runs again before the next request, so a flag set after registration reaches the model on the next turn", async () => {

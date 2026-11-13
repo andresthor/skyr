@@ -2,7 +2,7 @@
  * ask_user through what it registers: a real Pi session where the mode and the turn matter, a
  * direct `execute` where the queue and the signal do. Pi's interactive mode cannot be built in a
  * test, so `dialogs()` stands in for its `custom()`: it mounts the component the factory returns
- * and, on close, writes back the text Pi's restore would.
+ * until `done`.
  */
 import { readFileSync } from "node:fs";
 import {
@@ -21,11 +21,7 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import {
-  type Component,
-  Editor,
-  stripTerminalSequences,
-} from "@earendil-works/pi-tui";
+import { type Component, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { registerAskUser } from "../src/ask-user/index.js";
@@ -101,18 +97,8 @@ function arrivals<T>() {
   };
 }
 
-/**
- * The editor UI ask_user reads and writes, over a real pi-tui editor, with `custom()` doing what
- * Pi's does: it saves `getText()` on open and, on close, restores it with `setText` and refocuses
- * the editor. `onRefocus` stands in for whatever lands as the editor comes back (voice's held words).
- */
-function dialogs(
-  o: { theme?: Theme; onRefocus?: (editor: Editor) => void } = {},
-) {
-  const editor = new Editor(
-    { terminal: { rows: 40 }, requestRender: () => {} } as never,
-    { borderColor: (s: string) => s, selectList: {} } as never,
-  );
+/** The UI ask_user opens its dialog through: `custom()` alone, which it calls once per dialog. */
+function dialogs(o: { theme?: Theme } = {}) {
   const opens = arrivals<Opened>();
   let mountedNow = 0;
   let failNext: Error | undefined;
@@ -121,15 +107,9 @@ function dialogs(
   const custom = vi.fn(
     (factory: Factory) =>
       new Promise((resolve, reject) => {
-        const saved = editor.getText();
-        const restore = () => {
-          editor.setText(saved);
-          o.onRefocus?.(editor);
-        };
         if (failNext) {
           const error = failNext;
           failNext = undefined;
-          restore();
           return reject(error);
         }
         let closed = false;
@@ -137,7 +117,6 @@ function dialogs(
           if (closed) return;
           closed = true;
           mountedNow--;
-          restore();
           resolve(result);
         };
         const write = vi.fn();
@@ -154,16 +133,9 @@ function dialogs(
         opens.arrive({ component, done, write });
       }),
   );
-  const ui = {
-    getEditorText: () => editor.getExpandedText(),
-    setEditorText: (t: string) => editor.setText(t),
-    custom,
-  };
   return {
     // The fake's custom is not generic; Pi's types only see it through this one cast.
-    ui: ui as unknown as Partial<ExtensionUIContext> &
-      Pick<ExtensionUIContext, "getEditorText" | "setEditorText">,
-    editor,
+    ui: { custom } as unknown as Partial<ExtensionUIContext>,
     custom,
     state,
     /** The next dialog to open, in order of opening. */
@@ -465,28 +437,6 @@ test("the queue never wedges or overlaps: a waiter aborted behind an open dialog
   (await throwing.nextOpen()).done(undefined);
   await next;
 });
-
-test.each(["is answered", "fails to open"] as const)(
-  "a draft holding a large paste comes back written out in full when the dialog %s, with words that land as the editor returns kept after it",
-  async (close) => {
-    const pasted = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
-    const fake = dialogs({
-      onRefocus: (editor) => editor.insertTextAtCursor(" hello"),
-    });
-    fake.editor.handleInput(`\x1b[200~${pasted}\x1b[201~`);
-    fake.editor.insertTextAtCursor("\nfix this");
-    expect(fake.editor.getText()).toBe("[paste #1 +40 lines]\nfix this");
-
-    if (close === "fails to open") fake.failNextOpen(new Error("boom"));
-    const call = execute(registered(), fake.ui).catch(
-      (error: unknown) => error,
-    );
-    if (close === "is answered")
-      press((await fake.nextOpen()).component, ENTER);
-    await call;
-    expect(fake.editor.getText()).toBe(`${pasted}\nfix this hello`);
-  },
-);
 
 const labelled = (...labels: string[]) =>
   ask({ options: labels.map((label) => ({ label })) });

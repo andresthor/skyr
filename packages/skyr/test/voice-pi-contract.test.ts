@@ -48,7 +48,7 @@ test("no built-in binding claims ctrl+space, so Pi neither skips nor shadows the
   expect(claimed).toEqual([]);
 });
 
-test("pi's editor drops its paste store when its text is set, so a draft carried between editors keeps only the marker", () => {
+test("pi's editor drops its paste store when its text is set, so a draft set back from getText keeps only the marker", () => {
   const ed = realEditor();
   const lines = Array.from({ length: 11 }, (_, i) => `line ${i}`).join("\n");
   ed.handleInput(`\x1b[200~${lines}\x1b[201~`);

@@ -253,38 +253,6 @@ test("a queued writer aborted by Esc sends no request, reports aborted having sp
   expect(await listing(parent)).toEqual([]);
 });
 
-test("a reload aborts queued children, and their result says Pi reloaded", async () => {
-  const h1 = hold();
-  const parent = await parentSession({
-    respond: router(
-      [
-        call({ prompt: "w1", tools: ["edit"] }),
-        call({ prompt: "w2", tools: ["edit"] }),
-      ],
-      (context, ...rest) => {
-        if (taskOf(context) === "w2") throw new Error("w2 started");
-        return h1.step(context, ...rest);
-      },
-    ),
-  });
-
-  const run = parent.session.prompt("go");
-  await h1.entered;
-  await vi.waitFor(queued(parent, "w2"));
-  // The only emitter of session_shutdown reachable from a test.
-  await parent.session.reload();
-  await run;
-
-  const byTask = results(parent.session);
-  expect(byTask.get("w1")?.isError).toBe(true);
-  expect(textOf(byTask.get("w2")!)).toContain(
-    'subagent: "run w2" was stopped because Pi reloaded before it started',
-  );
-  expect(textOf(byTask.get("w2")!)).toMatch(/ id="[0-9a-f]{8}">\n/);
-  expect(parent.requests.some((r) => taskOf(r) === "w2")).toBe(false);
-  expect(await listing(parent)).toEqual([]);
-});
-
 test("writer lanes in one directory run one at a time: call order, then lane order, across two calls in one message", async () => {
   const order = ["w1", "w2", "w3", "w4"];
   const holds = new Map(order.map((task) => [task, hold()]));

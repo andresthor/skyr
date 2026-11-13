@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent">
-    <img src="https://img.shields.io/badge/Pi-%E2%89%A5%201.3.0-8bd5ca?style=for-the-badge&colorA=363a4f" alt="Pi ≥ 1.3.0"/>
+    <img src="https://img.shields.io/badge/Pi-%E2%89%A5%201.5.2-8bd5ca?style=for-the-badge&colorA=363a4f" alt="Pi ≥ 1.5.2"/>
   </a>
   &nbsp;
   <a href="./LICENSE">
@@ -47,7 +47,7 @@ git clone https://github.com/andresthor/skyr.git
 pi install ./skyr/packages/skyr      # every `pi` from then on loads it
 ```
 
-Needs Pi 1.3.0 or later. To try it without installing:
+Needs Pi 1.5.2 or later. To try it without installing:
 
 ```sh
 pi -e ./skyr/packages/skyr          # for one run

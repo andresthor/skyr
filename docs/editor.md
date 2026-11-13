@@ -11,5 +11,4 @@ skyr installs this editor in every terminal session; [voice](voice.md), when its
 resolve, extends it. If another extension installs its own editor first, skyr leaves it: no
 working line, and Pi's own loader shows. A `/reload` keeps a draft's text and refills ↑ history
 with the session's prompts (not slash or `!` commands, nor prompts before a compaction), and
-drops undo; as in Pi itself, a large paste's contents are dropped too and its `[paste #…]`
-marker stays literal.
+drops undo; a large paste comes back written out in full instead of as its `[paste #…]` marker.

@@ -772,7 +772,7 @@ export function createRuns(
         own.signal,
       ]);
       // First cause; anything but the session is Esc, `/subagents stop`, or Pi aborting the turn
-      // before a session switch.
+      // before it ends the session.
       const stoppedBy = () =>
         !childSignal.aborted
           ? ""
@@ -1047,31 +1047,27 @@ export function createRuns(
     close(reason) {
       generation += 1;
       const settledAt = Date.now() + STOP_SETTLE_MS;
-      // Before the abort, which can end children synchronously and empty the store.
-      leaveStopped(
-        sessionFile,
-        reason,
-        store.running().filter((run) => run.background),
-        [
-          // A continued run is stopped too, and still writes its record's session.
-          ...[...records.values()].map((record) =>
-            runningContinues.has(record.id) ? { ...record, settledAt } : record,
-          ),
-          // A child that had begun saved a session, which the stop leaves resumable.
-          ...[...live].flatMap(([id, facts]) => {
-            const file = savedSessionOf(sessionFile, id);
-            return file === undefined
-              ? []
-              : [
-                  {
-                    ...facts,
-                    sessionFile: file,
-                    settledAt,
-                  },
-                ];
-          }),
-        ],
-      );
+      // Before the abort, which can end children synchronously and empty the store. Only
+      // background runs are left in it: Pi ends the turn, and its foreground calls, first.
+      leaveStopped(sessionFile, reason, store.running(), [
+        // A continued run is stopped too, and still writes its record's session.
+        ...[...records.values()].map((record) =>
+          runningContinues.has(record.id) ? { ...record, settledAt } : record,
+        ),
+        // A child that had begun saved a session, which the stop leaves resumable.
+        ...[...live].flatMap(([id, facts]) => {
+          const file = savedSessionOf(sessionFile, id);
+          return file === undefined
+            ? []
+            : [
+                {
+                  ...facts,
+                  sessionFile: file,
+                  settledAt,
+                },
+              ];
+        }),
+      ]);
       live.clear();
       // the reason lets a stopped child say whether Pi reloaded or the session ended
       sessionAbort.abort(reason);
